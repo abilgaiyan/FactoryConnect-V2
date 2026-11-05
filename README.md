@@ -1,11 +1,54 @@
-<div align="center">
+# FactoryConnect Dashboard
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Industrial IoT manufacturing intelligence and factory machine operational reporting dashboard, rewritten as a modern React and TypeScript application running on Vite.
 
-  <h1>Built with AI Studio</h2>
+## Overview
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+FactoryConnect provides authoritative industrial reporting and machine monitoring for factory operations:
+- **Production Day Reporting**: Cross-line operational metrics including Availability, Utilization, Performance, Quality, and OEE.
+- **Shift Performance**: Shift-by-shift operational evaluation across configured production lines and shifts.
+- **Daily Reports**: Print-ready daily manufacturing performance summaries.
+- **Machine Current State**: Real-time evidence-backed machine states (Running, Idle, Stopped, Fault) with freshness, usability, and authority indicators.
+- **Activity History & Counter Inspection**: Detailed interval-level operational timelines and raw counter sample audits.
+- **Management Overview**: Multi-site and multi-line fleet status with reconciliation counters.
+- **Commissioning Status**: Edge acquisition, SQL ledger authority, and stream binding verification.
+- **Supervisor Desk Preview**: Interactive screen-review preview for operations supervisors.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Getting Started
 
-</div>
+### Prerequisites
+
+- Node.js 22+
+- npm
+
+### Installation
+
+```bash
+npm install
+```
+
+### Development
+
+Run the Vite development server on port 3000:
+
+```bash
+npm run dev
+```
+
+### Production Build
+
+```bash
+npm run build
+```
+
+### Preview
+
+```bash
+npm run preview
+```
+
+### Tests
+
+```bash
+npm test
+```

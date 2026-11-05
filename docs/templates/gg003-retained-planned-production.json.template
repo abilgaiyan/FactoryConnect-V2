@@ -1,0 +1,25 @@
+{
+  "MachineId": "677b030b-1ede-4a67-82ae-6a494791357f",
+  "PlannedProductionAssignments": [
+    {
+      "AssignmentId": "DEWAS-SR-GG003-PLANNED-0730-20261022",
+      "TimeZoneId": "<COPY_ORIGINAL_TIMEZONE>",
+      "EffectiveFrom": "2026-10-22",
+      "EffectiveTo": "<D:YYYY-MM-DD>",
+      "ActiveDays": "<COPY_ORIGINAL_ACTIVE_DAYS_ARRAY>",
+      "PlannedWindows": "<COPY_ORIGINAL_PLANNED_WINDOWS_ARRAY>"
+    },
+    {
+      "AssignmentId": "DEWAS-SR-GG003-PLANNED-WITH-BREAKS-<D:YYYYMMDD>",
+      "TimeZoneId": "<COPY_ORIGINAL_TIMEZONE>",
+      "EffectiveFrom": "<D:YYYY-MM-DD>",
+      "ActiveDays": "<COPY_ORIGINAL_ACTIVE_DAYS_ARRAY>",
+      "PlannedWindows": "<COPY_ORIGINAL_PLANNED_WINDOWS_ARRAY>",
+      "BreakWindows": [
+        { "StartsAtLocal": "11:30:00", "EndsAtLocal": "12:00:00", "StartDayOffset": 0 },
+        { "StartsAtLocal": "20:00:00", "EndsAtLocal": "20:30:00", "StartDayOffset": 0 },
+        { "StartsAtLocal": "03:30:00", "EndsAtLocal": "04:00:00", "StartDayOffset": 1 }
+      ]
+    }
+  ]
+}

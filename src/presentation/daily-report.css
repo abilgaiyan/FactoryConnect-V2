@@ -1,0 +1,70 @@
+.daily-report-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.daily-report-controls {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.daily-report-document {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.daily-report-document-header,
+.daily-report-group,
+.daily-report-machine,
+.daily-report-shift {
+  break-inside: avoid;
+}
+
+.daily-report-machine,
+.daily-report-shift {
+  margin-block: 1rem;
+}
+
+.daily-report-metrics {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.daily-report-metrics caption {
+  text-align: left;
+}
+
+.daily-report-metrics th,
+.daily-report-metrics td {
+  border: 1px solid currentColor;
+  padding: 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+@media print {
+  .daily-report-controls,
+  body > #root > div > header {
+    display: none !important;
+  }
+
+  .daily-report-page {
+    display: block;
+  }
+
+  .daily-report-document {
+    display: block;
+  }
+
+  .daily-report-group,
+  .daily-report-machine,
+  .daily-report-shift,
+  .daily-report-metrics {
+    break-inside: avoid;
+  }
+
+  .daily-report-group,
+  .daily-report-machine {
+    page-break-inside: avoid;
+  }
+}

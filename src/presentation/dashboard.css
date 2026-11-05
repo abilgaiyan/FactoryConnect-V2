@@ -1,0 +1,99 @@
+/* Dashboard shell shared by every route. */
+html { color-scheme: light; }
+body { margin: 0; background: #f4f7fb; color: #172b3a; font: 16px/1.6 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+*, *::before, *::after { box-sizing: border-box; }
+#root > div > header { background: #12334e; color: white; padding: 1.1rem max(1rem, calc((100vw - 90rem) / 2)); display: flex; flex-wrap: wrap; align-items: center; gap: 1rem 2rem; box-shadow: 0 2px 8px #122b3a20; }
+#root > div > header > p { margin: 0; font-size: 1.35rem; font-weight: 750; letter-spacing: .02em; }
+#root > div > header > a { position: absolute; left: 1rem; top: -10rem; background: white; color: #12334e; padding: .7rem; z-index: 10; }
+#root > div > header > a:focus { top: .5rem; }
+#root > div > header nav { display: flex; flex-wrap: wrap; gap: .5rem; }
+#root > div > header nav a { color: #e5edf5; padding: .55rem .85rem; border-radius: .4rem; text-decoration: none; font-weight: 600; }
+#root > div > header nav a:hover, #root > div > header nav a[aria-current=page] { background: #295776; color: white; }
+#main-content { max-width: 90rem; margin: auto; padding: 1.5rem; min-width: 0; }
+#main-content > section:not(.fleet-range) { background: white; border: 1px solid #d9e2ec; border-radius: .8rem; padding: clamp(1rem, 3vw, 2rem); }
+#main-content h1 { line-height: 1.25; font-size: clamp(1.6rem, 3vw, 2.2rem); margin-top: .5rem; }
+#main-content h2, #main-content h3, #main-content h4 { line-height: 1.4; }
+#main-content a { color: #075ca8; text-underline-offset: .2em; }
+#main-content nav { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin-bottom: 1rem; }
+#main-content nav[aria-label=Breadcrumb] { font-size: .9rem; color: #526579; }
+#main-content nav[aria-label=Breadcrumb] span::before { content: "/"; padding-right: 1rem; }
+#main-content nav[aria-label="Production-day views"] a { padding: .4rem .7rem; background: #edf3f9; border-radius: .4rem; }
+#main-content button { min-height: 44px; padding: .65rem 1rem; border: 1px solid #125ca5; border-radius: .45rem; background: #125ca5; color: white; font: inherit; font-weight: 600; cursor: pointer; }
+#main-content button:hover { background: #084780; }
+#main-content button:disabled { opacity: .6; cursor: default; }
+#main-content :focus-visible { outline: 3px solid #b65c00; outline-offset: 3px; }
+#main-content form { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; margin: 1rem 0; }
+#main-content input[type=date] { min-height: 44px; padding: .55rem .75rem; border: 1px solid #8c9dad; border-radius: .4rem; font: inherit; color: inherit; background: white; }
+#main-content table { width: 100%; border-collapse: collapse; margin: 1.25rem 0; }
+#main-content caption { text-align: left; font-weight: 700; margin-bottom: .7rem; }
+#main-content th, #main-content td { text-align: left; vertical-align: top; padding: .85rem; border: 1px solid #d9e2ec; overflow-wrap: anywhere; }
+#main-content th { background: #e9eff6; }
+#main-content tbody tr:nth-child(even) { background: #f8fafc; }
+#main-content td > span, #main-content td > strong { margin-right: .4rem; }
+#main-content td > small { display: block; margin-top: .3rem; }
+#main-content [role=alert] { color: #8b2525; background: #fff0ef; padding: .8rem; border-radius: .4rem; }
+#main-content .fleet-range { margin: 0; border: 0; padding: 0; }
+@media (max-width: 760px) {
+  #main-content { padding: .8rem; }
+  #main-content > section:not(.fleet-range) { overflow-x: auto; }
+  #main-content table { font-size: .9rem; }
+  #main-content th, #main-content td { padding: .6rem; }
+}
+@media print {
+  body { background: white; font-size: 10pt; }
+  #root > div > header { display: none !important; }
+  #main-content { padding: 0; max-width: none; }
+  #main-content > section:not(.fleet-range) { padding: 0; border: 0; }
+  #main-content nav, #main-content form, #main-content button { display: none !important; }
+  #main-content table { font-size: 9pt; }
+  #main-content th, #main-content td { padding: .4rem; }
+}
+
+.dashboard-site-heading { display: flex; flex-wrap: wrap; gap: .3rem 1rem; color: #d5e5f2; font-size: .95rem; }
+#root > div > header nav { margin-left: auto; }
+@media (max-width: 760px) {
+  #root > div > header nav { margin-left: 0; width: 100%; }
+}
+
+/* Keep the date label, selector and action separated on every viewport. */
+.production-day-overview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; margin-block: 1.25rem; }
+.production-day-overview-controls label { font-weight: 600; }
+@media (max-width: 480px) { .production-day-overview-controls label { flex-basis: 100%; } }
+
+/* Equipment Performance: exact-occurrence cards and responsive evidence table. */
+.report-eyebrow, .report-scope-note { color: #526579; }
+.report-filters { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; background: #f4f7fb; border-radius: .65rem; }
+.report-filters label { display: grid; gap: .35rem; font-weight: 600; flex: 1 1 14rem; }
+.report-filters select { min-height: 44px; max-width: 100%; border: 1px solid #8c9dad; border-radius: .4rem; background: white; color: inherit; font: inherit; padding: .55rem .75rem; }
+.performance-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: .8rem; margin: 1.5rem 0; }
+.performance-kpi { padding: 1rem; border: 1px solid #d9e2ec; border-top: 3px solid #326eab; border-radius: .55rem; background: #fff; overflow-wrap: anywhere; }
+.performance-kpi h3 { margin: 0; font-size: .9rem; color: #526579; }
+.performance-kpi p { font-size: 1.5rem; line-height: 1.3; font-weight: 700; margin: .65rem 0; }
+.performance-kpi small { display: block; }
+.performance-kpi[data-state=missing], .performance-kpi[data-state=unavailable], .performance-kpi[data-state=insufficient-evidence] { border-top-color: #936524; }
+.performance-kpi[data-state=conflict], .equipment-performance td[data-state=conflict] { background: #fff0ef; color: #8b2525; border-color: #bc7973; }
+.performance-table-scroll { overflow-x: auto; margin-block: 1rem; }
+.performance-table-scroll table { min-width: 65rem; }
+.performance-evidence { margin-top: .65rem; font-size: .85rem; }
+.performance-evidence summary { cursor: pointer; color: #075ca8; }
+.performance-evidence dt { font-weight: 650; }
+.performance-evidence dd { margin: 0 0 .5rem; }
+@media print { .report-filters { display: none; } .performance-table-scroll { overflow: visible; } .performance-table-scroll table { min-width: 0; } }
+
+/* Commissioning evidence stays readable on narrow screens. */
+.commissioning-page { min-width: 0; }
+.commissioning-table-scroll { max-width: 100%; overflow-x: auto; margin-block: 1rem; }
+#main-content .commissioning-table-scroll table { margin-block: 0; }
+#main-content .commissioning-config-table { min-width: 42rem; }
+#main-content .commissioning-processors-table { min-width: 72rem; }
+#main-content .commissioning-processors-table th:nth-child(1) { min-width: 16rem; }
+#main-content .commissioning-processors-table th:nth-child(2) { min-width: 22rem; }
+#main-content .commissioning-processors-table th:nth-child(3) { min-width: 9rem; }
+#main-content .commissioning-processors-table th:nth-child(4) { min-width: 14rem; }
+#main-content .commissioning-processors-table th:nth-child(5) { min-width: 18rem; }
+.commissioning-hash { white-space: normal; overflow-wrap: anywhere; word-break: break-all; }
+@media print {
+  .commissioning-table-scroll { overflow: visible; }
+  #main-content .commissioning-table-scroll table,
+  #main-content .commissioning-processors-table th { min-width: 0; }
+}

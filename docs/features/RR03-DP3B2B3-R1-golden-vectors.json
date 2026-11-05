@@ -1,0 +1,255 @@
+{
+  "fixture": {
+    "purpose": "SYNTHETIC CODEC FIXTURE ONLY; no factory measurement or admission",
+    "context": {
+      "machine": "00000000-0000-0000-0000-000000000001",
+      "site": "S",
+      "stream": "obs"
+    },
+    "source": {
+      "entityUtf8": "<MTConnectStreams xmlns=\"urn:mtconnect.org:MTConnectStreams:2.5\"><Header creationTime=\"2026-10-17T00:00:00Z\" sender=\"fixture\" version=\"2.5.0\" bufferSize=\"8\" instanceId=\"1\" firstSequence=\"1\" lastSequence=\"1\" nextSequence=\"2\"/><Streams><DeviceStream name=\"D\" uuid=\"U\"><ComponentStream component=\"Controller\" name=\"C\" componentId=\"c\"><Events><Execution dataItemId=\"e\" sequence=\"1\" timestamp=\"1970-01-01T00:00:00Z\">ACTIVE</Execution></Events></ComponentStream></DeviceStream></Streams></MTConnectStreams>",
+      "representation": 1,
+      "httpStatus": 200,
+      "mediaType": "application/xml",
+      "declaredCharset": null,
+      "effectiveCharset": "utf-8",
+      "originalContentEncoding": null,
+      "decodingRule": "http-entity/1"
+    },
+    "definition": {
+      "profileId": "fc-mtconnect-traversal/1",
+      "profileVersion": "1",
+      "endpointIdentity": "ep",
+      "baseUri": "http://fixture.invalid/",
+      "uriRule": "uri-exact/1",
+      "matchMode": 1,
+      "selector": "D",
+      "namespace": "urn:mtconnect.org:MTConnectStreams:2.5",
+      "parserArtifactHash": "1111111111111111111111111111111111111111111111111111111111111111",
+      "parserVersion": "parser/1",
+      "timestampRule": "iso-utc/1",
+      "valueRule": "sql-value/1",
+      "trimRule": "ascii-trim-token/1",
+      "requestProtocolRule": "sample-from/1",
+      "maxima": [
+        4096,
+        4096,
+        16,
+        128,
+        16,
+        256,
+        65536
+      ],
+      "bindings": [
+        {
+          "dataItemId": "e",
+          "localName": "Execution",
+          "category": 2,
+          "outputType": 2,
+          "semantics": "execution/1"
+        }
+      ],
+      "exclusions": []
+    },
+    "admission": {
+      "effectiveStartTicks": 0,
+      "effectiveEndTicks": null,
+      "authority": "test-only/authority",
+      "sourceReferences": [
+        "fixture-instruction/1"
+      ]
+    },
+    "receiptTarget": {
+      "publicationIdentity": "4444444444444444444444444444444444444444444444444444444444444444",
+      "endpointIdentity": "ep",
+      "uri": "http://fixture.invalid/sample?from=1",
+      "method": "GET",
+      "requestedCursor": 1,
+      "count": null,
+      "path": null,
+      "verifier": "verifier/1"
+    },
+    "receiptPayload": {
+      "header": [
+        1,
+        1,
+        1,
+        2
+      ],
+      "selectedName": "D",
+      "selectedUuid": "U",
+      "traversedElements": 7,
+      "accountingSourceOrdinal": 7,
+      "bindingReference": "e",
+      "outputRawPosition": 1,
+      "observationUtcTicks": "621355968000000000",
+      "outcome": 1
+    },
+    "envelopeV2": {
+      "legacyEnvelopeDigest": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+      "note": "Predetermined fixture digest to isolate V2 encoding; does not assert an existing V1 publication. Runtime must independently recompute this digest from the actual acquisition fields."
+    }
+  },
+  "vectors": [
+    {
+      "name": "Source",
+      "byteCount": 569,
+      "sha256": "655F0040FD8EF3182F4BD1D925E0BA7CB9979F0DB61B40832ADD88AF73637D63",
+      "canonicalHex": "464352530001000100C80000000F6170706C69636174696F6E2F786D6C00000000057574662D38000000000D687474702D656E746974792F31000001F4000001F4000001F43C4D54436F6E6E65637453747265616D7320786D6C6E733D2275726E3A6D74636F6E6E6563742E6F72673A4D54436F6E6E65637453747265616D733A322E35223E3C486561646572206372656174696F6E54696D653D22323032362D31302D31375430303A30303A30305A222073656E6465723D2266697874757265222076657273696F6E3D22322E352E30222062756666657253697A653D22382220696E7374616E636549643D22312220666972737453657175656E63653D223122206C61737453657175656E63653D223122206E65787453657175656E63653D2232222F3E3C53747265616D733E3C44657669636553747265616D206E616D653D22442220757569643D2255223E3C436F6D706F6E656E7453747265616D20636F6D706F6E656E743D22436F6E74726F6C6C657222206E616D653D22432220636F6D706F6E656E7449643D2263223E3C4576656E74733E3C457865637574696F6E20646174614974656D49643D2265222073657175656E63653D2231222074696D657374616D703D22313937302D30312D30315430303A30303A30305A223E4143544956453C2F457865637574696F6E3E3C2F4576656E74733E3C2F436F6D706F6E656E7453747265616D3E3C2F44657669636553747265616D3E3C2F53747265616D733E3C2F4D54436F6E6E65637453747265616D733E"
+    },
+    {
+      "name": "Definition",
+      "byteCount": 317,
+      "sha256": "EA6A4721266BA70F17B1BAA2D2CEE5F93222117F71CCF5396ABD86933942BAA1",
+      "canonicalHex": "4643524400010000001866632D6D74636F6E6E6563742D74726176657273616C2F31000000013100000002657000000017687474703A2F2F666978747572652E696E76616C69642F0000000B7572692D65786163742F310100000001440000002675726E3A6D74636F6E6E6563742E6F72673A4D54436F6E6E65637453747265616D733A322E351111111111111111111111111111111111111111111111111111111111111111000000087061727365722F310000000969736F2D7574632F310000000B73716C2D76616C75652F310000001261736369692D7472696D2D746F6B656E2F310000000D73616D706C652D66726F6D2F310000100000001000000000100000008000000010000001000001000000000001000000016500000009457865637574696F6E02020000000B657865637574696F6E2F3100000000"
+    },
+    {
+      "name": "Admission",
+      "byteCount": 127,
+      "sha256": "82BF6548EC1564A781BC1FA14FB2EE0B06B676E6658ED19FDDA644178965DA57",
+      "canonicalHex": "464352410001EA6A4721266BA70F17B1BAA2D2CEE5F93222117F71CCF5396ABD86933942BAA1000000000000000000000000000000010000000153000000036F627300000000000000000000000013746573742D6F6E6C792F617574686F726974790000000100000015666978747572652D696E737472756374696F6E2F31"
+    },
+    {
+      "name": "ReceiptTarget",
+      "byteCount": 239,
+      "sha256": "7605645680C927D853EDECE046DE87CAFFCD35B558DBE8D76B89A7D6C9262DEF",
+      "canonicalHex": "464352540001000000000000000000000000000000010000000153000000036F62734444444444444444444444444444444444444444444444444444444444444444655F0040FD8EF3182F4BD1D925E0BA7CB9979F0DB61B40832ADD88AF73637D63EA6A4721266BA70F17B1BAA2D2CEE5F93222117F71CCF5396ABD86933942BAA182BF6548EC1564A781BC1FA14FB2EE0B06B676E6658ED19FDDA644178965DA5700000002657000000024687474703A2F2F666978747572652E696E76616C69642F73616D706C653F66726F6D3D3100000003474554000000000000000100000000000A76657269666965722F31"
+    },
+    {
+      "name": "ElementFingerprintPreimage",
+      "byteCount": 164,
+      "sha256": "8DF7629FC4B804DB0868F4FBC660BAA9863AB37FB39D3F3BEE64302F303496EE",
+      "canonicalHex": "4643454C0001000000070000002675726E3A6D74636F6E6E6563742E6F72673A4D54436F6E6E65637453747265616D733A322E3500000009457865637574696F6E00000003000000000000000A646174614974656D49640000000165000000000000000873657175656E63650000000131000000000000000974696D657374616D7000000014313937302D30312D30315430303A30303A30305A00000006414354495645"
+    },
+    {
+      "name": "ObservationContentPreimage",
+      "byteCount": 89,
+      "sha256": "C91498AFACB20F29C4776885385732A33BEF10F782227651EF977145E5152DA1",
+      "canonicalHex": "46434F560001000000000000000000000000000000010000000153000000036F627300000000000000010000000000000001000000096D74636F6E6E65637400000001650201089F7FF5F7B580000100000006414354495645"
+    },
+    {
+      "name": "ReceiptPayload",
+      "byteCount": 261,
+      "sha256": "0279CD0E2AB9C5DFA64E6EF6059FAD61085A2D2D011B75ACD4FD2B3492FECE28",
+      "canonicalHex": "4643525000017605645680C927D853EDECE046DE87CAFFCD35B558DBE8D76B89A7D6C9262DEF000000000000000100000000000000010000000000000001000000000000000201000000014401000000015500000007000000010000000700000009457865637574696F6E020000000165000000000000000100000014313937302D30312D30315430303A30303A30305A8DF7629FC4B804DB0868F4FBC660BAA9863AB37FB39D3F3BEE64302F303496EE0100000001650000000100000007000000000000000100000000000000010201089F7FF5F7B580000100000006414354495645C91498AFACB20F29C4776885385732A33BEF10F782227651EF977145E5152DA101"
+    },
+    {
+      "name": "EnvelopeV2",
+      "byteCount": 102,
+      "sha256": "EA0CB21465F44A174C4138A42956FB36A96C4883A5460196C55EB17E39D146CC",
+      "canonicalHex": "464341520002EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE7605645680C927D853EDECE046DE87CAFFCD35B558DBE8D76B89A7D6C9262DEF0279CD0E2AB9C5DFA64E6EF6059FAD61085A2D2D011B75ACD4FD2B3492FECE28"
+    }
+  ],
+  "rejectionVectors": [
+    {
+      "id": "N01",
+      "baseVector": "Source",
+      "offsetZeroBased": 4,
+      "deleteByteCount": 2,
+      "insertHex": "0002",
+      "mutatedLength": 569,
+      "mutatedSha256": "81787D07D824001E05E581BAD331A0BC2C3D142C8C0BC6DA204600D5A29A5607",
+      "validationContext": "Isolated record version dispatch",
+      "expected": "UnsupportedEncoding"
+    },
+    {
+      "id": "N02",
+      "baseVector": "Source",
+      "offsetZeroBased": 568,
+      "deleteByteCount": 1,
+      "insertHex": "",
+      "mutatedLength": 568,
+      "mutatedSha256": "1818C71A426971890230B81B746AC2A31547A2386B42DADB01951F9388F63F3C",
+      "validationContext": "Isolated record codec/invariants",
+      "expected": "Corrupt: truncated declared entity bytes"
+    },
+    {
+      "id": "N03",
+      "baseVector": "Source",
+      "offsetZeroBased": 569,
+      "deleteByteCount": 0,
+      "insertHex": "00",
+      "mutatedLength": 570,
+      "mutatedSha256": "58095FF82AC7B9DB22825B6A439CFF4A0B1BDAE55BF74B52ADD790B6FCD19A38",
+      "validationContext": "Isolated record codec/invariants",
+      "expected": "Corrupt: trailing bytes"
+    },
+    {
+      "id": "N04",
+      "baseVector": "Definition",
+      "offsetZeroBased": 246,
+      "deleteByteCount": 4,
+      "insertHex": "00000000",
+      "mutatedLength": 317,
+      "mutatedSha256": "8FE09C98A2FE55D30ED59A74B8F21B79CB0561EC9FA98419D13A9E220AA73E82",
+      "validationContext": "Isolated record codec/invariants",
+      "expected": "Corrupt: resource maximum must be positive"
+    },
+    {
+      "id": "N05",
+      "baseVector": "ReceiptPayload",
+      "offsetZeroBased": 6,
+      "deleteByteCount": 32,
+      "insertHex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "mutatedLength": 261,
+      "mutatedSha256": "F0EEF46F9747B41A9FA1D564352824F5471C598E39339824CBC41E8047BF3B98",
+      "validationContext": "Full linked receipt fixture with unchanged original dependencies",
+      "expected": "Corrupt: exact target identity mismatch against ReceiptTarget"
+    },
+    {
+      "id": "N06",
+      "baseVector": "ReceiptPayload",
+      "offsetZeroBased": 199,
+      "deleteByteCount": 8,
+      "insertHex": "0000000000000002",
+      "mutatedLength": 261,
+      "mutatedSha256": "98E329DA1F27AD42EA68CDB7E7C6B06BD3C207F42F1F20E36D66C8DC068D79E8",
+      "validationContext": "Full linked receipt fixture with unchanged original dependencies",
+      "expected": "Corrupt: expected raw row position 1 disagrees; original V2 payload commitment also mismatches"
+    },
+    {
+      "id": "N07",
+      "baseVector": "ReceiptPayload",
+      "offsetZeroBased": 90,
+      "deleteByteCount": 4,
+      "insertHex": "00000000",
+      "mutatedLength": 261,
+      "mutatedSha256": "DB68CA23D699406F87B7C9D93A4DC3DFBB469517F6AFBE04849DEF458422724F",
+      "validationContext": "Full linked receipt fixture with unchanged original dependencies",
+      "expected": "Corrupt: source ordinal is 1-based and must resolve to included source element"
+    },
+    {
+      "id": "N08",
+      "baseVector": "EnvelopeV2",
+      "offsetZeroBased": 38,
+      "deleteByteCount": 32,
+      "insertHex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "mutatedLength": 102,
+      "mutatedSha256": "E773ABED262BBBC35C8B0229C45CB988C8FBF41FCCA21A6AEE31D9E1D0FF64BF",
+      "validationContext": "Full linked receipt fixture with unchanged original dependencies",
+      "expected": "Corrupt: committed receipt target mismatch"
+    },
+    {
+      "id": "N09",
+      "baseVector": "EnvelopeV2",
+      "offsetZeroBased": 70,
+      "deleteByteCount": 32,
+      "insertHex": "",
+      "mutatedLength": 70,
+      "mutatedSha256": "1F812F345F2BFD72CD71B6E109020EF19A45572832625F25F0F267CD0545007E",
+      "validationContext": "Full linked receipt fixture with unchanged original dependencies",
+      "expected": "Corrupt: required payload digest missing/truncated"
+    },
+    {
+      "id": "N10",
+      "baseVector": "EnvelopeV2",
+      "offsetZeroBased": 4,
+      "deleteByteCount": 2,
+      "insertHex": "0003",
+      "mutatedLength": 102,
+      "mutatedSha256": "58DEEB859292A5BE605A960F00F83E72FE4F560678F5853C4DEB6E6BC069BE44",
+      "validationContext": "Isolated record version dispatch",
+      "expected": "UnsupportedEncoding"
+    }
+  ]
+}

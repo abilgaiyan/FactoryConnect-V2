@@ -1,0 +1,36 @@
+.supervisor-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.supervisor-eyebrow { color: #526579; font-size: .8rem; letter-spacing: .08em; font-weight: 700; }
+.supervisor-badge { background: #fff3d6; color: #674600; border: 1px solid #d8b86a; padding: .4rem .7rem; border-radius: 1rem; white-space: nowrap; }
+.supervisor-preview-notice { padding-block: .8rem; border-block: 1px solid #d8b86a; }
+.supervisor-controls, .supervisor-editor fieldset { border: 1px solid #d9e2ec; border-radius: .5rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 1rem; padding: 1rem; margin-block: 1rem; }
+.supervisor-preview label { display: grid; gap: .4rem; font-weight: 600; }
+.supervisor-preview select, .supervisor-preview input, .supervisor-preview textarea { min-width: 0; width: 100%; min-height: 44px; border: 1px solid #8c9dad; border-radius: .4rem; padding: .6rem; color: inherit; background: white; font: inherit; }
+.supervisor-editor textarea { resize: vertical; }
+.supervisor-editor fieldset > p, .supervisor-actions { grid-column: 1 / -1; }
+.supervisor-editor fieldset label:last-of-type { grid-column: 1 / -1; }
+.supervisor-scope { color: #526579; }
+.supervisor-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1rem; margin-block: 1rem; }
+.supervisor-cards article, .supervisor-detail, .supervisor-review-item { border: 1px solid #d9e2ec; padding: 1rem; border-radius: .5rem; margin-block: 1rem; }
+.supervisor-cards h3 { margin-top: 0; }
+.supervisor-cards strong { font-size: 1.8rem; }
+#main-content .supervisor-views button { background: #edf3f9; color: #12334e; border-color: #b9cadb; }
+#main-content .supervisor-views button[aria-current=page] { background: #12334e; color: white; }
+.supervisor-scroll { max-width: 100%; overflow-x: auto; }
+#main-content .supervisor-scroll table { min-width: 68rem; }
+#main-content .supervisor-scroll th { min-width: 12rem; }
+.supervisor-preview dd { margin: .2rem 0 1rem; overflow-wrap: anywhere; }
+.supervisor-preview dt { font-weight: 700; }
+.supervisor-thread-list, .supervisor-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-block: 1rem; }
+.supervisor-editor { margin-top: 1rem; }
+.supervisor-editor details { margin-block: 1rem; }
+.supervisor-editor details article { padding-block: .5rem; border-bottom: 1px solid #d9e2ec; }
+.supervisor-preview small { color: #526579; }
+.supervisor-review-item button { margin: .4rem .5rem .4rem 0; }
+
+.supervisor-preview .production-backdate { display: flex; align-items: flex-start; gap: .6rem; }
+.supervisor-preview .production-backdate input { width: 1.3rem; min-height: 1.3rem; flex: 0 0 1.3rem; }
+.supervisor-detail { overflow-wrap: anywhere; }
+.supervisor-preview { min-width: 0; overflow-wrap: anywhere; }
+.supervisor-preview code { white-space: normal; overflow-wrap: anywhere; }
+.supervisor-preview .activity-table-scroll { max-width: 100%; }
+.supervisor-preview nav[aria-label="Workspace operating mode"] button[aria-pressed="true"] { outline: 3px solid #12334e; outline-offset: 2px; }

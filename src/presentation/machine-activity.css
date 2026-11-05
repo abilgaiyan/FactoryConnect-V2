@@ -1,0 +1,25 @@
+.activity-report { margin-top: 2rem; border-top: 1px solid #cbd5e1; padding-top: 1rem; }
+.activity-filters { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+.activity-filters label { display: flex; flex-direction: column; gap: .4rem; }
+.activity-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .8rem; margin: 1rem 0; }
+.activity-totals > div { padding: 1rem; background: #f1f5f9; border-radius: .5rem; }
+.activity-totals strong, .activity-totals span { display: block; }
+.activity-report svg { width: 100%; height: auto; }
+.activity-running { background: #15803d; fill: #15803d; } .activity-stopped { background: #b91c1c; fill: #b91c1c; }
+.activity-idle { background: #a16207; fill: #a16207; } .activity-unknown { background: #475569; fill: #475569; }
+.activity-fault { background: #7e22ce; fill: #7e22ce; } .activity-offline { background: #0f172a; fill: #0f172a; }
+.activity-table-scroll { overflow-x: auto; }
+.activity-table-scroll:focus-visible { outline: 3px solid #2563eb; }
+.activity-report table { min-width: 750px; width: 100%; }
+.activity-report td { vertical-align: top; }
+.activity-report details p { overflow-wrap: anywhere; }
+@media print { .activity-filters { display: none; } .activity-table-scroll { overflow: visible; } .activity-report table { min-width: 0; } }
+
+.activity-legend { display: flex; flex-wrap: wrap; gap: 1rem; list-style: none; padding: 0; }
+.activity-swatch { display: inline-block; width: 1rem; height: 1rem; margin-right: .4rem; }
+.activity-unrepresented { background: #e2e8f0; }
+
+.activity-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
+.activity-pagination label { display: flex; align-items: center; gap: .5rem; }
+.activity-pagination p { margin: 0; }
+.activity-page-note { font-size: .9rem; color: #475569; }

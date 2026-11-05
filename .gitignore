@@ -1,0 +1,25 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+TestResults/
+coverage/
+*.coverage
+.DS_Store
+Thumbs.db
+appsettings.Local.json
+*.local.json
+.env
+.env.*
+/deploy/
+/artifacts/
+node_modules/
+dist/
+*.tsbuildinfo
+/src/FactoryConnect.Dashboard/wwwroot/
+
+# Local verification evidence and factory backup copies (never commit)
+/.proof/
+/factory-backups/

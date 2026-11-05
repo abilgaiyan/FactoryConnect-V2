@@ -1,0 +1,8 @@
+{
+  "name": "FactoryConnect",
+  "description": "Industrial IoT manufacturing intelligence and factory machine operational reporting dashboard.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
