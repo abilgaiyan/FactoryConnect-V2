@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, fc2/architecture-foundation]
 
 jobs:
   dashboard:
