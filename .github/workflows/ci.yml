@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
+  dashboard:
     runs-on: ubuntu-latest
 
     steps:
@@ -31,3 +31,20 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore FactoryConnect.slnx
+      - run: dotnet build FactoryConnect.slnx --no-restore --configuration Release
+      - name: Exercise foundation host
+        shell: bash
+        run: |
+          dotnet run --project backend/FactoryConnect.Api --no-build --configuration Release -- --urls http://127.0.0.1:5080 > backend.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          python3 scripts/ci/backend-smoke.py || { cat backend.log; exit 1; }

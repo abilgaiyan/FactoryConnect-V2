@@ -52,3 +52,10 @@ npm run preview
 ```bash
 npm test
 ```
+## V2 backend foundation
+
+Requires the .NET 10 SDK. Build with `dotnet build FactoryConnect.slnx`.
+Run with `dotnet run --project backend/FactoryConnect.Api -- --urls http://127.0.0.1:5080`.
+The host has no database or evidence providers: liveness succeeds, readiness and evidence APIs return 503.
+Vite dev/preview still use mock middleware; the dashboard is not connected to this host yet.
+See [the dependency review](docs/architecture/FC2-002-backend-foundation.md).
