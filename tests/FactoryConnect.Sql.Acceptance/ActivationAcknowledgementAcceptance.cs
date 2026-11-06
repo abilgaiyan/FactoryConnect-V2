@@ -200,10 +200,11 @@ internal static class ActivationAcknowledgementAcceptance
         async Task<bool> Attempt(ActivationAcknowledgementRequest value,RuntimeMtlsChannel channel){try{await service.AcknowledgeActivationAsync(channel,value);return true;}catch(SecurityConflictException){return false;}}
         async Task<ActivationAcknowledgementRequest> ThroughWire(ActivationAcknowledgementRequest value)
         {
-            var body=JsonSerializer.SerializeToUtf8Bytes(value);var frame=new byte[4+body.Length];System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(frame,body.Length);body.CopyTo(frame,4);
+            var options=new JsonSerializerOptions{NumberHandling=System.Text.Json.Serialization.JsonNumberHandling.WriteAsString|System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString};
+            var body=JsonSerializer.SerializeToUtf8Bytes(value,options);var frame=new byte[4+body.Length];System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(frame,body.Length);body.CopyTo(frame,4);
             await pair.Client.WriteAsync(frame);var header=new byte[4];await Receive(header);var length=System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header);
             if(length is <1 or >16384)throw new InvalidOperationException("fixture frame size");var received=new byte[length];await Receive(received);
-            return JsonSerializer.Deserialize<ActivationAcknowledgementRequest>(received)??throw new InvalidOperationException("fixture body");
+            return JsonSerializer.Deserialize<ActivationAcknowledgementRequest>(received,options)??throw new InvalidOperationException("fixture body");
             async Task Receive(Memory<byte> buffer){while(buffer.Length>0){var read=await pair.Channel.ReadAsync(buffer);if(read==0)throw new EndOfStreamException();buffer=buffer[read..];}}
         }
         Task<PackageDefinition> PackageFor(Guid revision)=>Task.FromResult(packages[revision]);

@@ -17,9 +17,9 @@ public sealed partial class SqlSecurityAuthority
             request.ActivationGeneration<=0||request.AssignmentGeneration<=0||request.CredentialGeneration<=0||request.ContentHash.Length!=32)throw new ArgumentException("Exact acknowledgement identities and generations required.");
         ArgumentNullException.ThrowIfNull(channel);var hash=request.ContentHash.ToArray();var evidence=channel.Revalidate(ct);
         var certificateHash=SHA256.HashData(evidence.Certificate);
-        var bytes=JsonSerializer.SerializeToUtf8Bytes(new{version=1,action="acknowledge-activation",request.AcknowledgementId,request.SiteId,request.MachineId,request.ActivationId,
-            activationGeneration=Decimal(request.ActivationGeneration),request.PackageRevisionId,contentHash=Convert.ToHexString(hash),request.ApprovalReviewId,request.RuntimeIdentityId,request.AssignmentId,
-            assignmentGeneration=Decimal(request.AssignmentGeneration),credentialGeneration=Decimal(request.CredentialGeneration),certificateHash=Convert.ToHexString(certificateHash),request.Reason});
+        var bytes=JsonSerializer.SerializeToUtf8Bytes(new{version=1,action="acknowledge-activation",acknowledgementId=request.AcknowledgementId,siteId=request.SiteId,machineId=request.MachineId,activationId=request.ActivationId,
+            activationGeneration=Decimal(request.ActivationGeneration),packageRevisionId=request.PackageRevisionId,contentHash=Convert.ToHexString(hash),approvalReviewId=request.ApprovalReviewId,runtimeIdentityId=request.RuntimeIdentityId,assignmentId=request.AssignmentId,
+            assignmentGeneration=Decimal(request.AssignmentGeneration),credentialGeneration=Decimal(request.CredentialGeneration),certificateHash=Convert.ToHexString(certificateHash),reason=request.Reason});
         return Transaction(request.OperationId,true,async(c,t)=>
         {
             Activity.Current?.SetTag("security.runtime.acknowledgement",true);
@@ -35,7 +35,7 @@ public sealed partial class SqlSecurityAuthority
                 JOIN configuration.PackageReview v ON v.ReviewId=a.ReviewId AND v.Decision='approved' AND v.PackageRevisionId=p.PackageRevisionId AND v.ContentHash=p.ContentHash
                 WHERE a.ActivationId=@activation AND a.SiteId=@site AND a.MachineId=@machine AND a.ActivationGeneration=@generation
                     AND a.PackageRevisionId=@revision AND a.ContentHash=@hash AND a.ReviewId=@review
-                    AND a.RuntimeIdentityId=@runtime AND a.AssignmentId=@assignment AND a.AssignmentGeneration=@assignmentGeneration AND a.CredentialGeneration=@credentialGeneration;
+                    AND a.RuntimeIdentityId=@runtime AND a.AssignmentId=@assignment AND a.AssignmentGeneration=@assignmentGeneration AND a.CredentialGeneration=@credentialGeneration AND p.SubmittedAt IS NOT NULL;
                 """))
             {
                 Add(q,("@activation",request.ActivationId),("@site",request.SiteId),("@machine",request.MachineId),("@generation",request.ActivationGeneration),
