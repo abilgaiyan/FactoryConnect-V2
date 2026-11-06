@@ -97,6 +97,10 @@ try
     var workflowTarget=target with {ConnectionString=workflowDb.ConnectionString,Database=workflowDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(workflowTarget);
     passed += await ConfigurationWorkflowAcceptance.Run(workflowTarget with{InitializeEmpty=false});
+    var activationDb=await NewDatabase();
+    var activationTarget=target with {ConnectionString=activationDb.ConnectionString,Database=activationDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(activationTarget);
+    passed += await ActivationRequestAcceptance.Run(activationTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);

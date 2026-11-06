@@ -73,3 +73,5 @@ Recovery prerequisite: [G2 recovery trust provisioning](docs/implementation/FC2-
 V1 performance safeguards and current measurements: [regression prevention and full-path SQL inventory acceptance](docs/implementation/FC2-V1-performance-regression-prevention.md).
 
 Configuration prerequisite for activation: [authenticated submission and independent review](docs/implementation/FC2-configuration-submission-review.md), including batched SQL writes and explicit policy-before-machine locks. No active roster or runtime acknowledgement is enabled.
+
+G3 pending activation intent: [durable per-machine requests](docs/implementation/FC2-G3-durable-activation-requests.md). Exact approval/generation checks and intent revocation are server-side; runtime enrolment/acknowledgement and active roster publication remain unavailable.
