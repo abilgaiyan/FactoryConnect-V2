@@ -70,6 +70,7 @@ try
     var concurrentTarget = target with { ConnectionString = concurrent.ConnectionString, Database = concurrent.InitialCatalog };
     var results = await Task.WhenAll(installer.ApplyAsync(concurrentTarget), installer.ApplyAsync(concurrentTarget));
     Check(results.Sum() == original.Count, "concurrent installers apply exactly once");
+    passed += await MachineInventoryAcceptance.Run(main.ConnectionString,target.InstallationId);
     passed += await ConfigurationAcceptance.Run(main.ConnectionString);
     SqlConnection.ClearAllPools();
     await Execute(control,$"ALTER DATABASE [{main.InitialCatalog}] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;");
