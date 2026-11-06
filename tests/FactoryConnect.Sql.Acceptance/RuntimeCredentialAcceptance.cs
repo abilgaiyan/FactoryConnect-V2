@@ -34,7 +34,7 @@ internal static class RuntimeCredentialAcceptance
         await Denied(()=>service.ChangeRuntimeCredentialAsync(token,signed with{Payload=p with{RuntimeSubject="other"}}),"proof binds exact runtime identity");
         await Denied(()=>service.ChangeRuntimeCredentialAsync(token,Sign(p with{ActorSubject="custodian-a"},runtime)),"actor cannot be approving custodian");
         await Denied(()=>service.ChangeRuntimeCredentialAsync(token,Sign(p with{InstallationId=Guid.NewGuid()},runtime)),"runtime command installation is pinned");
-        await Denied(()=>service.ChangeRuntimeCredentialAsync(token,Sign(p with{IssuedAt=now.AddMinutes(-5),ExpiresAt=now},runtime)),"expired custody ceremony cannot enroll");
+        await Denied(()=>service.ChangeRuntimeCredentialAsync(token,Sign(p with{IssuedAt=now.AddMinutes(-5),ExpiresAt=now,ValidFrom=now.AddMinutes(-6)},runtime)),"expired custody ceremony cannot enroll");
         await Conflict(()=>service.ChangeRuntimeCredentialAsync(token,Sign(p with{ExpectedEpoch=99},runtime)),"runtime enrollment checks authority epoch");
         Check(await Rows()==0,"invalid runtime requests leave no authority");
         await Exec("CREATE TRIGGER security.Fixture_RuntimeFailure ON security.SecurityAudit AFTER INSERT AS BEGIN THROW 51106,'runtime audit fixture',1; END;");
