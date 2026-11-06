@@ -93,6 +93,10 @@ try
     var recoveryTarget=target with {ConnectionString=recoveryDb.ConnectionString,Database=recoveryDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(recoveryTarget);
     passed += await RecoveryTrustAcceptance.Run(recoveryTarget with{InitializeEmpty=false});
+    var workflowDb=await NewDatabase();
+    var workflowTarget=target with {ConnectionString=workflowDb.ConnectionString,Database=workflowDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(workflowTarget);
+    passed += await ConfigurationWorkflowAcceptance.Run(workflowTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);

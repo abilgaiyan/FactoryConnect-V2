@@ -71,3 +71,5 @@ Human registration and offboarding: [G2 identity lifecycle](docs/implementation/
 Recovery prerequisite: [G2 recovery trust provisioning](docs/implementation/FC2-G2-recovery-trust-provisioning.md). Current administration, bootstrap custody approval and separate recovery-key possession proofs are required; recovery execution remains unavailable.
 
 V1 performance safeguards and current measurements: [regression prevention and full-path SQL inventory acceptance](docs/implementation/FC2-V1-performance-regression-prevention.md).
+
+Configuration prerequisite for activation: [authenticated submission and independent review](docs/implementation/FC2-configuration-submission-review.md), including batched SQL writes and explicit policy-before-machine locks. No active roster or runtime acknowledgement is enabled.
