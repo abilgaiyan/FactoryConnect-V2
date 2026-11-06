@@ -35,12 +35,13 @@ internal static class RuntimeCertificateAcceptance
             request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey,false));
             return request.CreateSelfSigned(now.AddDays(-1),now.AddDays(365));
         }
-        internal byte[] Leaf(RSA rsa,DateTimeOffset now,string eku="1.3.6.1.5.5.7.3.2",bool ca=false,X509KeyUsageFlags usage=X509KeyUsageFlags.DigitalSignature,X509Certificate2? issuer=null,DateTimeOffset? until=null)
+        internal byte[] Leaf(RSA rsa,DateTimeOffset now,string eku="1.3.6.1.5.5.7.3.2",bool ca=false,X509KeyUsageFlags usage=X509KeyUsageFlags.DigitalSignature,X509Certificate2? issuer=null,DateTimeOffset? until=null,Uri? crlUri=null)
         {
             var request=new CertificateRequest("CN=FC2 Fixture Client",rsa,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
             request.CertificateExtensions.Add(new X509BasicConstraintsExtension(ca,false,0,true));
             request.CertificateExtensions.Add(new X509KeyUsageExtension(usage,true));
             request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection{new(eku)},false));
+            if(crlUri is not null)request.CertificateExtensions.Add(CertificateRevocationListBuilder.BuildCrlDistributionPointExtension([crlUri.AbsoluteUri],false));
             using var certificate=request.Create(issuer??Root,now.AddMinutes(-1),until??now.AddDays(30),RandomNumberGenerator.GetBytes(16));
             return certificate.Export(X509ContentType.Cert);
         }

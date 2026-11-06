@@ -3,7 +3,7 @@ using Microsoft.Data.SqlClient;
 
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
-var bootstrapPure=RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks();
+var bootstrapPure=await RuntimeMtlsTransportAcceptance.Run()+RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks();
 if(args is ["--pure-only"]) { Console.WriteLine($"PASS: {canonicalPassed+bootstrapPure} pure acceptance checks."); return; }
 var admin = Environment.GetEnvironmentVariable("FC2_TEST_SQL")
     ?? throw new InvalidOperationException("FC2_TEST_SQL is required; SQL acceptance cannot be skipped.");
@@ -113,6 +113,10 @@ try
     var certificateTarget=target with {ConnectionString=certificateDb.ConnectionString,Database=certificateDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(certificateTarget);
     passed += await RuntimeCertificateAcceptance.Run(certificateTarget with{InitializeEmpty=false});
+    var mtlsDb=await NewDatabase();
+    var mtlsTarget=target with {ConnectionString=mtlsDb.ConnectionString,Database=mtlsDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(mtlsTarget);
+    passed += await RuntimeMtlsSqlAcceptance.Run(mtlsTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);

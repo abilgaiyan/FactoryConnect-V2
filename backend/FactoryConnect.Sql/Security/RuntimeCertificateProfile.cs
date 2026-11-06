@@ -30,11 +30,26 @@ public static class RuntimeCertificateProfile
     {
         _=Canonicalize(payload,registration);
         using var certificate=LoadExact(registration.CertificateDer);using var anchor=LoadExact(registration.TrustAnchorDer);
+        ValidateShape(certificate,anchor,now);
+        using(var key=certificate.GetRSAPublicKey())
+            if(key is null||!key.ExportSubjectPublicKeyInfo().AsSpan().SequenceEqual(payload.PublicKeySpki))throw new SecurityDeniedException();
+        if(new DateTimeOffset(certificate.NotBefore.ToUniversalTime())<payload.ValidFrom||new DateTimeOffset(certificate.NotAfter.ToUniversalTime())>payload.CredentialExpiresAt)
+            throw new SecurityDeniedException();
+        using var chain=new X509Chain();chain.ChainPolicy.TrustMode=X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(anchor);chain.ChainPolicy.DisableCertificateDownloads=true;
+        // This command registers signed public material, not an authenticated channel. No network work belongs under its SQL gate.
+        chain.ChainPolicy.RevocationMode=X509RevocationMode.NoCheck;
+        chain.ChainPolicy.VerificationFlags=X509VerificationFlags.NoFlag;chain.ChainPolicy.VerificationTime=now.UtcDateTime;
+        chain.ChainPolicy.ApplicationPolicy.Add(new Oid(ClientAuthentication));
+        if(!chain.Build(certificate)||chain.ChainElements.Count!=2||
+            !chain.ChainElements[1].Certificate.RawData.AsSpan().SequenceEqual(registration.TrustAnchorDer))throw new SecurityDeniedException();
+    }
+    internal static void ValidateShape(X509Certificate2 certificate,X509Certificate2 anchor,DateTimeOffset now)
+    {
         using var publicKey=certificate.GetRSAPublicKey()??throw new SecurityDeniedException();
         using var anchorKey=anchor.GetRSAPublicKey()??throw new SecurityDeniedException();
         RuntimeCredentialProof.ValidateKey(publicKey.ExportSubjectPublicKeyInfo());RuntimeCredentialProof.ValidateKey(anchorKey.ExportSubjectPublicKeyInfo());
-        if(!publicKey.ExportSubjectPublicKeyInfo().AsSpan().SequenceEqual(payload.PublicKeySpki)||
-            anchorKey.ExportSubjectPublicKeyInfo().AsSpan().SequenceEqual(payload.PublicKeySpki)||
+        if(anchorKey.ExportSubjectPublicKeyInfo().AsSpan().SequenceEqual(publicKey.ExportSubjectPublicKeyInfo())||
             !anchor.SubjectName.RawData.AsSpan().SequenceEqual(anchor.IssuerName.RawData)||
             certificate.RawData.AsSpan().SequenceEqual(anchor.RawData)||
             certificate.SignatureAlgorithm.Value!="1.2.840.113549.1.1.11"||anchor.SignatureAlgorithm.Value!="1.2.840.113549.1.1.11")throw new SecurityDeniedException();
@@ -49,22 +64,14 @@ public static class RuntimeCertificateProfile
             eku.EnhancedKeyUsages.Count!=1||eku.EnhancedKeyUsages[0].Value!=ClientAuthentication)
             throw new SecurityDeniedException();
         var from=new DateTimeOffset(certificate.NotBefore.ToUniversalTime());var until=new DateTimeOffset(certificate.NotAfter.ToUniversalTime());
-        if(from<payload.ValidFrom||until>payload.CredentialExpiresAt||from>now||until<=now||
+        if(from>now||until<=now||
             anchor.NotBefore.ToUniversalTime()>now.UtcDateTime||anchor.NotAfter.ToUniversalTime()<=now.UtcDateTime)throw new SecurityDeniedException();
-        using var chain=new X509Chain();chain.ChainPolicy.TrustMode=X509ChainTrustMode.CustomRootTrust;
-        chain.ChainPolicy.CustomTrustStore.Add(anchor);chain.ChainPolicy.DisableCertificateDownloads=true;
-        // This command registers signed public material, not an authenticated channel. No network work belongs under its SQL gate.
-        chain.ChainPolicy.RevocationMode=X509RevocationMode.NoCheck;
-        chain.ChainPolicy.VerificationFlags=X509VerificationFlags.NoFlag;chain.ChainPolicy.VerificationTime=now.UtcDateTime;
-        chain.ChainPolicy.ApplicationPolicy.Add(new Oid(ClientAuthentication));
-        if(!chain.Build(certificate)||chain.ChainElements.Count!=2||
-            !chain.ChainElements[1].Certificate.RawData.AsSpan().SequenceEqual(registration.TrustAnchorDer))throw new SecurityDeniedException();
     }
     internal static byte[] AnchorKeyHash(RuntimeCertificateRegistration registration)
     {using var anchor=LoadExact(registration.TrustAnchorDer);using var key=anchor.GetRSAPublicKey()??throw new SecurityDeniedException();return SHA256.HashData(key.ExportSubjectPublicKeyInfo());}
     internal static (DateTimeOffset From,DateTimeOffset Until) CertificateInterval(RuntimeCertificateRegistration registration)
     {using var certificate=LoadExact(registration.CertificateDer);return(new(certificate.NotBefore.ToUniversalTime()),new(certificate.NotAfter.ToUniversalTime()));}
-    private static X509Certificate2 LoadExact(byte[] bytes)
+    internal static X509Certificate2 LoadExact(byte[] bytes)
     {
         var certificate=X509CertificateLoader.LoadCertificate(bytes);
         if(!certificate.RawData.AsSpan().SequenceEqual(bytes)){certificate.Dispose();throw new SecurityDeniedException();}return certificate;
