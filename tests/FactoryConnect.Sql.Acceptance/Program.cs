@@ -105,6 +105,10 @@ try
     var runtimeTarget=target with {ConnectionString=runtimeDb.ConnectionString,Database=runtimeDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(runtimeTarget);
     passed += await RuntimeCredentialAcceptance.Run(runtimeTarget with{InitializeEmpty=false});
+    var assignmentDb=await NewDatabase();
+    var assignmentTarget=target with {ConnectionString=assignmentDb.ConnectionString,Database=assignmentDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(assignmentTarget);
+    passed += await RuntimeAssignmentAcceptance.Run(assignmentTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);

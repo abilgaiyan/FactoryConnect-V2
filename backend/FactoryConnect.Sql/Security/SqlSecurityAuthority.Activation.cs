@@ -82,7 +82,7 @@ public sealed partial class SqlSecurityAuthority
             {Add(q,("@activation",command.ActivationId));if(await q.ExecuteScalarAsync(ct) is not null)throw new SecurityConflictException();}
             var next=generation+1;
             var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId=command.OperationId,activationId=command.ActivationId,activationGeneration=Decimal(next),status="pending-acknowledgement"});
-            await ActivationOperation(c,t,command.OperationId,actor,scope,bytes,result,"request-activation",command.Reason,ct);
+            await MachineAuthorityOperation(c,t,command.OperationId,actor,scope,bytes,result,"request-activation",command.Reason,ct);
             await Exec(c,t,"""
                 INSERT configuration.ActivationRequest(ActivationId,SiteId,MachineId,ActivationGeneration,PackageRevisionId,ContentHash,ReviewId,ApprovalDecision,
                     RuntimeIdentityId,AssignmentId,AssignmentGeneration,CredentialGeneration,EffectiveFrom,EffectiveTo,SupersedesActivationId,ActorPrincipalId,OperationId)
@@ -116,7 +116,7 @@ public sealed partial class SqlSecurityAuthority
             var final=await State(c,t,ct);await Session(c,t,token,final.Now,ct);await Authorize(c,t,actor,"configuration.activate",scope,final.Now,ct);
             if(final.Epoch!=expectedSecurityEpoch)throw new SecurityConflictException();
             var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId,activationId,status="request-revoked-not-runtime-stop"});
-            await ActivationOperation(c,t,operationId,actor,scope,bytes,result,"revoke-activation-request",reason,ct);
+            await MachineAuthorityOperation(c,t,operationId,actor,scope,bytes,result,"revoke-activation-request",reason,ct);
             await Exec(c,t,"IF NOT EXISTS(SELECT 1 FROM configuration.ActivationRequestRevocation WHERE ActivationId=@activation) INSERT configuration.ActivationRequestRevocation(ActivationId,ActorPrincipalId,OperationId) VALUES(@activation,@actor,@op)",ct,("@activation",activationId),("@actor",actor),("@op",operationId));
             return result;
         },ct);
@@ -165,7 +165,7 @@ public sealed partial class SqlSecurityAuthority
         if(assignmentFrom>now||assignmentTo is {} end&&end<=now||!Contains(assignmentFrom,assignmentTo,from,until)||
             credentialFrom>now||credentialTo<=now||credentialFrom>firstUse||credentialTo<=firstUse)throw new SecurityDeniedException();
     }
-    private static async Task ActivationOperation(SqlConnection c,SqlTransaction t,Guid op,Guid actor,AuthorizationScope scope,byte[] request,byte[] result,string action,string reason,CancellationToken ct)
+    private static async Task MachineAuthorityOperation(SqlConnection c,SqlTransaction t,Guid op,Guid actor,AuthorizationScope scope,byte[] request,byte[] result,string action,string reason,CancellationToken ct)
     {
         await Exec(c,t,"""
             INSERT security.SecurityOperation(OperationId,ActorPrincipalId,RequestBytes,RequestHash,ScopeKind,SiteId,MachineId,ResultBytes)
