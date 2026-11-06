@@ -3,6 +3,8 @@ using Microsoft.Data.SqlClient;
 
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
+var bootstrapPure=BootstrapAcceptance.PureChecks();
+if(args is ["--pure-only"]) { Console.WriteLine($"PASS: {canonicalPassed+bootstrapPure} pure acceptance checks."); return; }
 var admin = Environment.GetEnvironmentVariable("FC2_TEST_SQL")
     ?? throw new InvalidOperationException("FC2_TEST_SQL is required; SQL acceptance cannot be skipped.");
 var root = new SqlConnectionStringBuilder(admin) { InitialCatalog = "master" };
@@ -11,7 +13,7 @@ await control.OpenAsync();
 var server = Convert.ToString(await Scalar(control, "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ServerName'))"))!;
 Console.WriteLine($"SQL engine: {await Scalar(control, "SELECT CONCAT(CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')),' / ', CONVERT(nvarchar(128), SERVERPROPERTY('Edition')))")}");
 var databases = new List<string>();
-var passed = canonicalPassed;
+var passed = canonicalPassed+bootstrapPure;
 try
 {
     var main = await NewDatabase();
@@ -72,6 +74,14 @@ try
     SqlConnection.ClearAllPools();
     await Execute(control,$"ALTER DATABASE [{main.InitialCatalog}] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;");
     passed += await SecurityAcceptance.Run(main.ConnectionString,target.InstallationId);
+    var bootstrapDb=await NewDatabase();
+    var bootstrapTarget=target with {ConnectionString=bootstrapDb.ConnectionString,Database=bootstrapDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(bootstrapTarget);
+    passed += await BootstrapAcceptance.Run(bootstrapTarget with{InitializeEmpty=false});
+    var competingDb=await NewDatabase();
+    var competingTarget=target with {ConnectionString=competingDb.ConnectionString,Database=competingDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(competingTarget);
+    passed += await BootstrapAcceptance.CompetingRequests(competingTarget with{InitializeEmpty=false});
     Console.WriteLine($"PASS: {passed} SQL acceptance checks; no skips.");
 }
 finally

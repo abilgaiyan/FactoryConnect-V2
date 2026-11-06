@@ -3,6 +3,11 @@
     <Project Path="backend/FactoryConnect.Api/FactoryConnect.Api.csproj" />
     <Project Path="backend/FactoryConnect.Sql/FactoryConnect.Sql.csproj" />
   </Folder>
-  <Folder Name="/tools/"><Project Path="tools/FactoryConnect.SqlInstaller/FactoryConnect.SqlInstaller.csproj" /></Folder>
-  <Folder Name="/tests/"><Project Path="tests/FactoryConnect.Sql.Acceptance/FactoryConnect.Sql.Acceptance.csproj" /></Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/FactoryConnect.SecurityBootstrap/FactoryConnect.SecurityBootstrap.csproj" />
+    <Project Path="tools/FactoryConnect.SqlInstaller/FactoryConnect.SqlInstaller.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FactoryConnect.Sql.Acceptance/FactoryConnect.Sql.Acceptance.csproj" />
+  </Folder>
 </Solution>

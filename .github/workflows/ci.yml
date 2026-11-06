@@ -40,6 +40,11 @@ jobs:
           dotnet-version: '10.0.x'
       - run: dotnet restore FactoryConnect.slnx
       - run: dotnet build FactoryConnect.slnx --no-restore --configuration Release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bootstrap CLI and independent RSA-PSS interoperability
+        run: node scripts/ci/bootstrap-cli-smoke.mjs
       - name: Exercise foundation host
         shell: bash
         run: |
