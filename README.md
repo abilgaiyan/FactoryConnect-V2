@@ -59,3 +59,5 @@ Run with `dotnet run --project backend/FactoryConnect.Api -- --urls http://127.0
 The host has no database or evidence providers: liveness succeeds, readiness and evidence APIs return 503.
 Vite dev/preview still use mock middleware; the dashboard is not connected to this host yet.
 See [the dependency review](docs/architecture/FC2-002-backend-foundation.md).
+
+Initial security bootstrap is an explicit offline, two-custodian operation; see [the bootstrap contract and commands](docs/implementation/FC2-G2-initial-bootstrap.md). No default administrator or automatic bootstrap is provided.
