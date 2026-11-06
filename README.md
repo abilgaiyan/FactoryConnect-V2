@@ -77,3 +77,5 @@ Configuration prerequisite for activation: [authenticated submission and indepen
 G3 pending activation intent: [durable per-machine requests](docs/implementation/FC2-G3-durable-activation-requests.md). Exact approval/generation checks and intent revocation are server-side; runtime mTLS authentication, acknowledgement and active roster publication remain unavailable.
 
 Runtime key custody prerequisite: [controlled signing-key enrollment, rotation and revocation](docs/implementation/FC2-G2-runtime-credential-authority.md). Two independent custodians and new-key possession proofs are required. This does not supply mTLS transport or X.509 issuance.
+
+Runtime assignment prerequisite: [scoped assignment, explicit replacement and revocation](docs/implementation/FC2-G2-runtime-assignment-authority.md). Assignment and credential generations remain independent; these commands create no activation or acknowledgement.
