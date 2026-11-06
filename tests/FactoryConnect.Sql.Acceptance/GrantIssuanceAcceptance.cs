@@ -55,11 +55,22 @@ internal static class GrantIssuanceAcceptance
         }
         await Denied(()=>service.GrantPermissionAsync(tokens[admin],request with{ParentGrantId=deepParent,Permission="configuration.review"}),"grant issuance cannot exceed 64-node delegation ceiling");
         await Denied(()=>service.GrantPermissionAsync(tokens[admin],request with{Permission="Configuration.Read"}),"grant action matching is case-sensitive");
+        var futureParent=await Root(admin,"machine.suspend",scope,false,true,now.AddDays(1),now.AddDays(2));
+        await Denied(()=>service.GrantPermissionAsync(tokens[admin],request with{ParentGrantId=futureParent,Permission="machine.suspend",EffectiveFrom=now.AddDays(1),ExpiresAt=now.AddDays(1).AddHours(1)}),"future delegation parent cannot issue before its start");
+        var expiredParent=await Root(admin,"machine.enable",scope,false,true,now.AddDays(-2),now.AddDays(-1));
+        await Denied(()=>service.GrantPermissionAsync(tokens[admin],request with{ParentGrantId=expiredParent,Permission="machine.enable"}),"expired delegation parent cannot issue new authority");
         var copies=await Task.WhenAll(service.GrantPermissionAsync(tokens[admin],request),service.GrantPermissionAsync(tokens[admin],request));
         Check(copies[0].SequenceEqual(copies[1]),"parallel exact grant retries return one immutable result");
         Check(await Epoch()==request.ExpectedEpoch+1,"exact retries advance authority epoch once");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SecurityAudit WHERE OperationId=@op",("@op",request.OperationId)))==1,"exact retries append one audit");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.GrantIssuance WHERE GrantId=@grant AND OperationId=@op AND ActorPrincipalId=@p",("@grant",request.GrantId),("@op",request.OperationId),("@p",admin)))==1,"grant operation identity is durably bound to grantor");
+        var foreignOperation=Guid.NewGuid();
+        await Exec("""
+            INSERT security.SecurityOperation(OperationId,ActorPrincipalId,RequestBytes,RequestHash,ScopeKind,ResultBytes)
+            VALUES(@op,@p,0x7B7D,HASHBYTES('SHA2_256',0x7B7D),'I',0x7B7D);
+            """,("@op",foreignOperation),("@p",member));
+        await ForeignKey(()=>Exec("INSERT security.GrantIssuance VALUES(@grant,@op,@actor)",("@grant",parent),("@op",foreignOperation),("@actor",admin)),"mapping cannot bind a different operation actor");
+        await ForeignKey(()=>Exec("INSERT security.GrantIssuance VALUES(@grant,@op,@actor)",("@grant",parent),("@op",foreignOperation),("@actor",member)),"mapping cannot bind a different grantor");
         Check(await Read(member,"configuration.read"),"issued child authorizes its exact machine");
         Check((await service.ReadOperationResultAsync(tokens[admin],request.OperationId)).SequenceEqual(copies[0]),"authorized issuer can retrieve grant receipt");
         await Denied(()=>service.ReadAsync(tokens[member],"configuration.read",AuthorizationScope.Site(site),(_,_,_)=>Task.FromResult(true)),"issued machine grant cannot read entire site");
@@ -107,7 +118,8 @@ internal static class GrantIssuanceAcceptance
                 await WaitForLock("fc2grant-revoker","X");Check(!revoking.IsCompleted,"revocation waits behind uncommitted grant issuance");
             }
             finally{await tx.CommitAsync();}
-            await issuing;await (revoking??throw new InvalidOperationException("Missing revoker."));
+            var raceResult=await issuing;await (revoking??throw new InvalidOperationException("Missing revoker."));
+            Check((await service.GrantPermissionAsync(tokens[admin],raceRequest)).SequenceEqual(raceResult),"completed issuance receipt survives parent revocation without reapplying grant");
             await Denied(()=>Read(leaf,"commissioning.read"),"revocation after issuance invalidates the new descendant");
         }
         var revokeFirstParent=await Root(admin,"configuration.submit",scope,false,true);
@@ -147,13 +159,13 @@ internal static class GrantIssuanceAcceptance
 
         Task<bool> Read(Guid actor,string permission)=>service.ReadAsync(tokens[actor],permission,scope,(_,_,_)=>Task.FromResult(true));
         async Task<long> Epoch()=>Convert.ToInt64(await Scalar("SELECT AuthorityEpoch FROM security.InstallationState WHERE Singleton=1"));
-        async Task<Guid> Root(Guid grantee,string permission,AuthorizationScope resource,bool use,bool delegateAllowed)
+        async Task<Guid> Root(Guid grantee,string permission,AuthorizationScope resource,bool use,bool delegateAllowed,DateTimeOffset? from=null,DateTimeOffset? until=null)
         {
             var id=Guid.NewGuid();await Exec("""
                 INSERT security.PermissionGrant(GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,SiteId,MachineId,UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
                 VALUES(@id,@p,@p,'bootstrap',@permission,@kind,@site,@machine,@use,@delegate,@from,@until);
                 """,("@id",id),("@p",grantee),("@permission",permission),("@kind",resource.Kind),("@site",(object?)resource.SiteId??DBNull.Value),
-                ("@machine",(object?)resource.MachineId??DBNull.Value),("@use",use),("@delegate",delegateAllowed),("@from",now.AddDays(-1)),("@until",now.AddDays(1)));return id;
+                ("@machine",(object?)resource.MachineId??DBNull.Value),("@use",use),("@delegate",delegateAllowed),("@from",from??now.AddDays(-1)),("@until",until??now.AddDays(1)));return id;
         }
         async Task Barrier(SqlConnection connection,SqlTransaction transaction)
         {await using var q=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='fc2:grant:test-barrier',@LockMode='Exclusive',@LockOwner='Transaction'; IF @r<0 THROW 51020,'Fixture barrier failed.',1;",connection,transaction);await q.ExecuteNonQueryAsync();}
@@ -172,6 +184,7 @@ internal static class GrantIssuanceAcceptance
         void Check(bool condition,string name){if(!condition)throw new InvalidOperationException(name);count++;Console.WriteLine("PASS: "+name);}
         async Task Denied(Func<Task> action,string name){try{await action();}catch(SecurityDeniedException){Check(true,name);return;}throw new InvalidOperationException(name);}
         async Task Conflict(Func<Task> action,string name){try{await action();}catch(SecurityConflictException){Check(true,name);return;}throw new InvalidOperationException(name);}
+        async Task ForeignKey(Func<Task> action,string name){try{await action();}catch(SqlException e)when(e.Number==547){Check(true,name);return;}throw new InvalidOperationException(name);}
         async Task Immutable(string sql,string name){try{await Exec(sql);}catch(SqlException e)when(e.Number==51030){Check(true,name);return;}throw new InvalidOperationException(name);}
         async Task<object?> Scalar(string sql,params (string Name,object Value)[] values){await using var q=new SqlCommand(sql,c);Add(q,values);return await q.ExecuteScalarAsync();}
         async Task Exec(string sql,params (string Name,object Value)[] values){await using var q=new SqlCommand(sql,c);Add(q,values);await q.ExecuteNonQueryAsync();}
