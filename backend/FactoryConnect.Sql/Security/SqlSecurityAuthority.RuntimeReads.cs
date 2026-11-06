@@ -16,13 +16,21 @@ public sealed partial class SqlSecurityAuthority
     {
         _=AuthorizationScope.Machine(siteId,machineId);ArgumentNullException.ThrowIfNull(channel);ArgumentNullException.ThrowIfNull(handler);
         // TLS/CA work happens before opening a SQL transaction. No external validation holds authority gates.
-        var evidence=channel.Revalidate(ct);var certificateHash=SHA256.HashData(evidence.Certificate);
+        var evidence=channel.Revalidate(ct);
         return Transaction(null,false,async(c,t)=>
         {
             Activity.Current?.SetTag("security.runtime.read",true);
             await Lock(c,t,ConfigurationLockResources.Machine(installationId,machineId),false,ct);
             var state=await State(c,t,ct);
-            if(Stopwatch.GetElapsedTime(evidence.CheckedAt)>TimeSpan.FromSeconds(5)||evidence.RootFrom>state.Now||evidence.RootUntil<=state.Now)throw new SecurityDeniedException();
+            var authority=await ValidateRuntimeMachineAuthority(c,t,evidence,siteId,machineId,state.Now,ct);
+            return await handler(c,t,authority);
+        },ct);
+    }
+    private static async Task<RuntimeMachineAuthority> ValidateRuntimeMachineAuthority(SqlConnection c,SqlTransaction t,RuntimeTransportEvidence evidence,
+        Guid siteId,Guid machineId,DateTimeOffset now,CancellationToken ct)
+    {
+        var certificateHash=SHA256.HashData(evidence.Certificate);
+            if(Stopwatch.GetElapsedTime(evidence.CheckedAt)>TimeSpan.FromSeconds(5)||evidence.RootFrom>now||evidence.RootUntil<=now)throw new SecurityDeniedException();
             RuntimeMachineAuthority authority;
             await using(var q=Command(c,t,"""
                 SELECT b.RuntimeIdentityId,a.AssignmentId,a.AssignmentGeneration,b.CredentialGeneration,b.CertificateDer
@@ -44,7 +52,7 @@ public sealed partial class SqlSecurityAuthority
                     AND NOT EXISTS(SELECT 1 FROM configuration.RuntimeAssignmentRevocation WHERE AssignmentId=a.AssignmentId);
                 """))
             {
-                Add(q,("@site",siteId),("@machine",machineId),("@now",state.Now));
+                Add(q,("@site",siteId),("@machine",machineId),("@now",now));
                 q.Parameters.Add("@certificateHash",SqlDbType.Binary,32).Value=certificateHash;
                 q.Parameters.Add("@anchorHash",SqlDbType.Binary,32).Value=evidence.AnchorHash;
                 q.Parameters.Add("@keyHash",SqlDbType.Binary,32).Value=evidence.KeyHash;
@@ -53,7 +61,7 @@ public sealed partial class SqlSecurityAuthority
                 authority=new(r.GetGuid(0),r.GetGuid(1),r.GetInt64(2),r.GetInt64(3),siteId,machineId);
                 if(await r.ReadAsync(ct))throw new SecurityDeniedException();
             }
-            return await handler(c,t,authority);
-        },ct);
+        return authority;
     }
+
 }

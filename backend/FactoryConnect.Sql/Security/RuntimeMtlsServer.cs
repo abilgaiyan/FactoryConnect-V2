@@ -85,15 +85,17 @@ public sealed class RuntimeMtlsChannel:IAsyncDisposable
         using var certificate=RuntimeCertificateProfile.LoadExact(peerCertificate);using var key=certificate.GetRSAPublicKey()??throw new SecurityDeniedException();
         peerKeyHash=SHA256.HashData(key.ExportSubjectPublicKeyInfo());
     }
-    internal (byte[] Certificate,byte[] AnchorHash,byte[] KeyHash,long CheckedAt,DateTimeOffset RootFrom,DateTimeOffset RootUntil) Revalidate(CancellationToken ct)
+    internal RuntimeTransportEvidence Revalidate(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if(Volatile.Read(ref disposed)!=0||!stream.IsAuthenticated||!stream.IsMutuallyAuthenticated||!stream.IsServer||!stream.IsEncrypted||!stream.IsSigned||stream.RemoteCertificate is null)
             throw new SecurityDeniedException();
         var certificate=peerCertificate.ToArray();policy.ValidateStatus(certificate);ct.ThrowIfCancellationRequested();
-        return(certificate,policy.AnchorHash,peerKeyHash.ToArray(),Stopwatch.GetTimestamp(),policy.RootInterval.From,policy.RootInterval.Until);
+        return new(certificate,policy.AnchorHash,peerKeyHash.ToArray(),Stopwatch.GetTimestamp(),policy.RootInterval.From,policy.RootInterval.Until);
     }
     public ValueTask<int> ReadAsync(Memory<byte> buffer,CancellationToken ct=default)=>stream.ReadAsync(buffer,ct);
     public ValueTask WriteAsync(ReadOnlyMemory<byte> buffer,CancellationToken ct=default)=>stream.WriteAsync(buffer,ct);
     public async ValueTask DisposeAsync(){if(Interlocked.Exchange(ref disposed,1)==0)await stream.DisposeAsync();}
 }
+
+internal sealed record RuntimeTransportEvidence(byte[] Certificate,byte[] AnchorHash,byte[] KeyHash,long CheckedAt,DateTimeOffset RootFrom,DateTimeOffset RootUntil);
