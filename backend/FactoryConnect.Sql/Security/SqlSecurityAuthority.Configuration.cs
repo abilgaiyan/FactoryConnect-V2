@@ -139,12 +139,12 @@ public sealed partial class SqlSecurityAuthority
             ("@result",result),("@audit",Guid.NewGuid()),("@action",action),("@reason",reason));
     }
 
-    private static async Task ConfigurationLocks(SqlConnection c,SqlTransaction t,JsonElement root,Guid installation,CancellationToken ct)
+    private static async Task ConfigurationLocks(SqlConnection c,SqlTransaction t,JsonElement root,Guid installation,CancellationToken ct,Guid? selectedMachine=null)
     {
         var resources=new Dictionary<string,(byte Phase,string Mode)>(StringComparer.Ordinal);
         void Policy(string kind,JsonElement pin)=>resources[ConfigurationLockResources.Policy(installation,kind,pin.GetProperty("revisionId").GetGuid())]=(0,"Shared");
         Policy("timezone",root.GetProperty("timezone"));
-        foreach(var machine in root.GetProperty("machines").EnumerateArray())
+        foreach(var machine in root.GetProperty("machines").EnumerateArray().Where(m=>!selectedMachine.HasValue||m.GetProperty("machineId").GetGuid()==selectedMachine.Value))
         {
             Policy("schedule",machine.GetProperty("schedule"));Policy("break",machine.GetProperty("breakPolicy"));
             resources[ConfigurationLockResources.Machine(installation,machine.GetProperty("machineId").GetGuid())]=(1,"Exclusive");
