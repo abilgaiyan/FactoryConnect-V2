@@ -67,3 +67,5 @@ Human session issuance boundary: [G2 human session authority](docs/implementatio
 Scoped human access grants: [G2 grant issuance](docs/implementation/FC2-G2-scoped-access-grants.md). The server-side command requires current management and delegation authority; it does not enable configuration writes or enroll users.
 
 Human registration and offboarding: [G2 identity lifecycle](docs/implementation/FC2-G2-human-identity-lifecycle.md). Enrollment requires installation administration and the committed bootstrap issuer; it grants no permissions.
+
+Recovery prerequisite: [G2 recovery trust provisioning](docs/implementation/FC2-G2-recovery-trust-provisioning.md). Current administration, bootstrap custody approval and separate recovery-key possession proofs are required; recovery execution remains unavailable.
