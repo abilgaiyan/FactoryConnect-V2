@@ -41,6 +41,11 @@ public sealed partial class SqlSecurityAuthority
             }
             if(state.Epoch!=expectedEpoch)throw new SecurityConflictException();
             await ConfigurationLocks(c,t,root,installationId,ct);
+            var final=await State(c,t,ct);var finalActor=await Session(c,t,token,final.Now,ct);
+            if(finalActor!=actor)throw new SecurityDeniedException();
+            if(final.Epoch!=expectedEpoch)throw new SecurityConflictException();
+            await Authorize(c,t,actor,"configuration.edit",scope,final.Now,ct);
+            await Authorize(c,t,actor,"configuration.submit",scope,final.Now,ct);
             await using(var q=Command(c,t,"SELECT 1 FROM configuration.ConfigurationPackageRevision WHERE PackageRevisionId=@revision OR (PackageId=@package AND RevisionNumber=@number)"))
             {
                 Add(q,("@revision",revision),("@package",root.GetProperty("packageId").GetGuid()),("@number",root.GetProperty("revisionNumber").GetInt32()));
@@ -85,6 +90,10 @@ public sealed partial class SqlSecurityAuthority
             }
             if(actor==author||actor==submitter||!CryptographicOperations.FixedTimeEquals(hash,SHA256.HashData(canonical)))throw new SecurityDeniedException();
             using var parsed=JsonDocument.Parse(canonical);await ConfigurationLocks(c,t,parsed.RootElement,installationId,ct);
+            var final=await State(c,t,ct);var finalActor=await Session(c,t,token,final.Now,ct);
+            if(finalActor!=actor)throw new SecurityDeniedException();
+            if(final.Epoch!=request.ExpectedEpoch)throw new SecurityConflictException();
+            await Authorize(c,t,actor,"configuration.review",scope,final.Now,ct);
             await using(var q=Command(c,t,"SELECT 1 FROM configuration.PackageReview WHERE PackageRevisionId=@revision OR ReviewId=@review"))
             {Add(q,("@revision",request.PackageRevisionId),("@review",request.ReviewId));if(await q.ExecuteScalarAsync(ct) is not null)throw new SecurityConflictException();}
             var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId=request.OperationId,reviewId=request.ReviewId,packageRevisionId=request.PackageRevisionId,status=request.Approve?"approved":"rejected"});

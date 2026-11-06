@@ -112,6 +112,28 @@ internal static class ConfigurationWorkflowAcceptance
         }
         Check(((byte[])(await Scalar("SELECT CanonicalBytes FROM configuration.ConfigurationPackageRevision WHERE PackageRevisionId=@revision",("@revision",snapshot.RevisionId)))!).SequenceEqual(initial),"caller buffer mutation cannot change queued submitted content");
         await Conflict(()=>service.SubmitConfigurationAsync(tokens[author],snapshotOp,snapshot,epoch,"snapshot fixture"),"changed source bytes cannot replay original operation");
+        // A valid preliminary session is not an expiry lease while waiting for the remaining gates.
+        var expiringToken=RandomNumberGenerator.GetBytes(32);
+        await Exec("INSERT security.SessionAuthority VALUES(@token,@p,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(second,3,SYSUTCDATETIME()),N'fixture-expiry',0)",("@token",expiringToken),("@p",author));
+        var expiryPackage=Package();epoch=await Epoch();
+        await using(var holder=new SqlConnection(target.ConnectionString))
+        {
+            await holder.OpenAsync();await using var tx=(SqlTransaction)await holder.BeginTransactionAsync();
+            await using(var q=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Exclusive',@LockOwner='Transaction'; IF @r<0 THROW 51020,'Fixture expiry lock failed.',1;",holder,tx))
+            {q.Parameters.AddWithValue("@resource",ConfigurationLockResources.Policy(target.InstallationId,"timezone",template.Timezone.RevisionId));await q.ExecuteNonQueryAsync();}
+            var pending=writer.SubmitConfigurationAsync(expiringToken,Guid.NewGuid(),expiryPackage,epoch,"expiry after lock wait");
+            try
+            {
+                await WaitForLock("fc2configuration-writer","S");
+                var expired=false;
+                for(var i=0;i<250;i++)
+                {if(Convert.ToInt32(await Scalar("SELECT CASE WHEN ExpiresAt<=SYSUTCDATETIME() THEN 1 ELSE 0 END FROM security.SessionAuthority WHERE TokenHash=@token",("@token",expiringToken)))==1){expired=true;break;}await Task.Delay(20);}
+                Check(expired,"SQL clock confirms session expiry while policy lock remains held");
+            }
+            finally{await tx.CommitAsync();}
+            await Denied(()=>pending,"final workflow authorization rejects a session expired during policy wait");
+        }
+        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM configuration.ConfigurationPackageRevision WHERE PackageRevisionId=@revision",("@revision",expiryPackage.RevisionId)))==0,"expiry during lock wait leaves no submitted content");
         // Whole workflow write command count stays constant as machine/signal counts grow.
         var measurements=new ConcurrentQueue<(long Trips,double Elapsed)>();
         using(var listener=new ActivityListener{ShouldListenTo=s=>s.Name=="FactoryConnect.V2.Security",Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllData,
@@ -128,7 +150,7 @@ internal static class ConfigurationWorkflowAcceptance
             }
             var large=Package() with{Machines=machines};await service.SubmitConfigurationAsync(tokens[author],Guid.NewGuid(),large,await Epoch(),"100-machine measured submission");
             var largeMeasure=measurements.Single();
-            Check(smallMeasure.Trips>0&&smallMeasure.Trips==largeMeasure.Trips&&largeMeasure.Trips<=22,"batched submission full SQL roundtrips are constant for 1 and 100 machines");
+            Check(smallMeasure.Trips>0&&smallMeasure.Trips==largeMeasure.Trips&&largeMeasure.Trips<=28,"batched submission full SQL roundtrips are constant for 1 and 100 machines");
             Check(largeMeasure.Elapsed<5000,"100-machine submission holds authority within the CI five-second ceiling");
             Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM configuration.PackageMachineAssignment WHERE PackageRevisionId=@revision",("@revision",large.RevisionId)))==100&&
                 Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM configuration.PackageSignalMapping WHERE PackageRevisionId=@revision",("@revision",large.RevisionId)))==100,"batched write preserves all machine and exact signal rows");
