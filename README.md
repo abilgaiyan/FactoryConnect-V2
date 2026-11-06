@@ -74,4 +74,6 @@ V1 performance safeguards and current measurements: [regression prevention and f
 
 Configuration prerequisite for activation: [authenticated submission and independent review](docs/implementation/FC2-configuration-submission-review.md), including batched SQL writes and explicit policy-before-machine locks. No active roster or runtime acknowledgement is enabled.
 
-G3 pending activation intent: [durable per-machine requests](docs/implementation/FC2-G3-durable-activation-requests.md). Exact approval/generation checks and intent revocation are server-side; runtime enrolment/acknowledgement and active roster publication remain unavailable.
+G3 pending activation intent: [durable per-machine requests](docs/implementation/FC2-G3-durable-activation-requests.md). Exact approval/generation checks and intent revocation are server-side; runtime mTLS authentication, acknowledgement and active roster publication remain unavailable.
+
+Runtime key custody prerequisite: [controlled signing-key enrollment, rotation and revocation](docs/implementation/FC2-G2-runtime-credential-authority.md). Two independent custodians and new-key possession proofs are required. This does not supply mTLS transport or X.509 issuance.
