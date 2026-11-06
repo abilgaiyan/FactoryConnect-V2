@@ -12,20 +12,26 @@ internal static class RuntimeCredentialAcceptance
         var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
         var now=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!;
         using var a=RSA.Create(3072);using var b=RSA.Create(3072);using var runtime=RSA.Create(3072);using var next=RSA.Create(3072);
-        var actor=Guid.NewGuid();var runtimeId=Guid.NewGuid();
+        var administrator=Guid.NewGuid();var actor=Guid.NewGuid();var runtimeId=Guid.NewGuid();
         BootstrapCustodian Key(RSA key,string subject)=>new(Guid.NewGuid(),Guid.NewGuid(),Issuer,subject,key.ExportSubjectPublicKeyInfo(),now.AddDays(-1),now.AddDays(10));
         var file=new BootstrapTrustFile(target.InstallationId,Issuer,[Key(a,"custodian-a"),Key(b,"custodian-b")]);var trust=new BootstrapTrustManifest(file);
-        var initial=new BootstrapPayload(target.InstallationId,Guid.NewGuid(),actor,Issuer,"administrator",BootstrapTrustManifest.AdministratorProfile,
+        var initial=new BootstrapPayload(target.InstallationId,Guid.NewGuid(),administrator,Issuer,"administrator",BootstrapTrustManifest.AdministratorProfile,
             file.Keys[0].KeyId,file.Keys[1].KeyId,now.AddSeconds(-1),now.AddMinutes(5),now.AddDays(30),0,RandomNumberGenerator.GetBytes(32),trust.Hash,"runtime fixture bootstrap");
         var initialBytes=BootstrapTrustManifest.Canonicalize(initial);
         await new SqlBootstrapAuthority(target,trust).ApplyAsync(new(initial,[Proof(file.Keys[0].KeyId,a,initialBytes),Proof(file.Keys[1].KeyId,b,initialBytes)]));
-        var token=RandomNumberGenerator.GetBytes(32);
-        await Exec("INSERT security.SessionAuthority VALUES(@token,@actor,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()),N'fixture-only',1)",("@token",token),("@actor",actor));
+        var rootToken=RandomNumberGenerator.GetBytes(32);var token=RandomNumberGenerator.GetBytes(32);
+        await Exec("INSERT security.SessionAuthority VALUES(@token,@actor,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()),N'fixture-only',1)",("@token",rootToken),("@actor",administrator));
         var service=new SqlSecurityAuthority(target.ConnectionString,target.InstallationId);
-        var p=new RuntimeCredentialPayload(target.InstallationId,Guid.NewGuid(),actor,Issuer,"administrator",runtimeId,"https://runtime.fixture/edge","edge-one",
-            "enroll",0,runtime.ExportSubjectPublicKeyInfo(),now.AddSeconds(-1),now.AddDays(30),file.Keys[0].KeyId,file.Keys[1].KeyId,now.AddSeconds(-1),now.AddMinutes(5),1,
+        await service.EnrollHumanAsync(rootToken,new(Guid.NewGuid(),actor,Issuer,"credential-manager",1,"enroll separate runtime credential manager"));
+        var parent=(Guid)(await Scalar("SELECT GrantId FROM security.PermissionGrant WHERE Permission='runtime.credential.manage'"))!;
+        var credentialGrant=Guid.NewGuid();
+        await service.GrantPermissionAsync(rootToken,new(Guid.NewGuid(),credentialGrant,actor,parent,"runtime.credential.manage",AuthorizationScope.Installation,true,false,now,now.AddDays(1),2,"grant explicit runtime credential management"));
+        await Exec("INSERT security.SessionAuthority VALUES(@token,@actor,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()),N'fixture-only',3)",("@token",token),("@actor",actor));
+        var p=new RuntimeCredentialPayload(target.InstallationId,Guid.NewGuid(),actor,Issuer,"credential-manager",runtimeId,"https://runtime.fixture/edge","edge-one",
+            "enroll",0,runtime.ExportSubjectPublicKeyInfo(),now.AddSeconds(-1),now.AddDays(30),file.Keys[0].KeyId,file.Keys[1].KeyId,now.AddSeconds(-1),now.AddMinutes(5),3,
             RandomNumberGenerator.GetBytes(32),trust.Hash,"enroll retained public runtime key");
         var signed=Sign(p,runtime);
+        await Denied(()=>service.ChangeRuntimeCredentialAsync(rootToken,signed with{Payload=p with{ActorPrincipalId=administrator,ActorSubject="administrator"}}),"bootstrap administration alone cannot manage runtime credentials");
         RuntimeCredentialProof.Verify(trust,signed,now);Check(true,"runtime proof verifies independent custody and possession");
         Check(RuntimeCredentialProof.Canonicalize(p).SequenceEqual(RuntimeCredentialProof.Canonicalize(p with{IssuedAt=p.IssuedAt.ToOffset(TimeSpan.FromHours(5.5))})),"runtime canonical proof normalizes UTC");
         await Denied(()=>service.ChangeRuntimeCredentialAsync(token,signed with{Signatures=[signed.Signatures[0]]}),"single custodian cannot enroll runtime");
@@ -40,7 +46,7 @@ internal static class RuntimeCredentialAcceptance
         await Exec("CREATE TRIGGER security.Fixture_RuntimeFailure ON security.SecurityAudit AFTER INSERT AS BEGIN THROW 51106,'runtime audit fixture',1; END;");
         try{await service.ChangeRuntimeCredentialAsync(token,signed);throw new InvalidOperationException("expected audit failure");}catch(SqlException e)when(e.Number==51106){Check(true,"runtime audit failure aborts command");}
         await Exec("DROP TRIGGER security.Fixture_RuntimeFailure");
-        Check(await Rows()==0&&Convert.ToInt64(await Scalar("SELECT AuthorityEpoch FROM security.InstallationState"))==1,"runtime identity key and epoch roll back with audit");
+        Check(await Rows()==0&&Convert.ToInt64(await Scalar("SELECT AuthorityEpoch FROM security.InstallationState"))==3,"runtime identity key and epoch roll back with audit");
         var results=await Task.WhenAll(service.ChangeRuntimeCredentialAsync(token,signed),service.ChangeRuntimeCredentialAsync(token,signed));
         Check(results[0].SequenceEqual(results[1]),"concurrent exact runtime retries commit one receipt");
         Check(await Rows()==1,"runtime enroll persists one public key");
@@ -49,7 +55,7 @@ internal static class RuntimeCredentialAcceptance
         Check(((byte[])(await Scalar("SELECT CredentialBindingHash FROM security.RuntimeCredentialGeneration"))!).SequenceEqual(SHA256.HashData(p.PublicKeySpki)),"generation binds retained exact canonical SPKI hash");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM configuration.RuntimeAssignment"))==0&&Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM configuration.ActivationRequest"))==0,"runtime enrollment creates no assignment or activation");
         await Conflict(()=>service.ChangeRuntimeCredentialAsync(token,Sign(p with{Reason="changed"},runtime)),"runtime operation rejects changed retry content");
-        var rotate=p with{Action="rotate",ExpectedGeneration=1,ExpectedEpoch=2,OperationId=Guid.NewGuid(),Nonce=RandomNumberGenerator.GetBytes(32),PublicKeySpki=next.ExportSubjectPublicKeyInfo()};
+        var rotate=p with{Action="rotate",ExpectedGeneration=1,ExpectedEpoch=4,OperationId=Guid.NewGuid(),Nonce=RandomNumberGenerator.GetBytes(32),PublicKeySpki=next.ExportSubjectPublicKeyInfo()};
         await Conflict(()=>service.ChangeRuntimeCredentialAsync(token,Sign(rotate with{ExpectedGeneration=2},next)),"rotation rejects stale current generation");
         await Conflict(()=>service.ChangeRuntimeCredentialAsync(token,Sign(rotate with{Nonce=p.Nonce},next)),"nonce cannot be reused under another operation");
         await Denied(()=>service.ChangeRuntimeCredentialAsync(token,Sign(rotate with{PublicKeySpki=p.PublicKeySpki},runtime)),"rotation cannot recycle previously enrolled key");
@@ -58,13 +64,13 @@ internal static class RuntimeCredentialAcceptance
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.RuntimeCredentialRevocation WHERE CredentialGeneration=1"))==1,"rotation atomically revokes old credential");
         Check((await service.ChangeRuntimeCredentialAsync(token,signed)).SequenceEqual(results[0]),"old enrollment retry returns receipt without restoring old generation");
         Check(Convert.ToInt64(await Scalar("SELECT CredentialGeneration FROM security.RuntimeCredentialState"))==2,"old receipt cannot roll back credential state");
-        var revoke=rotate with{Action="revoke",OperationId=Guid.NewGuid(),Nonce=RandomNumberGenerator.GetBytes(32),ExpectedEpoch=3,ExpectedGeneration=2,PublicKeySpki=[],ValidFrom=DateTimeOffset.UnixEpoch,CredentialExpiresAt=DateTimeOffset.UnixEpoch};
+        var revoke=rotate with{Action="revoke",OperationId=Guid.NewGuid(),Nonce=RandomNumberGenerator.GetBytes(32),ExpectedEpoch=5,ExpectedGeneration=2,PublicKeySpki=[],ValidFrom=DateTimeOffset.UnixEpoch,CredentialExpiresAt=DateTimeOffset.UnixEpoch};
         await service.ChangeRuntimeCredentialAsync(token,Sign(revoke,null));
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.RuntimeCredentialRevocation"))==2,"controlled revocation invalidates current generation");
-        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SessionAuthority"))==1&&Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant"))==13,"runtime credentials create no human sessions or grants");
+        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SessionAuthority"))==2&&Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant"))==14,"runtime credentials create no human sessions or grants");
         try{await Exec("DELETE security.RuntimeCredentialPublicKey");throw new InvalidOperationException("expected immutable key");}catch(SqlException e)when(e.Number==51040){Check(true,"runtime public key history is immutable");}
         // Current permission remains mandatory for completed receipts; security administrator is no bypass.
-        var grant=(Guid)(await Scalar("SELECT GrantId FROM security.PermissionGrant WHERE Permission='runtime.credential.manage'"))!;
+        var grant=credentialGrant;
         var revoker=new SqlSecurityAuthority(new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName="fc2runtime-revoker"}.ConnectionString,target.InstallationId);
         var requester=new SqlSecurityAuthority(new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName="fc2runtime-requester"}.ConnectionString,target.InstallationId);
         await Exec("""
@@ -76,7 +82,7 @@ internal static class RuntimeCredentialAcceptance
         {
             await barrier.OpenAsync();await using var tx=(SqlTransaction)await barrier.BeginTransactionAsync();
             await using(var q=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='fc2:runtime:test-barrier',@LockMode='Exclusive',@LockOwner='Transaction'; IF @r<0 THROW 51020,'Fixture barrier failed.',1;",barrier,tx))await q.ExecuteNonQueryAsync();
-            var revoking=revoker.RevokeGrantAsync(token,Guid.NewGuid(),grant,4,"remove runtime credential management");Task<byte[]>? pending=null;
+            var revoking=revoker.RevokeGrantAsync(rootToken,Guid.NewGuid(),grant,6,"remove runtime credential management");Task<byte[]>? pending=null;
             try
             {
                 await WaitForLock("fc2runtime-revoker","S");pending=requester.ChangeRuntimeCredentialAsync(token,signed);
