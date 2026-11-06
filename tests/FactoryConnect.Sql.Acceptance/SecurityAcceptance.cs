@@ -1,6 +1,7 @@
 using System.Data;
 using System.Security.Cryptography;
 using FactoryConnect.Sql.Security;
+using FactoryConnect.Sql.Inventory;
 using Microsoft.Data.SqlClient;
 
 internal static class SecurityAcceptance
@@ -51,6 +52,18 @@ internal static class SecurityAcceptance
         await Denied(()=>Read(memberToken,AuthorizationScope.Site(site)),"machine permission does not widen to site");
         await Denied(()=>Read(memberToken,AuthorizationScope.Machine(Guid.Parse("22222222-2222-2222-2222-222222222222"),machine)),"wrong machine-site pairing denied");
         await Denied(()=>reader.ReadAsync(adminToken,"configuration.edit",scope,(_,_,_)=>Task.FromResult(1)),"security administrator has no implicit edit permission");
+        // Protected inventory uses the same transaction and revocation gate as authorization.
+        var siteReadGrant=Guid.NewGuid();
+        await Grant(siteReadGrant,admin,admin,null,"configuration.read",AuthorizationScope.Site(site),true,false);
+        var inventory=new SqlProtectedMachineInventoryReader(readerString,installationId);
+        var siteMachines=await inventory.ReadSiteAsync(adminToken,site);
+        Check(siteMachines.Count==1 && siteMachines[0].MachineId==machine,
+            "protected inventory returns exact authorized site machines");
+        await Denied(()=>inventory.ReadSiteAsync(adminToken,Guid.Parse("22222222-2222-2222-2222-222222222222")),
+            "protected inventory denies unauthorized site");
+        await Denied(()=>inventory.ReadSiteAsync(strangerToken,site),
+            "protected inventory denies missing permission");
+
         var badScope=Guid.NewGuid();
         await Grant(badScope,stranger,admin,parent,"configuration.read",AuthorizationScope.Installation,true,false);
         await Denied(()=>Read(strangerToken,scope),"grant wider than parent is wholly ineligible");
