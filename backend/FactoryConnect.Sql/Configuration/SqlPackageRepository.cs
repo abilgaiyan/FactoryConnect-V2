@@ -11,10 +11,13 @@ namespace FactoryConnect.Sql.Configuration;
 /// </summary>
 public sealed class SqlPackageRepository
 {
-    public async Task<byte[]> InsertSubmittedAsync(SqlConnection connection, SqlTransaction transaction,
+    public Task<byte[]> InsertSubmittedAsync(SqlConnection connection, SqlTransaction transaction,
         PackageDefinition definition, CancellationToken cancellationToken = default)
+        => InsertCanonicalAsync(connection,transaction,PackageCanonicalizer.Serialize(definition),cancellationToken);
+
+    internal async Task<byte[]> InsertCanonicalAsync(SqlConnection connection,SqlTransaction transaction,
+        byte[] bytes,CancellationToken cancellationToken)
     {
-        var bytes = PackageCanonicalizer.Serialize(definition);
         var hash = SHA256.HashData(bytes);
         // Derive every normalized value from the same immutable byte snapshot that is hashed/stored.
         using var document = JsonDocument.Parse(bytes);
@@ -35,31 +38,35 @@ public sealed class SqlPackageRepository
             ("@number",root.GetProperty("revisionNumber").GetInt32()),("@bytes",bytes),("@hash",hash),
             ("@timezone",timezone.GetProperty("revisionId").GetGuid()),("@timezoneHash",Digest(timezone)),
             ("@machines",machines.Length),("@mappings",machines.Sum(m=>m.GetProperty("signals").GetArrayLength())));
-        foreach (var machine in machines)
+        using var machineRows=new DataTable();
+        machineRows.Columns.Add("MachineId",typeof(Guid));machineRows.Columns.Add("ProductionLineId",typeof(Guid));
+        machineRows.Columns.Add("EffectiveFrom",typeof(DateTimeOffset));machineRows.Columns.Add("EffectiveTo",typeof(DateTimeOffset));
+        machineRows.Columns.Add("ScheduleRevisionId",typeof(Guid));machineRows.Columns.Add("ScheduleHash",typeof(byte[]));
+        machineRows.Columns.Add("BreakPolicyRevisionId",typeof(Guid));machineRows.Columns.Add("BreakPolicyHash",typeof(byte[]));
+        using var signalRows=new DataTable();
+        signalRows.Columns.Add("MappingId",typeof(Guid));signalRows.Columns.Add("MachineId",typeof(Guid));
+        foreach(var column in new[]{"SemanticKey","Protocol","StreamKey","AddressEncoding"})signalRows.Columns.Add(column,typeof(string));
+        signalRows.Columns.Add("AddressBytes",typeof(byte[]));signalRows.Columns.Add("Normalization",typeof(string));
+        foreach(var machine in machines)
         {
-            var machineId = machine.GetProperty("machineId").GetGuid();
-            var schedule = machine.GetProperty("schedule"); var breaks = machine.GetProperty("breakPolicy");
-            await Execute("""
-                INSERT configuration.PackageMachineScope(PackageRevisionId,SiteId,MachineId) VALUES(@revision,@site,@machine);
-                INSERT configuration.PackageMachineAssignment(PackageRevisionId,SiteId,MachineId,ProductionLineId,
-                    EffectiveFrom,EffectiveTo,ScheduleRevisionId,ScheduleHash,BreakPolicyRevisionId,BreakPolicyHash)
-                VALUES(@revision,@site,@machine,@line,@from,@to,@schedule,@scheduleHash,@breaks,@breakHash);
-                """,("@revision",revisionId),("@site",siteId),("@machine",machineId),
-                ("@line",machine.GetProperty("productionLineId").GetGuid()),
-                ("@from",machine.GetProperty("effectiveFrom").GetDateTimeOffset()),
-                ("@to",machine.GetProperty("effectiveTo").ValueKind == JsonValueKind.Null ? DBNull.Value : machine.GetProperty("effectiveTo").GetDateTimeOffset()),
-                ("@schedule",schedule.GetProperty("revisionId").GetGuid()),("@scheduleHash",Digest(schedule)),
-                ("@breaks",breaks.GetProperty("revisionId").GetGuid()),("@breakHash",Digest(breaks)));
-            foreach (var signal in machine.GetProperty("signals").EnumerateArray())
-                await Execute("""
-                    INSERT configuration.PackageSignalMapping(MappingId,PackageRevisionId,MachineId,
-                        SemanticKey,Protocol,StreamKey,AddressEncoding,AddressBytes,Normalization)
-                    VALUES(@mapping,@revision,@machine,@semantic,@protocol,@stream,@encoding,@address,@normalization);
-                    """,("@mapping",signal.GetProperty("mappingId").GetGuid()),("@revision",revisionId),("@machine",machineId),
-                    ("@semantic",signal.GetProperty("semanticKey").GetString()!), ("@protocol",signal.GetProperty("protocol").GetString()!),
-                    ("@stream",signal.GetProperty("streamKey").GetString()!), ("@encoding",signal.GetProperty("addressEncoding").GetString()!),
-                    ("@address",signal.GetProperty("addressBytes").GetBytesFromBase64()),("@normalization",signal.GetProperty("normalization").GetString()!));
+            var machineId=machine.GetProperty("machineId").GetGuid();var schedule=machine.GetProperty("schedule");var breaks=machine.GetProperty("breakPolicy");
+            machineRows.Rows.Add(machineId,machine.GetProperty("productionLineId").GetGuid(),machine.GetProperty("effectiveFrom").GetDateTimeOffset(),
+                machine.GetProperty("effectiveTo").ValueKind==JsonValueKind.Null?DBNull.Value:machine.GetProperty("effectiveTo").GetDateTimeOffset(),
+                schedule.GetProperty("revisionId").GetGuid(),Digest(schedule),breaks.GetProperty("revisionId").GetGuid(),Digest(breaks));
+            foreach(var signal in machine.GetProperty("signals").EnumerateArray())
+                signalRows.Rows.Add(signal.GetProperty("mappingId").GetGuid(),machineId,signal.GetProperty("semanticKey").GetString(),
+                    signal.GetProperty("protocol").GetString(),signal.GetProperty("streamKey").GetString(),signal.GetProperty("addressEncoding").GetString(),
+                    signal.GetProperty("addressBytes").GetBytesFromBase64(),signal.GetProperty("normalization").GetString());
         }
+        await Execute("""
+            INSERT configuration.PackageMachineScope(PackageRevisionId,SiteId,MachineId)
+                SELECT @revision,@site,MachineId FROM @machines;
+            INSERT configuration.PackageMachineAssignment(PackageRevisionId,SiteId,MachineId,ProductionLineId,
+                EffectiveFrom,EffectiveTo,ScheduleRevisionId,ScheduleHash,BreakPolicyRevisionId,BreakPolicyHash)
+                SELECT @revision,@site,MachineId,ProductionLineId,EffectiveFrom,EffectiveTo,ScheduleRevisionId,ScheduleHash,BreakPolicyRevisionId,BreakPolicyHash FROM @machines;
+            INSERT configuration.PackageSignalMapping(MappingId,PackageRevisionId,MachineId,SemanticKey,Protocol,StreamKey,AddressEncoding,AddressBytes,Normalization)
+                SELECT MappingId,@revision,MachineId,SemanticKey,Protocol,StreamKey,AddressEncoding,AddressBytes,Normalization FROM @signals;
+            """,("@revision",revisionId),("@site",siteId),("@machines",machineRows),("@signals",signalRows));
         await Execute("UPDATE configuration.ConfigurationPackageRevision SET SubmittedAt=SYSUTCDATETIME() WHERE PackageRevisionId=@revision",("@revision",revisionId));
         return hash;
 
@@ -68,7 +75,9 @@ public sealed class SqlPackageRepository
             await using var command = new SqlCommand(sql, connection, transaction) { CommandTimeout = 30 };
             foreach (var (name,value) in parameters)
             {
-                if (value is byte[] binary) command.Parameters.Add(name,SqlDbType.VarBinary,-1).Value=binary;
+                if(value is DataTable table)
+                {var parameter=command.Parameters.Add(name,SqlDbType.Structured);parameter.TypeName=name=="@machines"?"configuration.PackageMachineBatch":"configuration.PackageSignalBatch";parameter.Value=table;}
+                else if (value is byte[] binary) command.Parameters.Add(name,SqlDbType.VarBinary,-1).Value=binary;
                 else if (name is "@from" or "@to") command.Parameters.Add(name,SqlDbType.DateTimeOffset).Value=value;
                 else command.Parameters.AddWithValue(name,value);
             }
