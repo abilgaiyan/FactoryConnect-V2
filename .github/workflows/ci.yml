@@ -79,6 +79,13 @@ jobs:
           echo 'SQL did not become ready'; exit 1
       - name: Real SQL acceptance (missing SQL is a failure)
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release
+      - name: Upload synthetic SQL performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventory-performance
+          path: artifacts/performance/*.json
+          if-no-files-found: warn
       - name: Remove disposable SQL container
         if: always()
         run: docker rm -f fc2-sql || true

@@ -69,3 +69,5 @@ Scoped human access grants: [G2 grant issuance](docs/implementation/FC2-G2-scope
 Human registration and offboarding: [G2 identity lifecycle](docs/implementation/FC2-G2-human-identity-lifecycle.md). Enrollment requires installation administration and the committed bootstrap issuer; it grants no permissions.
 
 Recovery prerequisite: [G2 recovery trust provisioning](docs/implementation/FC2-G2-recovery-trust-provisioning.md). Current administration, bootstrap custody approval and separate recovery-key possession proofs are required; recovery execution remains unavailable.
+
+V1 performance safeguards and current measurements: [regression prevention and full-path SQL inventory acceptance](docs/implementation/FC2-V1-performance-regression-prevention.md).

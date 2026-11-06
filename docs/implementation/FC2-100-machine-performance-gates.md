@@ -24,3 +24,7 @@
 PR #14 implements a scoped **inventory** query under an installation-wide security gate. It does not yet have an activation authority, active roster, ingestion, historical reporting, a 100-machine load benchmark or production capacity evidence. The SQL acceptance suite shares a disposable database across slices; tests must assert scope/invariants without assuming an unchanged total machine count.
 
 No production rollout is authorized by this performance note.
+
+## Executable progress after PR #17
+
+The [V1 regression-prevention matrix and full-path inventory gate](FC2-V1-performance-regression-prevention.md) defines the current SQL budgets, sampled instrumentation and CI artifact. This advances inventory evidence only; reporting, ingestion, active roster and HTTP capacity gates remain open.
