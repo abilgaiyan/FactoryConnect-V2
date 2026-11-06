@@ -93,6 +93,17 @@ internal static class RuntimeCredentialAcceptance
         }
         await Exec("DROP TRIGGER security.Fixture_RuntimeBarrier");
         await Denied(()=>service.ChangeRuntimeCredentialAsync(token,signed),"security administration cannot bypass revoked runtime credential grant");
+        // Restore the independent grant through the real command, then isolate custody revocation.
+        await service.GrantPermissionAsync(rootToken,new(Guid.NewGuid(),Guid.NewGuid(),actor,parent,"runtime.credential.manage",AuthorizationScope.Installation,true,false,now,now.AddDays(1),7,"restore manager for custody revocation acceptance"));
+        // Synthetic committed upstream custodian revocation; no production custodian lifecycle is claimed.
+        await Exec("""
+            INSERT security.SecurityOperation(OperationId,ActorPrincipalId,RequestBytes,RequestHash,ScopeKind,ResultBytes)
+                VALUES(@op,@actor,0x7B7D,HASHBYTES('SHA2_256',0x7B7D),'I',0x7B7D);
+            INSERT security.BootstrapCustodianRevocation(KeyId,OperationId) VALUES(@key,@op);
+            INSERT security.SecurityAudit(AuditId,OperationId,ActorPrincipalId,Action,Reason)
+                VALUES(NEWID(),@op,@actor,'fixture-custodian-revocation',N'synthetic upstream acceptance only');
+            """,("@op",Guid.NewGuid()),("@actor",administrator),("@key",p.ApproverKeyId));
+        await Denied(()=>service.ChangeRuntimeCredentialAsync(token,signed),"completed runtime receipt rechecks committed custodian revocation");
         return count;
         SignedRuntimeCredential Sign(RuntimeCredentialPayload payload,RSA? key)
         {var bytes=RuntimeCredentialProof.Canonicalize(payload);return new(payload,[Proof(payload.ApproverKeyId,a,bytes),Proof(payload.ExecutorKeyId,b,bytes)],key?.SignData(bytes,HashAlgorithmName.SHA256,RSASignaturePadding.Pss)??[]);}
