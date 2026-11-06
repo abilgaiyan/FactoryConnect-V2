@@ -70,20 +70,20 @@ internal static class ConfigurationAcceptance
         await using(var q=new SqlCommand("SELECT AddressBytes FROM configuration.PackageSignalMapping",c))
             Check(((byte[])(await q.ExecuteScalarAsync())!).SequenceEqual(package.Machines[0].Signals[0].AddressBytes),"opaque source bytes round-trip");
         await RejectSql(()=>Exec("UPDATE configuration.ConfigurationPackageRevision SET RevisionNumber=2"),"submitted revision update rejected");
-        await RejectSql(()=>Exec("DELETE configuration.ConfigurationPackageRevision"),"submitted revision deletion rejected");
+        await RejectSql(()=>Exec("DELETE configuration.ConfigurationPackageRevision"),"submitted revision deletion rejected",547);
         await RejectSql(()=>Exec("INSERT configuration.PackageMachineScope VALUES(@revision,@site,'77777777-7777-7777-7777-777777777777')",("@revision",package.RevisionId),("@site",Site)),"late submitted scope insertion rejected");
-        await RejectSql(()=>Exec("DELETE configuration.PackageMachineScope"),"submitted scope deletion rejected");
+        await RejectSql(()=>Exec("DELETE configuration.PackageMachineScope"),"submitted scope deletion rejected",547);
         await RejectSql(()=>Exec("UPDATE configuration.PackageMachineAssignment SET EffectiveTo=DATEADD(day,1,EffectiveFrom)"),"submitted assignment update rejected");
         await RejectSql(()=>Exec("UPDATE configuration.PackageSignalMapping SET StreamKey=N'changed'"),"submitted mapping update rejected");
         await RejectSql(()=>Exec("UPDATE configuration.SharedScheduleRevision SET CanonicalBytes=0x01"),"shared schedule mutation rejected");
         await RejectSql(()=>Exec("DELETE configuration.SharedBreakPolicyRevision"),"shared break deletion rejected");
         await RejectSql(()=>Exec("UPDATE configuration.SiteTimezoneRevision SET TzdbRelease='latest'"),"pinned timezone provenance mutation rejected");
         var wrongHash=package with {RevisionId=Guid.NewGuid(),RevisionNumber=2,Timezone=new(Timezone,new byte[32])};
-        await RejectSql(()=>Submit(wrongHash),"wrong pinned timezone hash rejected");
+        await RejectSql(()=>Submit(wrongHash),"wrong pinned timezone hash rejected",547);
         var wrongSite=package with {PackageId=Guid.NewGuid(),RevisionId=Guid.NewGuid(),SiteId=Guid.Parse("22222222-2222-2222-2222-222222222222")};
-        await RejectSql(()=>Submit(wrongSite),"cross-site policy or machine rejected");
+        await RejectSql(()=>Submit(wrongSite),"cross-site policy or machine rejected",547);
         var wrongLine=package with {RevisionId=Guid.NewGuid(),RevisionNumber=2,Machines=[package.Machines[0] with {ProductionLineId=Guid.Parse("55555555-5555-5555-5555-555555555555")}]};
-        await RejectSql(()=>Submit(wrongLine),"cross-site line assignment rejected");
+        await RejectSql(()=>Submit(wrongLine),"cross-site line assignment rejected",547);
         await using(var q=new SqlCommand("SELECT COUNT(*) FROM configuration.ConfigurationPackageRevision",c))
             Check(Convert.ToInt32(await q.ExecuteScalarAsync())==1,"failed submissions leave no partial revisions");
         return count;
@@ -97,7 +97,7 @@ internal static class ConfigurationAcceptance
         async Task Exec(string sql,params (string Name,object Value)[] parameters)
         {await using var q=new SqlCommand(sql,c);foreach(var (name,value) in parameters)q.Parameters.AddWithValue(name,value);await q.ExecuteNonQueryAsync();}
         void Check(bool pass,string label){if(!pass)throw new InvalidOperationException(label);count++;Console.WriteLine("PASS: "+label);}
-        async Task RejectSql(Func<Task> action,string label)
-        {try{await action();}catch(SqlException){Check(true,label);return;}throw new InvalidOperationException("Expected SQL rejection: "+label);}
+        async Task RejectSql(Func<Task> action,string label,int expectedNumber=51010)
+        {try{await action();}catch(SqlException error) when(error.Number==expectedNumber){Check(true,label);return;}throw new InvalidOperationException("Expected SQL rejection: "+label);}
     }
 }

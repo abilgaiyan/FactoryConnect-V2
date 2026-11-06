@@ -10,7 +10,7 @@ Operating sequence: implement one reviewable increment → validate .NET/React a
 | FC2-002 backend shell | Merged PR #2 | Preserved dashboard, .NET shell and combined CI |
 | FC2-003 G1 design | Frozen `5e170d1`; design/history merged PR #3 at `4a6cf56` | Schema/package ownership and reproducibility baseline |
 | FC2-003A increment 1 | Merged PR #4 at `6cfca34`; 21 SQL checks, 463 dashboard tests; final CI 42198792815 PASS | Explicit installation identity, atomic migrations, stable master IDs |
-| FC2-003A increment 2 | Configuration-package implementation in progress | Golden canonical fixtures, pinned policies, submitted-content immutability and real SQL constraints |
+| FC2-003A increment 2 | Implemented in PR #5; initial combined CI 42199918354 PASS (51 acceptance checks including 12 canonical fixtures); final review/merge pending | Golden canonical fixtures, pinned policies, submitted-content immutability and real SQL constraints |
 | FC2-003B configuration lifecycle | Pending | Authorized author/submit/review, immutable audit and operation replay; no self-approval |
 | G2 security implementation | Working design v0.2 plus execution-baseline choices; pending code acceptance | Sealed dual-custodian bootstrap/recovery, OIDC/session/grant authority, delegation and revocation races, mTLS runtime trust |
 | Activation and policy eligibility | Pending | Generation-bound acknowledgements, explicit effective intervals, policy revocation serialization, expiry/disablement and partial activation |
