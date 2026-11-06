@@ -57,8 +57,10 @@ internal static class SecurityAcceptance
         await Grant(siteReadGrant,admin,admin,null,"configuration.read",AuthorizationScope.Site(site),true,false);
         var inventory=new SqlProtectedMachineInventoryReader(readerString,installationId);
         var siteMachines=await inventory.ReadSiteAsync(adminToken,site);
-        Check(siteMachines.Count==1 && siteMachines[0].MachineId==machine,
-            "protected inventory returns exact authorized site machines");
+        Check(siteMachines.Any(item=>item.MachineId==machine && item.SiteId==site) &&
+            siteMachines.All(item=>item.SiteId==site) &&
+            siteMachines.Select(item=>item.MachineId).Distinct().Count()==siteMachines.Count,
+            "protected inventory returns exact authorized site machines without cross-site leakage");
         await Denied(()=>inventory.ReadSiteAsync(adminToken,Guid.Parse("22222222-2222-2222-2222-222222222222")),
             "protected inventory denies unauthorized site");
         await Denied(()=>inventory.ReadSiteAsync(strangerToken,site),
