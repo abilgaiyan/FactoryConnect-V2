@@ -79,3 +79,5 @@ G3 pending activation intent: [durable per-machine requests](docs/implementation
 Runtime key custody prerequisite: [controlled signing-key enrollment, rotation and revocation](docs/implementation/FC2-G2-runtime-credential-authority.md). Two independent custodians and new-key possession proofs are required. This does not supply mTLS transport or X.509 issuance.
 
 Runtime assignment prerequisite: [scoped assignment, explicit replacement and revocation](docs/implementation/FC2-G2-runtime-assignment-authority.md). Assignment and credential generations remain independent; these commands create no activation or acknowledgement.
+
+Runtime X.509 prerequisite: [controlled exact certificate and pinned-CA registration](docs/implementation/FC2-G2-runtime-certificate-registration.md). Registration creates a new signing credential generation; it is offline public-material validation and does not authenticate a TLS channel or check CA revocation.

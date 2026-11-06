@@ -51,6 +51,16 @@ public sealed partial class SqlSecurityAuthority
             if(state.Epoch!=p.ExpectedEpoch)throw new SecurityConflictException();
             await using(var q=Command(c,t,"SELECT (SELECT COUNT(*) FROM security.RecoveryTrustProvisioning)+(SELECT COUNT(*) FROM security.RecoveryTrustRevision)+(SELECT COUNT(*) FROM security.RecoveryTrustState)+(SELECT COUNT(*) FROM security.RecoveryCustodianKey)"))
                 if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityDeniedException();
+            // Custody may not adopt material already used by runtime or runtime-CA authority.
+            await using(var q=Command(c,t,"""
+                SELECT CASE WHEN EXISTS(SELECT 1 FROM security.RuntimeCredentialPublicKey WHERE PublicKeyHash IN (@firstHash,@secondHash))
+                        OR EXISTS(SELECT 1 FROM security.RuntimeCertificateBinding WHERE AnchorPublicKeyHash IN (@firstHash,@secondHash))
+                        THEN 1 ELSE 0 END
+                """))
+            {
+                Add(q,("@firstHash",SHA256.HashData(trust.Keys[0].PublicKeySpki)),("@secondHash",SHA256.HashData(trust.Keys[1].PublicKeySpki)));
+                if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityDeniedException();
+            }
             var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId=p.OperationId,trustId=p.TrustId,generation=1,status="recovery-trust-provisioned"});
             await Exec(c,t,"""
                 INSERT security.SecurityOperation(OperationId,ActorPrincipalId,RequestBytes,RequestHash,ScopeKind,ResultBytes)
