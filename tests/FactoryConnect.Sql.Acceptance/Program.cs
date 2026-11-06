@@ -74,6 +74,7 @@ try
     SqlConnection.ClearAllPools();
     await Execute(control,$"ALTER DATABASE [{main.InitialCatalog}] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;");
     passed += await SecurityAcceptance.Run(main.ConnectionString,target.InstallationId);
+    passed += await GrantIssuanceAcceptance.Run(main.ConnectionString,target.InstallationId);
     passed += await HumanSessionAcceptance.Run(main.ConnectionString,target.InstallationId);
     var bootstrapDb=await NewDatabase();
     var bootstrapTarget=target with {ConnectionString=bootstrapDb.ConnectionString,Database=bootstrapDb.InitialCatalog,InstallationId=Guid.NewGuid()};

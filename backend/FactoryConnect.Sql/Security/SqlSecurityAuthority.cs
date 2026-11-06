@@ -7,7 +7,7 @@ using Microsoft.Data.SqlClient;
 namespace FactoryConnect.Sql.Security;
 
 /// <summary>Server-side authority kernel. No sign-in, bootstrap or HTTP write endpoint is registered by this type.</summary>
-public sealed class SqlSecurityAuthority(string connectionString, Guid installationId)
+public sealed partial class SqlSecurityAuthority(string connectionString, Guid installationId)
 {
     public static string GateResource(Guid installation) => $"fc2:security:{installation:N}";
 
@@ -129,7 +129,7 @@ public sealed class SqlSecurityAuthority(string connectionString, Guid installat
     }
     private sealed record Grant(Guid Id,Guid Grantee,Guid Grantor,Guid? Parent,string? Origin,string Permission,
         AuthorizationScope Scope,bool Use,bool Delegate,DateTimeOffset From,DateTimeOffset To,bool Revoked);
-    private static async Task Authorize(SqlConnection c,SqlTransaction t,Guid actor,string permission,AuthorizationScope scope,DateTimeOffset now,CancellationToken ct)
+    private static async Task<int> Authorize(SqlConnection c,SqlTransaction t,Guid actor,string permission,AuthorizationScope scope,DateTimeOffset now,CancellationToken ct,bool delegation=false,Guid? requiredGrant=null)
     {
         if(string.IsNullOrEmpty(permission)||permission.Length>100||permission.Any(ch=>ch>127))throw new SecurityDeniedException();
         if(scope.Kind!="I")
@@ -142,7 +142,9 @@ public sealed class SqlSecurityAuthority(string connectionString, Guid installat
         var grants=new Dictionary<Guid,Grant>();
         await using(var q=Command(c,t,"""
             WITH ancestors AS (
-                SELECT * FROM security.PermissionGrant WHERE GranteeId=@actor AND Permission=@permission AND UseAllowed=1
+                SELECT * FROM security.PermissionGrant WHERE GranteeId=@actor AND Permission=@permission
+                    AND ((@delegation=0 AND UseAllowed=1) OR (@delegation=1 AND CanDelegate=1))
+                    AND (@requiredGrant IS NULL OR GrantId=@requiredGrant)
                 UNION ALL
                 SELECT p.* FROM security.PermissionGrant p JOIN ancestors a ON p.GrantId=a.ParentGrantId
             )
@@ -153,7 +155,8 @@ public sealed class SqlSecurityAuthority(string connectionString, Guid installat
             FROM ancestors a OPTION(MAXRECURSION 64);
             """))
         {
-            Add(q,("@actor",actor),("@permission",permission));await using var r=await q.ExecuteReaderAsync(ct);
+            Add(q,("@actor",actor),("@permission",permission),("@delegation",delegation),("@requiredGrant",(object?)requiredGrant??DBNull.Value));
+            await using var r=await q.ExecuteReaderAsync(ct);
             while(await r.ReadAsync(ct))
             {
                 Guid? NullableGuid(string name)=>r[name] is DBNull?null:(Guid)r[name];
@@ -163,7 +166,7 @@ public sealed class SqlSecurityAuthority(string connectionString, Guid installat
                     (bool)r["UseAllowed"],(bool)r["CanDelegate"],(DateTimeOffset)r["EffectiveFrom"],(DateTimeOffset)r["ExpiresAt"],(bool)r["IsRevoked"]));
             }
         }
-        foreach(var candidate in grants.Values.Where(g=>g.Grantee==actor&&g.Use&&g.Permission==permission))
+        foreach(var candidate in grants.Values.Where(g=>g.Grantee==actor&&(delegation?g.Delegate:g.Use)&&g.Permission==permission&&(!requiredGrant.HasValue||g.Id==requiredGrant.Value)))
         {
             var current=candidate;var seen=new HashSet<Guid>();var eligible=true;
             while(true)
@@ -174,7 +177,7 @@ public sealed class SqlSecurityAuthority(string connectionString, Guid installat
                     !parent.Scope.Contains(current.Scope)||current.From<parent.From||current.To>parent.To) {eligible=false;break;}
                 current=parent;
             }
-            if(eligible)return;
+            if(eligible)return seen.Count;
         }
         throw new SecurityDeniedException();
     }
@@ -199,7 +202,7 @@ public sealed class SqlSecurityAuthority(string connectionString, Guid installat
         foreach(var (name,value) in values)
             if(value is byte[] bytes)q.Parameters.Add(name,SqlDbType.VarBinary,-1).Value=bytes;
             else if(value is DateTimeOffset instant)q.Parameters.Add(name,SqlDbType.DateTimeOffset).Value=instant;
-            else if(name is "@site" or "@machine")q.Parameters.Add(name,SqlDbType.UniqueIdentifier).Value=value;
+            else if(name is "@site" or "@machine" or "@requiredGrant")q.Parameters.Add(name,SqlDbType.UniqueIdentifier).Value=value;
             else q.Parameters.AddWithValue(name,value);
     }
     private static async Task Exec(SqlConnection c,SqlTransaction t,string sql,CancellationToken ct,params (string Name,object Value)[] values)
