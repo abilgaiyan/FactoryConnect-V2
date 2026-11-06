@@ -7,7 +7,7 @@ var root = new SqlConnectionStringBuilder(admin) { InitialCatalog = "master" };
 await using var control = new SqlConnection(root.ConnectionString);
 await control.OpenAsync();
 var server = Convert.ToString(await Scalar(control, "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ServerName'))"))!;
-Console.WriteLine($"SQL engine: {await Scalar(control, "SELECT CONCAT(SERVERPROPERTY('ProductVersion'),' / ', SERVERPROPERTY('Edition'))")}");
+Console.WriteLine($"SQL engine: {await Scalar(control, "SELECT CONCAT(CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')),' / ', CONVERT(nvarchar(128), SERVERPROPERTY('Edition')))")}");
 var databases = new List<string>();
 var passed = 0;
 try
