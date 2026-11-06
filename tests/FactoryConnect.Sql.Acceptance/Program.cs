@@ -93,6 +93,10 @@ try
     var recoveryTarget=target with {ConnectionString=recoveryDb.ConnectionString,Database=recoveryDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(recoveryTarget);
     passed += await RecoveryTrustAcceptance.Run(recoveryTarget with{InitializeEmpty=false});
+    var performanceDb=await NewDatabase();
+    var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(performanceTarget);
+    passed += await InventoryPerformanceAcceptance.Run(performanceTarget with{InitializeEmpty=false});
     Console.WriteLine($"PASS: {passed} SQL acceptance checks; no skips.");
 }
 finally

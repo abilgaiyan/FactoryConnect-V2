@@ -1,4 +1,5 @@
 using System.Data;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text;
@@ -9,6 +10,8 @@ namespace FactoryConnect.Sql.Security;
 /// <summary>Server-side authority kernel. No sign-in, bootstrap or HTTP write endpoint is registered by this type.</summary>
 public sealed partial class SqlSecurityAuthority(string connectionString, Guid installationId)
 {
+    private static readonly ActivitySource Diagnostics=new("FactoryConnect.V2.Security");
+
     public static string GateResource(Guid installation) => $"fc2:security:{installation:N}";
 
     /// <summary>The trusted handler must read only the authorized scope and finish materializing its result before returning.</summary>
@@ -18,8 +21,14 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
         var token=sessionHash.ToArray();
         return Transaction(null,false,async(c,t)=>
         {
-            var state=await State(c,t,ct); var actor=await Session(c,t,token,state.Now,ct);
-            await Authorize(c,t,actor,permission,scope,state.Now,ct);
+            var authorizationStart=Stopwatch.GetTimestamp();
+            var authorityActivity=Activity.Current?.Source.Name=="FactoryConnect.V2.Security"?Activity.Current:null;
+            try
+            {
+                var state=await State(c,t,ct);var actor=await Session(c,t,token,state.Now,ct);
+                await Authorize(c,t,actor,permission,scope,state.Now,ct);
+            }
+            finally{authorityActivity?.SetTag("security.authorization.elapsed.ms",Stopwatch.GetElapsedTime(authorizationStart).TotalMilliseconds);}
             return await handler(c,t,ct);
         },ct);
     }
@@ -85,20 +94,63 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
     private async Task<T> Transaction<T>(Guid? operationId,bool exclusive,Func<SqlConnection,SqlTransaction,Task<T>> execute,CancellationToken ct)
     {
         if(installationId==Guid.Empty)throw new ArgumentException("Explicit installation identity is required.");
-        await using var c=new SqlConnection(connectionString);await c.OpenAsync(ct);
-        // Read committed plus the mandatory installation gate gives a fresh authority read after acquisition;
-        // do not establish a stale snapshot before waiting for revocation.
-        await using var t=(SqlTransaction)await c.BeginTransactionAsync(IsolationLevel.ReadCommitted,ct);
+        using var activity=Diagnostics.StartActivity("security.transaction",ActivityKind.Internal);
+        var started=Stopwatch.GetTimestamp();long transactionStarted=0;var outcome="unavailable";
+        await using var c=new SqlConnection(connectionString);
+        // Client statistics are opt-in with a sampled trace, and require no extra SQL commands.
+        if(activity is not null)c.StatisticsEnabled=true;
         try
         {
-            if(operationId is { } op)await Lock(c,t,$"fc2:operation:{installationId:N}:{op:N}",true,ct);
-            await Lock(c,t,GateResource(installationId),exclusive,ct);
-            await using(var identity=Command(c,t,"SELECT InstallationId FROM platform.InstallationIdentity WHERE Singleton=1"))
-                if((Guid?)(await identity.ExecuteScalarAsync(ct))!=installationId)throw new SecurityDeniedException();
-            var value=await execute(c,t);await t.CommitAsync(ct);return value;
+            var opening=Stopwatch.GetTimestamp();
+            try{await c.OpenAsync(ct);}
+            finally{activity?.SetTag("security.connection.open.ms",Stopwatch.GetElapsedTime(opening).TotalMilliseconds);}
+            if(activity is not null)c.ResetStatistics(); // Count the transaction, not login/pool handshakes.
+            transactionStarted=Stopwatch.GetTimestamp();
+            // Read committed and the mandatory gate give a fresh authority read after waiting.
+            await using var t=(SqlTransaction)await c.BeginTransactionAsync(IsolationLevel.ReadCommitted,ct);
+            try
+            {
+                if(operationId is { } op)
+                {
+                    var waiting=Stopwatch.GetTimestamp();
+                    try{await Lock(c,t,$"fc2:operation:{installationId:N}:{op:N}",true,ct);}
+                    finally{activity?.SetTag("security.operation.lock.wait.ms",Stopwatch.GetElapsedTime(waiting).TotalMilliseconds);}
+                }
+                var gateWaiting=Stopwatch.GetTimestamp();
+                try{await Lock(c,t,GateResource(installationId),exclusive,ct);}
+                finally{activity?.SetTag("security.gate.wait.ms",Stopwatch.GetElapsedTime(gateWaiting).TotalMilliseconds);}
+                await using(var identity=Command(c,t,"SELECT InstallationId FROM platform.InstallationIdentity WHERE Singleton=1"))
+                    if((Guid?)(await identity.ExecuteScalarAsync(ct))!=installationId)throw new SecurityDeniedException();
+                var value=await execute(c,t);await t.CommitAsync(ct);outcome="completed";return value;
+            }
+            catch
+            {try{await t.RollbackAsync(CancellationToken.None);}catch(Exception e)when(e is InvalidOperationException or SqlException){}throw;}
         }
-        catch
-        {try{await t.RollbackAsync(CancellationToken.None);}catch(Exception e)when(e is InvalidOperationException or SqlException){}throw;}
+        catch(Exception e)
+        {
+            outcome=ct.IsCancellationRequested||e is OperationCanceledException?"cancelled":
+                e is SecurityDeniedException?"denied":e is SecurityConflictException?"conflict":"unavailable";
+            throw;
+        }
+        finally
+        {
+            if(activity is not null)
+            {
+                activity.SetTag("security.result",outcome);
+                activity.SetTag("security.gate.mode",exclusive?"exclusive":"shared");
+                activity.SetTag("security.connection.open.attempts",1);
+                activity.SetTag("security.elapsed.ms",Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                if(transactionStarted!=0)activity.SetTag("security.transaction.elapsed.ms",Stopwatch.GetElapsedTime(transactionStarted).TotalMilliseconds);
+                if(c.State==ConnectionState.Open)
+                {
+                    var statistics=c.RetrieveStatistics();
+                    activity.SetTag("security.sql.roundtrips",statistics["ServerRoundtrips"]);
+                    activity.SetTag("security.sql.bytes.received",statistics["BytesReceived"]);
+                }
+                activity.SetStatus(outcome=="completed"?ActivityStatusCode.Ok:ActivityStatusCode.Error);
+                // Never tag identities, SQL text, token material, values, or exception messages.
+            }
+        }
     }
 
     private static async Task Lock(SqlConnection c,SqlTransaction t,string resource,bool exclusive,CancellationToken ct)
