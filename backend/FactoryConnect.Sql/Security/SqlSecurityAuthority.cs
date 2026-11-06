@@ -148,6 +148,7 @@ public sealed class SqlSecurityAuthority(string connectionString, Guid installat
             )
             SELECT a.*,CONVERT(bit,CASE WHEN EXISTS(SELECT 1 FROM security.GrantRevocation r WHERE r.GrantId=a.GrantId)
                 OR EXISTS(SELECT 1 FROM security.PrincipalRevocation r WHERE r.PrincipalId=a.GranteeId OR r.PrincipalId=a.GrantorId)
+                OR EXISTS(SELECT 1 FROM security.Principal p WHERE (p.PrincipalId=a.GranteeId OR p.PrincipalId=a.GrantorId) AND p.Kind<>'H')
                 THEN 1 ELSE 0 END) AS IsRevoked
             FROM ancestors a OPTION(MAXRECURSION 64);
             """))

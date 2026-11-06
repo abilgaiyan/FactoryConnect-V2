@@ -43,6 +43,10 @@ internal static class SecurityAcceptance
         await Denied(()=>Read(runtimeToken,scope),"runtime principal cannot use human session authority");
         await Denied(()=>reader.ReadAsync(strangerToken,"configuration.edit",scope,(_,_,_)=>Task.FromResult(1)),"future grant is not active early");
         await Denied(()=>reader.ReadAsync(strangerToken,"configuration.submit",scope,(_,_,_)=>Task.FromResult(1)),"expired grant is not active");
+        var runtimeAncestor=Guid.NewGuid();
+        await Grant(runtimeAncestor,runtime,admin,null,"audit.read",scope,false,true);
+        await Grant(Guid.NewGuid(),stranger,runtime,runtimeAncestor,"audit.read",scope,true,false);
+        await Denied(()=>reader.ReadAsync(strangerToken,"audit.read",scope,(_,_,_)=>Task.FromResult(1)),"runtime ancestor cannot delegate human permission");
         await Denied(()=>Read(expiredToken,scope),"expired session denied despite active grant");
         await Denied(()=>Read(memberToken,AuthorizationScope.Site(site)),"machine permission does not widen to site");
         await Denied(()=>Read(memberToken,AuthorizationScope.Machine(Guid.Parse("22222222-2222-2222-2222-222222222222"),machine)),"wrong machine-site pairing denied");
