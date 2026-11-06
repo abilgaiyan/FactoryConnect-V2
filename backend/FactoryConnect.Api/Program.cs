@@ -20,14 +20,14 @@ app.MapGet("/api/administration/v1/inventory", async (IConfiguration configurati
         if (string.IsNullOrWhiteSpace(builder.InitialCatalog) ||
             builder.InitialCatalog.Equals("master", StringComparison.OrdinalIgnoreCase) ||
             builder.InitialCatalog.Equals("FactoryConnect", StringComparison.OrdinalIgnoreCase) ||
-            builder.AttachDBFilename.Length != 0)
+            !string.IsNullOrEmpty(builder.AttachDBFilename))
             return InventoryUnavailable();
 
         await using var sql = new SqlConnection(builder.ConnectionString);
         await sql.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await sql.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
         await using (var identityCommand = new SqlCommand(
-            "SELECT InstallationId FROM platform.InstallationIdentity WHERE Singleton=1", sql, transaction))
+            "SELECT InstallationId FROM platform.InstallationIdentity WHERE Singleton=1 AND Product=N\'FactoryConnect-V2\'", sql, transaction))
         {
             var actual = await identityCommand.ExecuteScalarAsync(cancellationToken);
             if (actual is not Guid installed || installed != expectedInstallation)
