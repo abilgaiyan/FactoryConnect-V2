@@ -1,4 +1,5 @@
 using System.Data;
+using System.Formats.Asn1;
 using System.Security.Cryptography;
 using System.Text;
 using FactoryConnect.Sql;
@@ -40,6 +41,13 @@ internal static class BootstrapAcceptance
         var samePerson=p with{ExecutorKeyId=extra.KeyId,TrustManifestHash=aliasTrust.Hash};
         Denied(()=>aliasTrust.Verify(samePerson,Sign(samePerson,a,alias),now),"two keys held by one declared custodian do not satisfy threshold");
         Invalid(()=>new BootstrapTrustManifest(fixture.File with{Keys=[first,fixture.File.Keys[1] with{PublicKeySpki=first.PublicKeySpki}]}),"same RSA key under two identities rejected");
+        // Alternative AlgorithmIdentifier encoding must not disguise one RSA key as two keys.
+        var source=new AsnReader(a.ExportSubjectPublicKeyInfo(),AsnEncodingRules.DER).ReadSequence();
+        var algorithm=source.ReadSequence();var oid=algorithm.ReadObjectIdentifier();algorithm.ReadNull();
+        var keyBits=source.ReadBitString(out var unusedBits);var writer=new AsnWriter(AsnEncodingRules.DER);
+        writer.PushSequence();writer.PushSequence();writer.WriteObjectIdentifier(oid);writer.PopSequence();writer.WriteBitString(keyBits,unusedBits);writer.PopSequence();
+        try{_=new BootstrapTrustManifest(fixture.File with{Keys=[first,fixture.File.Keys[1] with{PublicKeySpki=writer.Encode()}]});throw new InvalidOperationException("Alternative SPKI encoding accepted.");}
+        catch(Exception error) when(error is ArgumentException or CryptographicException){Check(true,"alternative SPKI encoding cannot disguise a duplicate RSA key");}
         using var exponentKey=RSA.Create();var exponentParameters=a.ExportParameters(false);exponentParameters.Exponent=[3];exponentKey.ImportParameters(exponentParameters);
         Invalid(()=>new BootstrapTrustManifest(fixture.File with{Keys=[first,fixture.File.Keys[1] with{PublicKeySpki=exponentKey.ExportSubjectPublicKeyInfo()}]}),"non-profile RSA exponent rejected");
         using var weak=RSA.Create(2048);

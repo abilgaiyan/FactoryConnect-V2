@@ -46,8 +46,10 @@ public sealed class BootstrapTrustManifest
                 throw new ArgumentException("Custodian identity aliases are inconsistent.");
             custodians[k.CustodianId]=identity;people[identity]=k.CustodianId;
             using var rsa=RSA.Create();rsa.ImportSubjectPublicKeyInfo(k.PublicKeySpki,out var used);
-            if(used!=k.PublicKeySpki.Length||rsa.KeySize is <3072 or >8192||!rsa.ExportParameters(false).Exponent.AsSpan().SequenceEqual(new byte[]{1,0,1})||!publicKeys.Add(Convert.ToHexString(SHA256.HashData(k.PublicKeySpki))))
-                throw new ArgumentException("Distinct RSA public keys of at least 3072 bits and exponent 65537 are required.");
+            var canonicalKey=rsa.ExportSubjectPublicKeyInfo();
+            if(used!=k.PublicKeySpki.Length||!k.PublicKeySpki.AsSpan().SequenceEqual(canonicalKey)||rsa.KeySize is <3072 or >8192||
+                !rsa.ExportParameters(false).Exponent.AsSpan().SequenceEqual(new byte[]{1,0,1})||!publicKeys.Add(Convert.ToHexString(SHA256.HashData(canonicalKey))))
+                throw new ArgumentException("Distinct canonical SPKI RSA public keys of at least 3072 bits and exponent 65537 are required.");
         }
         if(custodians.Count<2)throw new ArgumentException("Two independently bound custodians are required.");
         bytes=JsonBytes(w=>
