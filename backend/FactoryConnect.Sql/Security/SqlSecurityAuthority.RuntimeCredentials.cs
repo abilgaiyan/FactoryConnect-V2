@@ -80,7 +80,7 @@ public sealed partial class SqlSecurityAuthority
                     SELECT (SELECT COUNT(*) FROM security.RuntimeCredentialPublicKey WHERE PublicKeyHash=@hash)
                          + (SELECT COUNT(*) FROM security.RecoveryCustodianKey WHERE PublicKeyHash=@hash)
                          + (SELECT COUNT(*) FROM security.RuntimeCredentialGeneration WHERE CredentialBindingHash=@hash)
-                         + (SELECT COUNT(*) FROM security.RuntimeCertificateBinding WHERE AnchorPublicKeyHash=@hash)
+                         + (SELECT CASE WHEN EXISTS(SELECT 1 FROM security.RuntimeCertificateBinding WHERE AnchorPublicKeyHash=@hash) THEN 1 ELSE 0 END)
                     """);Add(q,("@hash",SHA256.HashData(p.PublicKeySpki)));
                 if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityDeniedException();
             }
