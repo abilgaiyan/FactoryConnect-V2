@@ -3,7 +3,7 @@ using Microsoft.Data.SqlClient;
 
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
-var bootstrapPure=BootstrapAcceptance.PureChecks();
+var bootstrapPure=BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks();
 if(args is ["--pure-only"]) { Console.WriteLine($"PASS: {canonicalPassed+bootstrapPure} pure acceptance checks."); return; }
 var admin = Environment.GetEnvironmentVariable("FC2_TEST_SQL")
     ?? throw new InvalidOperationException("FC2_TEST_SQL is required; SQL acceptance cannot be skipped.");
@@ -88,6 +88,10 @@ try
     var identityTarget=target with {ConnectionString=identityDb.ConnectionString,Database=identityDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(identityTarget);
     passed += await HumanIdentityAcceptance.Run(identityTarget with{InitializeEmpty=false});
+    var recoveryDb=await NewDatabase();
+    var recoveryTarget=target with {ConnectionString=recoveryDb.ConnectionString,Database=recoveryDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(recoveryTarget);
+    passed += await RecoveryTrustAcceptance.Run(recoveryTarget with{InitializeEmpty=false});
     Console.WriteLine($"PASS: {passed} SQL acceptance checks; no skips.");
 }
 finally
