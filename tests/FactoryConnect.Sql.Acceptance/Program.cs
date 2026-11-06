@@ -69,6 +69,9 @@ try
     var results = await Task.WhenAll(installer.ApplyAsync(concurrentTarget), installer.ApplyAsync(concurrentTarget));
     Check(results.Sum() == original.Count, "concurrent installers apply exactly once");
     passed += await ConfigurationAcceptance.Run(main.ConnectionString);
+    SqlConnection.ClearAllPools();
+    await Execute(control,$"ALTER DATABASE [{main.InitialCatalog}] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;");
+    passed += await SecurityAcceptance.Run(main.ConnectionString,target.InstallationId);
     Console.WriteLine($"PASS: {passed} SQL acceptance checks; no skips.");
 }
 finally
