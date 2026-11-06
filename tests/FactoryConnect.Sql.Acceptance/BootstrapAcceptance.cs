@@ -40,6 +40,8 @@ internal static class BootstrapAcceptance
         var samePerson=p with{ExecutorKeyId=extra.KeyId,TrustManifestHash=aliasTrust.Hash};
         Denied(()=>aliasTrust.Verify(samePerson,Sign(samePerson,a,alias),now),"two keys held by one declared custodian do not satisfy threshold");
         Invalid(()=>new BootstrapTrustManifest(fixture.File with{Keys=[first,fixture.File.Keys[1] with{PublicKeySpki=first.PublicKeySpki}]}),"same RSA key under two identities rejected");
+        using var exponentKey=RSA.Create();var exponentParameters=a.ExportParameters(false);exponentParameters.Exponent=[3];exponentKey.ImportParameters(exponentParameters);
+        Invalid(()=>new BootstrapTrustManifest(fixture.File with{Keys=[first,fixture.File.Keys[1] with{PublicKeySpki=exponentKey.ExportSubjectPublicKeyInfo()}]}),"non-profile RSA exponent rejected");
         using var weak=RSA.Create(2048);
         Invalid(()=>new BootstrapTrustManifest(fixture.File with{Keys=[first,fixture.File.Keys[1] with{PublicKeySpki=weak.ExportSubjectPublicKeyInfo()}]}),"weak bootstrap RSA key rejected");
         Invalid(()=>BootstrapTrustManifest.Canonicalize(p with{Profile="recovery-v1"}),"initial-bootstrap profile cannot act as recovery");
