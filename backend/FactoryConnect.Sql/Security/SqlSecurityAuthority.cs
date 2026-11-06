@@ -129,7 +129,7 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
     }
     private sealed record Grant(Guid Id,Guid Grantee,Guid Grantor,Guid? Parent,string? Origin,string Permission,
         AuthorizationScope Scope,bool Use,bool Delegate,DateTimeOffset From,DateTimeOffset To,bool Revoked);
-    private static async Task<int> Authorize(SqlConnection c,SqlTransaction t,Guid actor,string permission,AuthorizationScope scope,DateTimeOffset now,CancellationToken ct,bool delegation=false,Guid? requiredGrant=null)
+    private static async Task<int> Authorize(SqlConnection c,SqlTransaction t,Guid actor,string permission,AuthorizationScope scope,DateTimeOffset now,CancellationToken ct,bool delegation=false,Guid? requiredGrant=null,Guid? excludedPrincipal=null)
     {
         if(string.IsNullOrEmpty(permission)||permission.Length>100||permission.Any(ch=>ch>127))throw new SecurityDeniedException();
         if(scope.Kind!="I")
@@ -151,11 +151,12 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
             SELECT a.*,CONVERT(bit,CASE WHEN EXISTS(SELECT 1 FROM security.GrantRevocation r WHERE r.GrantId=a.GrantId)
                 OR EXISTS(SELECT 1 FROM security.PrincipalRevocation r WHERE r.PrincipalId=a.GranteeId OR r.PrincipalId=a.GrantorId)
                 OR EXISTS(SELECT 1 FROM security.Principal p WHERE (p.PrincipalId=a.GranteeId OR p.PrincipalId=a.GrantorId) AND p.Kind<>'H')
+                OR a.GranteeId=@excludedPrincipal OR a.GrantorId=@excludedPrincipal
                 THEN 1 ELSE 0 END) AS IsRevoked
             FROM ancestors a OPTION(MAXRECURSION 64);
             """))
         {
-            Add(q,("@actor",actor),("@permission",permission),("@delegation",delegation),("@requiredGrant",(object?)requiredGrant??DBNull.Value));
+            Add(q,("@actor",actor),("@permission",permission),("@delegation",delegation),("@requiredGrant",(object?)requiredGrant??DBNull.Value),("@excludedPrincipal",(object?)excludedPrincipal??DBNull.Value));
             await using var r=await q.ExecuteReaderAsync(ct);
             while(await r.ReadAsync(ct))
             {
@@ -202,7 +203,7 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
         foreach(var (name,value) in values)
             if(value is byte[] bytes)q.Parameters.Add(name,SqlDbType.VarBinary,-1).Value=bytes;
             else if(value is DateTimeOffset instant)q.Parameters.Add(name,SqlDbType.DateTimeOffset).Value=instant;
-            else if(name is "@site" or "@machine" or "@requiredGrant")q.Parameters.Add(name,SqlDbType.UniqueIdentifier).Value=value;
+            else if(name is "@site" or "@machine" or "@requiredGrant" or "@excludedPrincipal")q.Parameters.Add(name,SqlDbType.UniqueIdentifier).Value=value;
             else q.Parameters.AddWithValue(name,value);
     }
     private static async Task Exec(SqlConnection c,SqlTransaction t,string sql,CancellationToken ct,params (string Name,object Value)[] values)
