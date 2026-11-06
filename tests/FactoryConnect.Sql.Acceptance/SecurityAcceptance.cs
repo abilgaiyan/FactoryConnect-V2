@@ -106,6 +106,8 @@ internal static class SecurityAcceptance
             observed[0].Rows==loaded.Count && observed[0].Commands==1 &&
             observed[0].ElapsedMs>=0,
             "100-machine inventory emits one bounded data-command diagnostic span");
+        // Stop collecting before the eight concurrent reads; List is intentionally local.
+        inventoryListener.Dispose();
         Check(loaded.Count==existingOther+100 && loaded.All(item=>item.SiteId==otherSite) &&
             loaded.Select(item=>item.MachineId).Distinct().Count()==loaded.Count,
             "100-machine protected inventory remains site-scoped and complete");
