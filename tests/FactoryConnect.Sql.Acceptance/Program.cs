@@ -1,0 +1,94 @@
+using FactoryConnect.Sql;
+using Microsoft.Data.SqlClient;
+
+var admin = Environment.GetEnvironmentVariable("FC2_TEST_SQL")
+    ?? throw new InvalidOperationException("FC2_TEST_SQL is required; SQL acceptance cannot be skipped.");
+var root = new SqlConnectionStringBuilder(admin) { InitialCatalog = "master" };
+await using var control = new SqlConnection(root.ConnectionString);
+await control.OpenAsync();
+var server = Convert.ToString(await Scalar(control, "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ServerName'))"))!;
+Console.WriteLine($"SQL engine: {await Scalar(control, "SELECT CONCAT(CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')),' / ', CONVERT(nvarchar(128), SERVERPROPERTY('Edition')))")}");
+var databases = new List<string>();
+var passed = 0;
+try
+{
+    var main = await NewDatabase();
+    var installer = new SqlInstaller();
+    var target = new InstallationTarget(main.ConnectionString, main.InitialCatalog, server, Guid.NewGuid(), true);
+    Check(await installer.ApplyAsync(target) == 1, "fresh install");
+    Check(await installer.ApplyAsync(target with { InitializeEmpty = false }) == 0, "unchanged rerun");
+    await Reject(() => installer.ApplyAsync(target with { InstallationId = Guid.NewGuid() }), "wrong installation");
+    await Reject(() => installer.ApplyAsync(target with { ExpectedServer = "wrong-server" }), "wrong server");
+    await Reject(() => installer.ApplyAsync(target with { Database = "master" }), "wrong database");
+    var original = SqlMigration.BuiltIn();
+    await Reject(() => installer.ApplyAsync(target, [original[0] with { Sql = original[0].Sql + "\n-- changed" }]), "checksum mismatch");
+    await Reject(() => installer.ApplyAsync(target, [new("000-retroactive", "SELECT 1"), ..original]), "retroactive migration");
+    var failure = new SqlMigration("002-failure", "CREATE TABLE dbo.ShouldRollback(Id int); THROW 51001, 'deliberate failure', 1;");
+    await Reject(() => installer.ApplyAsync(target, [..original, failure]), "migration failure");
+    await using (var c = new SqlConnection(main.ConnectionString))
+    {
+        await c.OpenAsync();
+        Check(Convert.ToInt32(await Scalar(c, "SELECT COUNT(*) FROM sys.tables WHERE name='ShouldRollback'")) == 0, "DDL rollback");
+        Check(Convert.ToInt32(await Scalar(c, "SELECT COUNT(*) FROM platform.SchemaMigration")) == 1, "ledger rollback");
+        await Execute(c, """
+            INSERT [master].Site(SiteId,DisplayName) VALUES
+                ('11111111-1111-1111-1111-111111111111',N'One'),
+                ('22222222-2222-2222-2222-222222222222',N'Two');
+            INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES
+                ('33333333-3333-3333-3333-333333333333','11111111-1111-1111-1111-111111111111',N'Machine');
+            """);
+        await Reject(() => Execute(c, "INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(NEWID(),NEWID(),N'Orphan')"), "orphan site FK");
+        await Reject(() => Execute(c, "UPDATE [master].Machine SET MachineId=NEWID()"), "immutable machine ID");
+        await Reject(() => Execute(c, "UPDATE [master].Machine SET SiteId='22222222-2222-2222-2222-222222222222'"), "immutable machine site ownership");
+        await Execute(c, "UPDATE [master].Machine SET DisplayName=N'Renamed machine'");
+        Check(Convert.ToInt32(await Scalar(c, "SELECT COUNT(*) FROM [master].Machine WHERE MachineId='33333333-3333-3333-3333-333333333333'")) == 1, "rename preserves identity");
+        await Reject(() => Execute(c, "DELETE [master].Site WHERE SiteId='11111111-1111-1111-1111-111111111111'"), "no cascading identity delete");
+        await Reject(() => Execute(c, "INSERT [master].Site(SiteId,DisplayName) VALUES(NEWID(),N' ' )"), "empty name constraint");
+    }
+    var unknown = await NewDatabase();
+    await using (var c = new SqlConnection(unknown.ConnectionString))
+    { await c.OpenAsync(); await Execute(c, "CREATE TABLE dbo.ForeignProduct(Id int)"); }
+    await Reject(() => installer.ApplyAsync(target with { ConnectionString = unknown.ConnectionString, Database = unknown.InitialCatalog }), "unknown nonempty database");
+    var sealedDb = await NewDatabase();
+    await Reject(() => installer.ApplyAsync(target with { ConnectionString = sealedDb.ConnectionString, Database = sealedDb.InitialCatalog, InitializeEmpty = false }), "initialization opt-in");
+    var failedNew = target with { ConnectionString = sealedDb.ConnectionString, Database = sealedDb.InitialCatalog };
+    await Reject(() => installer.ApplyAsync(failedNew, [new("001-fail", "THROW 51001, 'fail', 1;")]), "bootstrap rollback failure");
+    await using (var c = new SqlConnection(sealedDb.ConnectionString))
+    {
+        await c.OpenAsync();
+        Check(Convert.ToInt32(await Scalar(c, "SELECT COUNT(*) FROM sys.tables WHERE schema_id=SCHEMA_ID('platform')")) == 0, "bootstrap fully rolled back");
+    }
+    var concurrent = await NewDatabase();
+    var concurrentTarget = target with { ConnectionString = concurrent.ConnectionString, Database = concurrent.InitialCatalog };
+    var results = await Task.WhenAll(installer.ApplyAsync(concurrentTarget), installer.ApplyAsync(concurrentTarget));
+    Check(results.Sum() == 1, "concurrent installers apply exactly once");
+    Console.WriteLine($"PASS: {passed} SQL acceptance checks; no skips.");
+}
+finally
+{
+    SqlConnection.ClearAllPools();
+    foreach (var database in databases)
+        await Execute(control, $"ALTER DATABASE [{database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{database}];");
+}
+
+async Task<SqlConnectionStringBuilder> NewDatabase()
+{
+    var name = "FactoryConnect_V2_Test_" + Guid.NewGuid().ToString("N");
+    // Names are generated here, never supplied by external input. Only these databases are dropped.
+    await Execute(control, $"CREATE DATABASE [{name}]");
+    databases.Add(name);
+    return new SqlConnectionStringBuilder(admin) { InitialCatalog = name };
+}
+void Check(bool condition, string name)
+{ if (!condition) throw new InvalidOperationException("FAILED: " + name); passed++; Console.WriteLine("PASS: " + name); }
+async Task Reject(Func<Task> action, string name)
+{
+    try { await action(); }
+    catch (Exception e) when (e is SqlException or InvalidOperationException)
+    { Check(true, name); return; }
+    throw new InvalidOperationException("Expected rejection: " + name);
+}
+static async Task<object?> Scalar(SqlConnection c, string sql)
+{ await using var command = new SqlCommand(sql, c); return await command.ExecuteScalarAsync(); }
+static async Task Execute(SqlConnection c, string sql)
+{ await using var command = new SqlCommand(sql, c); command.CommandTimeout = 60; await command.ExecuteNonQueryAsync(); }
