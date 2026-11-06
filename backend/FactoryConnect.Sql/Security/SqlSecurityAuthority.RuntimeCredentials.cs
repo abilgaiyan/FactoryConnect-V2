@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
@@ -7,13 +8,22 @@ namespace FactoryConnect.Sql.Security;
 public sealed partial class SqlSecurityAuthority
 {
     public Task<byte[]> ChangeRuntimeCredentialAsync(byte[] sessionHash,SignedRuntimeCredential request,CancellationToken ct=default)
+        => ChangeRuntimeCredentialCoreAsync(sessionHash,request,null,ct);
+
+    /// <summary>Controls exact X.509/CA registration with the next signing-key generation; not TLS authentication.</summary>
+    public Task<byte[]> EnrollRuntimeCertificateAsync(byte[] sessionHash,SignedRuntimeCertificate request,CancellationToken ct=default)
+        => ChangeRuntimeCredentialCoreAsync(sessionHash,new(request.Payload,request.Signatures,request.PossessionSignature),
+            new(request.CertificateDer.ToArray(),request.TrustAnchorDer.ToArray()),ct);
+
+    private Task<byte[]> ChangeRuntimeCredentialCoreAsync(byte[] sessionHash,SignedRuntimeCredential request,RuntimeCertificateRegistration? certificate,CancellationToken ct)
     {
         var p=request.Payload with{Nonce=request.Payload.Nonce.ToArray(),BootstrapTrustHash=request.Payload.BootstrapTrustHash.ToArray(),PublicKeySpki=request.Payload.PublicKeySpki.ToArray(),
             ValidFrom=request.Payload.ValidFrom.ToUniversalTime(),CredentialExpiresAt=request.Payload.CredentialExpiresAt.ToUniversalTime()};
         var signed=new SignedRuntimeCredential(p,request.Signatures.Select(s=>s with{Signature=s.Signature.ToArray()}).ToArray(),request.PossessionSignature.ToArray());
-        var bytes=RuntimeCredentialProof.Canonicalize(p);var token=sessionHash.ToArray();
+        var bytes=certificate is null?RuntimeCredentialProof.Canonicalize(p):RuntimeCertificateProfile.Canonicalize(p,certificate);var token=sessionHash.ToArray();
         return Transaction(p.OperationId,true,async(c,t)=>
         {
+            if(certificate is not null)Activity.Current?.SetTag("security.certificate.registration",true);
             var state=await State(c,t,ct);var actor=await Session(c,t,token,state.Now,ct);
             await Authorize(c,t,actor,"runtime.credential.manage",AuthorizationScope.Installation,state.Now,ct);
             if(p.InstallationId!=installationId||p.ActorPrincipalId!=actor)throw new SecurityDeniedException();
@@ -24,7 +34,8 @@ public sealed partial class SqlSecurityAuthority
                 trust=new(JsonSerializer.Deserialize<BootstrapTrustFile>(stored,new JsonSerializerOptions(JsonSerializerDefaults.Web))??throw new SecurityDeniedException());
                 if(!stored.AsSpan().SequenceEqual(trust.CanonicalBytes))throw new SecurityDeniedException();
             }
-            RuntimeCredentialProof.Verify(trust,signed,state.Now);
+            RuntimeCredentialProof.VerifyAuthorizedBytes(trust,signed,bytes,state.Now);
+            if(certificate is not null)RuntimeCertificateProfile.ValidateRegistration(p,certificate,state.Now);
             var utf8=new UTF8Encoding(false,true);
             await using(var q=Command(c,t,"SELECT IssuerBytes,SubjectBytes FROM security.Principal WHERE PrincipalId=@actor"))
             {
@@ -38,6 +49,7 @@ public sealed partial class SqlSecurityAuthority
             state=await State(c,t,ct);actor=await Session(c,t,token,state.Now,ct);
             await Authorize(c,t,actor,"runtime.credential.manage",AuthorizationScope.Installation,state.Now,ct);
             if(p.ExpiresAt<=state.Now||p.Action!="revoke"&&p.CredentialExpiresAt<=state.Now)throw new SecurityDeniedException();
+            if(certificate is not null&&RuntimeCertificateProfile.CertificateInterval(certificate).Until<=state.Now)throw new SecurityDeniedException();
             var completed=await FindOperation(c,t,p.OperationId,ct);
             if(completed is not null)
             {if(completed.Actor!=actor||!completed.Request.AsSpan().SequenceEqual(bytes))throw new SecurityConflictException();return completed.Result;}
@@ -68,6 +80,7 @@ public sealed partial class SqlSecurityAuthority
                     SELECT (SELECT COUNT(*) FROM security.RuntimeCredentialPublicKey WHERE PublicKeyHash=@hash)
                          + (SELECT COUNT(*) FROM security.RecoveryCustodianKey WHERE PublicKeyHash=@hash)
                          + (SELECT COUNT(*) FROM security.RuntimeCredentialGeneration WHERE CredentialBindingHash=@hash)
+                         + (SELECT COUNT(*) FROM security.RuntimeCertificateBinding WHERE AnchorPublicKeyHash=@hash)
                     """);Add(q,("@hash",SHA256.HashData(p.PublicKeySpki)));
                 if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityDeniedException();
             }
@@ -76,8 +89,17 @@ public sealed partial class SqlSecurityAuthority
                 await using var q=Command(c,t,"SELECT COUNT(*) FROM security.RuntimeCredentialRevocation WHERE RuntimeIdentityId=@runtime AND CredentialGeneration=@generation");
                 Add(q,("@runtime",p.RuntimeIdentityId),("@generation",current));if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityConflictException();
             }
+            if(certificate is not null)
+            {
+                await using var q=Command(c,t,"""
+                    SELECT (SELECT COUNT(*) FROM security.RuntimeCredentialPublicKey WHERE PublicKeyHash=@anchorKey)
+                         + (SELECT COUNT(*) FROM security.BootstrapCustodianKey WHERE PublicKeyHash=@anchorKey)
+                         + (SELECT COUNT(*) FROM security.RecoveryCustodianKey WHERE PublicKeyHash=@anchorKey)
+                    """);Add(q,("@anchorKey",RuntimeCertificateProfile.AnchorKeyHash(certificate)));
+                if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityDeniedException();
+            }
             var generation=p.Action=="revoke"?current:current+1;
-            var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId=p.OperationId,runtimeIdentityId=p.RuntimeIdentityId,credentialGeneration=generation.ToString(System.Globalization.CultureInfo.InvariantCulture),status=p.Action=="revoke"?"credential-revoked-not-runtime-stop":"credential-enrolled-not-runtime-acknowledgement"});
+            var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId=p.OperationId,runtimeIdentityId=p.RuntimeIdentityId,credentialGeneration=generation.ToString(System.Globalization.CultureInfo.InvariantCulture),status=p.Action=="revoke"?"credential-revoked-not-runtime-stop":certificate is null?"credential-enrolled-not-runtime-acknowledgement":"certificate-registered-not-runtime-authentication"});
             await Exec(c,t,"""
                 INSERT security.SecurityOperation(OperationId,ActorPrincipalId,RequestBytes,RequestHash,ScopeKind,ResultBytes)
                 VALUES(@op,@actor,@bytes,@hash,'I',@result);
@@ -106,6 +128,15 @@ public sealed partial class SqlSecurityAuthority
                 """,ct,("@op",p.OperationId),("@runtime",p.RuntimeIdentityId),("@generation",generation),("@nonce",SHA256.HashData(p.Nonce)),("@first",p.ApproverKeyId),("@second",p.ExecutorKeyId),
                 ("@firstProof",signed.Signatures.Single(s=>s.KeyId==p.ApproverKeyId).Signature),("@secondProof",signed.Signatures.Single(s=>s.KeyId==p.ExecutorKeyId).Signature),("@possession",signed.PossessionSignature),
                 ("@audit",Guid.NewGuid()),("@actor",actor),("@action","runtime-credential-"+p.Action),("@reason",p.Reason));
+            if(certificate is not null)
+            {
+                var interval=RuntimeCertificateProfile.CertificateInterval(certificate);
+                await Exec(c,t,"""
+                    INSERT security.RuntimeCertificateBinding(RuntimeIdentityId,CredentialGeneration,CertificateDer,CertificateHash,TrustAnchorDer,TrustAnchorHash,AnchorPublicKeyHash,ValidFrom,ExpiresAt,OperationId)
+                    VALUES(@runtime,@generation,@cert,@certHash,@anchor,@anchorHash,@anchorKeyHash,@from,@until,@op);
+                    """,ct,("@runtime",p.RuntimeIdentityId),("@generation",generation),("@cert",certificate.CertificateDer),("@certHash",SHA256.HashData(certificate.CertificateDer)),
+                    ("@anchor",certificate.TrustAnchorDer),("@anchorHash",SHA256.HashData(certificate.TrustAnchorDer)),("@anchorKeyHash",RuntimeCertificateProfile.AnchorKeyHash(certificate)),("@from",interval.From),("@until",interval.Until),("@op",p.OperationId));
+            }
             return result;
         },ct);
     }

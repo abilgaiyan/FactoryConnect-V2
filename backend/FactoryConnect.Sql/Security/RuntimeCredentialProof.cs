@@ -50,7 +50,11 @@ public static class RuntimeCredentialProof
     }
     public static void Verify(BootstrapTrustManifest trust,SignedRuntimeCredential request,DateTimeOffset now)
     {
-        var p=request.Payload;var bytes=Canonicalize(p);
+        VerifyAuthorizedBytes(trust,request,Canonicalize(request.Payload),now);
+    }
+    internal static void VerifyAuthorizedBytes(BootstrapTrustManifest trust,SignedRuntimeCredential request,byte[] bytes,DateTimeOffset now)
+    {
+        var p=request.Payload;
         if(trust.InstallationId!=p.InstallationId||p.ActorIssuer!=trust.AllowedAdministratorIssuer||
             !CryptographicOperations.FixedTimeEquals(trust.Hash,p.BootstrapTrustHash)||p.IssuedAt>now||p.ExpiresAt<=now||
             p.Action!="revoke"&&p.CredentialExpiresAt<=now||request.Signatures.Count!=2)throw new SecurityDeniedException();
