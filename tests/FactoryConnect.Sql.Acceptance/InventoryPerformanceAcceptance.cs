@@ -13,7 +13,8 @@ internal static class InventoryPerformanceAcceptance
 {
     private sealed record Trace(string Operation,string? Outcome,int Rows,int DataCommands,long Roundtrips,
         double TotalMs,double OpenMs,double GateMs,double AuthorizationMs,double TransactionMs,int OpenAttempts);
-    private sealed record SessionCounters(long LogicalReads,long CpuMs,int Sessions);
+    private sealed record QueryCounters(long LogicalReads,long Executions,long WorkerMicroseconds);
+    private sealed record SessionCounters(int Sessions);
     internal static async Task<int> Run(InstallationTarget target)
     {
         var count=0;const int samples=128;const int poolSize=8;
@@ -63,7 +64,7 @@ internal static class InventoryPerformanceAcceptance
         var results=new List<object>();
         foreach(var concurrency in new[]{1,8})
         {
-            traces.Clear();var before=await Counters();
+            traces.Clear();var queryBefore=await DataQueryCounters();
             var allocated=GC.GetTotalAllocatedBytes();using var process=Process.GetCurrentProcess();var cpu=process.TotalProcessorTime;
             var times=new ConcurrentBag<double>();var started=Stopwatch.GetTimestamp();
             await Parallel.ForEachAsync(Enumerable.Range(0,samples),new ParallelOptions{MaxDegreeOfParallelism=concurrency},async(_,ct)=>
@@ -73,22 +74,24 @@ internal static class InventoryPerformanceAcceptance
                 times.Add(Stopwatch.GetElapsedTime(begin).TotalMilliseconds);
             });
             var wall=Stopwatch.GetElapsedTime(started).TotalMilliseconds;process.Refresh();
-            var after=await Counters();var transactions=traces.Where(t=>t.Operation=="security.transaction").ToArray();
+            var after=await Counters();var queryAfter=await DataQueryCounters();var transactions=traces.Where(t=>t.Operation=="security.transaction").ToArray();
             var inventories=traces.Where(t=>t.Operation=="inventory.read-site").ToArray();var latencies=times.Order().ToArray();
-            var logicalReads=after.LogicalReads>=before.LogicalReads?(long?)(after.LogicalReads-before.LogicalReads):null;
+            var observedExecutions=queryAfter.Executions-queryBefore.Executions;
+            var logicalReads=observedExecutions==samples&&queryAfter.LogicalReads>=queryBefore.LogicalReads?(long?)(queryAfter.LogicalReads-queryBefore.LogicalReads):null;
             results.Add(new{concurrency,samples,warm=true,machines=100,wallMs=wall,
                 latencyMs=new{p50=Percentile(latencies,0.5),p95=Percentile(latencies,0.95),p99=Percentile(latencies,0.99),max=latencies[^1]},
                 connectionOpenP95Ms=Percentile(transactions.Select(t=>t.OpenMs).Order().ToArray(),0.95),
                 gateAcquisitionP95Ms=Percentile(transactions.Select(t=>t.GateMs).Order().ToArray(),0.95),
                 authorizationP95Ms=Percentile(transactions.Select(t=>t.AuthorizationMs).Order().ToArray(),0.95),
                 transactionP95Ms=Percentile(transactions.Select(t=>t.TransactionMs).Order().ToArray(),0.95),
-                maxSqlRoundtrips=transactions.Max(t=>t.Roundtrips),logicalReadsDelta=logicalReads,
-                logicalReadsBefore=before.LogicalReads,logicalReadsAfter=after.LogicalReads,
-                sqlSessionCpuMsDelta=after.CpuMs>=before.CpuMs?(long?)(after.CpuMs-before.CpuMs):null,
+                maxSqlRoundtrips=transactions.Max(t=>t.Roundtrips),inventoryDataLogicalReadsDelta=logicalReads,inventoryDataExecutionsDelta=observedExecutions,
+                inventoryDataLogicalReadsBefore=queryBefore.LogicalReads,inventoryDataLogicalReadsAfter=queryAfter.LogicalReads,
+                inventoryDataWorkerCpuMsDelta=observedExecutions==samples?(double?)(queryAfter.WorkerMicroseconds-queryBefore.WorkerMicroseconds)/1000:null,
                 pooledSqlSessions=after.Sessions,clientAllocatedBytes=GC.GetTotalAllocatedBytes()-allocated,
                 clientCpuMs=(process.TotalProcessorTime-cpu).TotalMilliseconds,clientWorkingSetBytes=process.WorkingSet64});
             Console.WriteLine($"MEASURE: SQL inventory machines=100 concurrency={concurrency} samples={samples} p95Ms={Percentile(latencies,0.95):F2} p99Ms={Percentile(latencies,0.99):F2} maxRoundtrips={transactions.Max(t=>t.Roundtrips)} logicalReadsDelta={logicalReads?.ToString()??"unavailable"}");
             await SaveReport(false);
+            Check(observedExecutions==samples&&logicalReads>=samples,"inventory logical-read measurement covers exactly 128 data-query executions at concurrency "+concurrency);
             Check(transactions.Length==samples&&transactions.All(t=>t.Outcome=="completed"&&t.OpenAttempts==1&&t.Roundtrips is >0 and <=12),"sampled full-path command/connection budget holds at concurrency "+concurrency);
             Check(inventories.Length==samples&&inventories.All(t=>t.Outcome=="completed"&&t.Rows==100&&t.DataCommands==1),"one inventory data query per measured request at concurrency "+concurrency);
             // CI regression ceilings, not production SLAs. At least 100 samples per scenario for tail reporting.
@@ -126,13 +129,25 @@ internal static class InventoryPerformanceAcceptance
             processors=Environment.ProcessorCount,sqlEngine=Convert.ToString(await Scalar("SELECT CONCAT(CONVERT(nvarchar(128),SERVERPROPERTY('ProductVersion')),' / ',CONVERT(nvarchar(128),SERVERPROPERTY('Edition')))")),
             fixture=new{sites=2,machines=101,measuredSiteMachines=100,retired=10,maxPoolSize=poolSize},
             budgets=new{maxFullPathRoundtrips=12,warmP95Ms=2000,warmP99Ms=5000},scenarios=results,
-            limitations=new[]{"Warm pooled SQL reads with sampled instrumentation; no cold-SQL claim.","Session DMV deltas cover this isolated benchmark application; null if counters reset. Not per-statement query plans or SQL CPU profiling.","Client CPU/allocations/working set include sampled tracing; not SQL process resource usage.","Ingestion, activation, reporting, HTTP and production 100-machine capacity remain unqualified."}};
+            limitations=new[]{"Warm pooled SQL reads with sampled instrumentation; no cold-SQL claim.","Inventory logical reads use isolated database query-cache totals and exactly 128 executions; null if unavailable/reset. Full authorization logical reads and query plans are not measured. Inventory-data worker CPU is from the same query-cache counters, not SQL process profiling.","Client CPU/allocations/working set include sampled tracing; not SQL process resource usage.","Ingestion, activation, reporting, HTTP and production 100-machine capacity remain unqualified."}};
         await File.WriteAllTextAsync(path,JsonSerializer.Serialize(report,new JsonSerializerOptions{WriteIndented=true}));
         }
 
         void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);count++;Console.WriteLine("PASS: "+name);}
+        async Task<QueryCounters> DataQueryCounters()
+        {
+            await using var q=new SqlCommand("""
+                SELECT COALESCE(SUM(qs.total_logical_reads),0),COALESCE(SUM(qs.execution_count),0),COALESCE(SUM(qs.total_worker_time),0)
+                FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+                WHERE CHARINDEX(@needle,st.text)>0
+                    AND EXISTS(SELECT 1 FROM sys.dm_exec_plan_attributes(qs.plan_handle) pa
+                        WHERE pa.attribute='dbid' AND CONVERT(int,pa.value)=DB_ID());
+                """,control);
+            q.Parameters.AddWithValue("@needle","FROM [master].Machine m");
+            await using var r=await q.ExecuteReaderAsync();await r.ReadAsync();return new(r.GetInt64(0),r.GetInt64(1),r.GetInt64(2));
+        }
         async Task<SessionCounters> Counters()
-        {await using var q=new SqlCommand("SELECT COALESCE(SUM(CONVERT(bigint,logical_reads)),0),COALESCE(SUM(CONVERT(bigint,cpu_time)),0),COUNT(*) FROM sys.dm_exec_sessions WHERE program_name=@app",control);q.Parameters.AddWithValue("@app",application);await using var r=await q.ExecuteReaderAsync();await r.ReadAsync();return new(r.GetInt64(0),r.GetInt64(1),r.GetInt32(2));}
+        {await using var q=new SqlCommand("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE program_name=@app",control);q.Parameters.AddWithValue("@app",application);await using var r=await q.ExecuteReaderAsync();await r.ReadAsync();return new(r.GetInt32(0));}
         async Task WaitForGate()
         {
             for(var i=0;i<150;i++)
