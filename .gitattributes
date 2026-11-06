@@ -1,2 +1,5 @@
 src/FactoryConnect.Dashboard/ClientApp/** text eol=lf
 scripts/diagnostics/gg003-historical-inventory/Q2B-revision-534-lineage-review.sql text eol=lf
+
+# Published migration checksums must be identical on Windows and Linux.
+/backend/FactoryConnect.Sql/Migrations/*.sql text eol=lf

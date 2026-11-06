@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, fc2/architecture-foundation]
 
 jobs:
   dashboard:
@@ -48,3 +47,33 @@ jobs:
           api_pid=$!
           trap 'kill "$api_pid" 2>/dev/null || true' EXIT
           python3 scripts/ci/backend-smoke.py || { cat backend.log; exit 1; }
+
+  sql-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Start disposable SQL Server 2022 Developer
+        shell: bash
+        run: |
+          sql_password="$(openssl rand -hex 24)Aa1!"
+          echo "::add-mask::$sql_password"
+          echo "FC2_TEST_SQL=Server=127.0.0.1,1433;User ID=sa;Password=$sql_password;Encrypt=True;TrustServerCertificate=True;Connect Timeout=5" >> "$GITHUB_ENV"
+          echo "FC2_SQL_PASSWORD=$sql_password" >> "$GITHUB_ENV"
+          docker run -d --name fc2-sql -e ACCEPT_EULA=Y -e MSSQL_PID=Developer -e MSSQL_SA_PASSWORD="$sql_password" -p 127.0.0.1:1433:1433 mcr.microsoft.com/mssql/server:2022-CU20-ubuntu-22.04
+      - name: Wait for SQL readiness
+        shell: bash
+        run: |
+          for attempt in {1..60}; do
+            if docker exec -e SQLCMDPASSWORD="$FC2_SQL_PASSWORD" fc2-sql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -Q 'SELECT 1' > /dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          echo 'SQL did not become ready'; exit 1
+      - name: Real SQL acceptance (missing SQL is a failure)
+        run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release
+      - name: Remove disposable SQL container
+        if: always()
+        run: docker rm -f fc2-sql || true
