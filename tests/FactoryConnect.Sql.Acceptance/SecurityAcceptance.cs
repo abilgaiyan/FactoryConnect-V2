@@ -1,4 +1,5 @@
 using System.Data;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using FactoryConnect.Sql.Security;
 using FactoryConnect.Sql.Inventory;
@@ -65,6 +66,39 @@ internal static class SecurityAcceptance
             "protected inventory denies unauthorized site");
         await Denied(()=>inventory.ReadSiteAsync(strangerToken,site),
             "protected inventory denies missing permission");
+        // Disposable SQL 100-machine fixture. Insert in one set-based statement; no
+        // machine-by-machine client writes and no V1 historical data dependencies.
+        var otherSite=Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var existingOther=Convert.ToInt32(await Scalar(
+            "SELECT COUNT(*) FROM [master].Machine WHERE SiteId=@site",("@site",otherSite)));
+        await Exec("""
+            ;WITH numbers AS (
+                SELECT 1 AS n UNION ALL SELECT n+1 FROM numbers WHERE n<100
+            )
+            INSERT [master].Machine(MachineId,SiteId,DisplayName)
+            SELECT NEWID(),@site,CONCAT(N'Load machine ',n)
+            FROM numbers OPTION(MAXRECURSION 100);
+            """,("@site",otherSite));
+        await Grant(Guid.NewGuid(),admin,admin,null,"configuration.read",
+            AuthorizationScope.Site(otherSite),true,false);
+        var loadStart=Stopwatch.GetTimestamp();
+        var loaded=await inventory.ReadSiteAsync(adminToken,otherSite);
+        var loadMs=Stopwatch.GetElapsedTime(loadStart).TotalMilliseconds;
+        Check(loaded.Count==existingOther+100 && loaded.All(item=>item.SiteId==otherSite) &&
+            loaded.Select(item=>item.MachineId).Distinct().Count()==loaded.Count,
+            "100-machine protected inventory remains site-scoped and complete");
+        Check((await inventory.ReadSiteAsync(adminToken,site)).All(item=>item.SiteId==site),
+            "100-machine fixture cannot leak into other authorized site");
+        var concurrentStart=Stopwatch.GetTimestamp();
+        var concurrentInventory=await Task.WhenAll(
+            Enumerable.Range(0,8).Select(_=>inventory.ReadSiteAsync(adminToken,otherSite)));
+        var concurrentMs=Stopwatch.GetElapsedTime(concurrentStart).TotalMilliseconds;
+        Check(concurrentInventory.All(items=>items.Count==loaded.Count &&
+            items.All(item=>item.SiteId==otherSite)),
+            "eight concurrent protected reads return the same 100-machine site cut");
+        Console.WriteLine($"MEASURE: synthetic inventory machines={loaded.Count} singleMs={loadMs:F2} " +
+            $"concurrentReaders=8 concurrentWallMs={concurrentMs:F2}; CI timing is diagnostic, not an SLA");
+
 
         var badScope=Guid.NewGuid();
         await Grant(badScope,stranger,admin,parent,"configuration.read",AuthorizationScope.Installation,true,false);
