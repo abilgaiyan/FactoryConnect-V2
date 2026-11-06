@@ -63,3 +63,5 @@ See [the dependency review](docs/architecture/FC2-002-backend-foundation.md).
 Initial security bootstrap is an explicit offline, two-custodian operation; see [the bootstrap contract and commands](docs/implementation/FC2-G2-initial-bootstrap.md). No default administrator or automatic bootstrap is provided.
 
 Human session issuance boundary: [G2 human session authority](docs/implementation/FC2-G2-human-session-authority.md). No sign-in endpoint or identity-provider adapter is enabled by this increment.
+
+Scoped human access grants: [G2 grant issuance](docs/implementation/FC2-G2-scoped-access-grants.md). The server-side command requires current management and delegation authority; it does not enable configuration writes or enroll users.
