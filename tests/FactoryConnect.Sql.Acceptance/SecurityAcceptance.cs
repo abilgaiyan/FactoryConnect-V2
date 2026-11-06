@@ -81,9 +81,33 @@ internal static class SecurityAcceptance
             """,("@site",otherSite));
         await Grant(Guid.NewGuid(),admin,admin,null,"configuration.read",
             AuthorizationScope.Site(otherSite),true,false);
+        // Instrument the actual authorized SQL path: a 100-machine inventory read
+        // must remain one bounded data command rather than an N+1 loop.
+        var observed = new List<(string? Result, int Rows, int Commands, double ElapsedMs)>();
+        using var inventoryListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "FactoryConnect.V2.Inventory",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.OperationName != "inventory.read-site") return;
+                observed.Add((
+                    activity.GetTagItem("inventory.result") as string,
+                    Convert.ToInt32(activity.GetTagItem("inventory.rows")),
+                    Convert.ToInt32(activity.GetTagItem("inventory.reader.commands")),
+                    Convert.ToDouble(activity.GetTagItem("inventory.elapsed.ms"))));
+            }
+        };
+        ActivitySource.AddActivityListener(inventoryListener);
         var loadStart=Stopwatch.GetTimestamp();
         var loaded=await inventory.ReadSiteAsync(adminToken,otherSite);
         var loadMs=Stopwatch.GetElapsedTime(loadStart).TotalMilliseconds;
+        Check(observed.Count==1 && observed[0].Result=="completed" &&
+            observed[0].Rows==loaded.Count && observed[0].Commands==1 &&
+            observed[0].ElapsedMs>=0,
+            "100-machine inventory emits one bounded data-command diagnostic span");
+        // Stop collecting before the eight concurrent reads; List is intentionally local.
+        inventoryListener.Dispose();
         Check(loaded.Count==existingOther+100 && loaded.All(item=>item.SiteId==otherSite) &&
             loaded.Select(item=>item.MachineId).Distinct().Count()==loaded.Count,
             "100-machine protected inventory remains site-scoped and complete");
