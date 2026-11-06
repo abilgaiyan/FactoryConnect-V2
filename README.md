@@ -65,3 +65,5 @@ Initial security bootstrap is an explicit offline, two-custodian operation; see 
 Human session issuance boundary: [G2 human session authority](docs/implementation/FC2-G2-human-session-authority.md). No sign-in endpoint or identity-provider adapter is enabled by this increment.
 
 Scoped human access grants: [G2 grant issuance](docs/implementation/FC2-G2-scoped-access-grants.md). The server-side command requires current management and delegation authority; it does not enable configuration writes or enroll users.
+
+Human registration and offboarding: [G2 identity lifecycle](docs/implementation/FC2-G2-human-identity-lifecycle.md). Enrollment requires installation administration and the committed bootstrap issuer; it grants no permissions.

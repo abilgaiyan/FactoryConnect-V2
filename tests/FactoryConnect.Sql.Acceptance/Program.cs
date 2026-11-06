@@ -84,6 +84,10 @@ try
     var competingTarget=target with {ConnectionString=competingDb.ConnectionString,Database=competingDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(competingTarget);
     passed += await BootstrapAcceptance.CompetingRequests(competingTarget with{InitializeEmpty=false});
+    var identityDb=await NewDatabase();
+    var identityTarget=target with {ConnectionString=identityDb.ConnectionString,Database=identityDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(identityTarget);
+    passed += await HumanIdentityAcceptance.Run(identityTarget with{InitializeEmpty=false});
     Console.WriteLine($"PASS: {passed} SQL acceptance checks; no skips.");
 }
 finally
