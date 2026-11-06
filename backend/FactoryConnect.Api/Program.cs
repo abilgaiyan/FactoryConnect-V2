@@ -5,7 +5,7 @@ var app = builder.Build();
 
 // SQL-backed inventory is deliberately distinct from the active runtime roster.
 // This endpoint never claims that a machine is commissioned, live, connected or reporting.
-app.MapGet("/api/administration/v1/inventory", async (IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapGet("/internal/installation/v1/inventory", async (IConfiguration configuration, CancellationToken cancellationToken) =>
 {
     var connectionString = configuration["FC2_READONLY_SQL"];
     var identity = configuration["FC2_INSTALLATION_ID"];
@@ -71,6 +71,10 @@ app.MapGet("/api/administration/v1/inventory", async (IConfiguration configurati
         return InventoryUnavailable();
     }
     catch (InvalidOperationException)
+    {
+        return InventoryUnavailable();
+    }
+    catch (ArgumentException)
     {
         return InventoryUnavailable();
     }
