@@ -77,17 +77,21 @@ public sealed class RuntimeMtlsChannel:IAsyncDisposable
 {
     private readonly SslStream stream;
     private readonly RuntimeMtlsServer policy;
-    private readonly byte[] peerCertificate;
+    private readonly byte[] peerCertificate,peerKeyHash;
     private int disposed;
     internal RuntimeMtlsChannel(SslStream stream,RuntimeMtlsServer policy)
-    {this.stream=stream;this.policy=policy;peerCertificate=stream.RemoteCertificate?.GetRawCertData()??throw new SecurityDeniedException();}
-    internal (byte[] Certificate,byte[] AnchorHash,long CheckedAt,DateTimeOffset RootFrom,DateTimeOffset RootUntil) Revalidate(CancellationToken ct)
+    {
+        this.stream=stream;this.policy=policy;peerCertificate=stream.RemoteCertificate?.GetRawCertData()??throw new SecurityDeniedException();
+        using var certificate=RuntimeCertificateProfile.LoadExact(peerCertificate);using var key=certificate.GetRSAPublicKey()??throw new SecurityDeniedException();
+        peerKeyHash=SHA256.HashData(key.ExportSubjectPublicKeyInfo());
+    }
+    internal (byte[] Certificate,byte[] AnchorHash,byte[] KeyHash,long CheckedAt,DateTimeOffset RootFrom,DateTimeOffset RootUntil) Revalidate(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if(Volatile.Read(ref disposed)!=0||!stream.IsAuthenticated||!stream.IsMutuallyAuthenticated||!stream.IsServer||!stream.IsEncrypted||!stream.IsSigned||stream.RemoteCertificate is null)
             throw new SecurityDeniedException();
         var certificate=peerCertificate.ToArray();policy.ValidateStatus(certificate);ct.ThrowIfCancellationRequested();
-        return(certificate,policy.AnchorHash,Stopwatch.GetTimestamp(),policy.RootInterval.From,policy.RootInterval.Until);
+        return(certificate,policy.AnchorHash,peerKeyHash.ToArray(),Stopwatch.GetTimestamp(),policy.RootInterval.From,policy.RootInterval.Until);
     }
     public ValueTask<int> ReadAsync(Memory<byte> buffer,CancellationToken ct=default)=>stream.ReadAsync(buffer,ct);
     public ValueTask WriteAsync(ReadOnlyMemory<byte> buffer,CancellationToken ct=default)=>stream.WriteAsync(buffer,ct);

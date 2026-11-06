@@ -35,7 +35,7 @@ public sealed partial class SqlSecurityAuthority
                 JOIN configuration.RuntimeAssignment a ON a.AssignmentId=s.AssignmentId AND a.AssignmentGeneration=s.AssignmentGeneration
                 JOIN [master].Machine m ON m.MachineId=s.MachineId AND m.SiteId=s.SiteId
                 JOIN [master].Site site ON site.SiteId=s.SiteId
-                WHERE b.CertificateHash=@certificateHash AND b.TrustAnchorHash=@anchorHash
+                WHERE b.CertificateHash=@certificateHash AND b.TrustAnchorHash=@anchorHash AND g.CredentialBindingHash=@keyHash
                     AND b.ValidFrom<=@now AND b.ExpiresAt>@now AND g.ValidFrom<=@now AND g.ExpiresAt>@now
                     AND a.EffectiveFrom<=@now AND (a.EffectiveTo IS NULL OR a.EffectiveTo>@now)
                     AND m.IsRetired=0 AND site.IsRetired=0
@@ -47,6 +47,7 @@ public sealed partial class SqlSecurityAuthority
                 Add(q,("@site",siteId),("@machine",machineId),("@now",state.Now));
                 q.Parameters.Add("@certificateHash",SqlDbType.Binary,32).Value=certificateHash;
                 q.Parameters.Add("@anchorHash",SqlDbType.Binary,32).Value=evidence.AnchorHash;
+                q.Parameters.Add("@keyHash",SqlDbType.Binary,32).Value=evidence.KeyHash;
                 await using var r=await q.ExecuteReaderAsync(ct);
                 if(!await r.ReadAsync(ct)||!((byte[])r[4]).AsSpan().SequenceEqual(evidence.Certificate))throw new SecurityDeniedException();
                 authority=new(r.GetGuid(0),r.GetGuid(1),r.GetInt64(2),r.GetInt64(3),siteId,machineId);

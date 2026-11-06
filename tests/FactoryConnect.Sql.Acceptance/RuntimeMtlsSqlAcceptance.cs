@@ -57,6 +57,32 @@ internal static class RuntimeMtlsSqlAcceptance
         using(var changedCertificate=changedPublic.CopyWithPrivateKey(f.Runtime))
         await using(var changedPair=await fixture.Connect(certificate:changedCertificate))
             await Denied(()=>service.ReadRuntimeMachineAsync(changedPair.Channel,site,machine,(_,_,_)=>Task.FromResult(true)),"same runtime key in a different certificate cannot replace exact SQL DER pin");
+        // Privileged fixture injects inconsistent upstream facts: a valid certificate attached to another retained key.
+        // The real producer rejects this; the runtime reader must independently reject it too.
+        using(var mismatchKey=RSA.Create(3072))
+        using(var mismatchPublic=X509CertificateLoader.LoadCertificate(f.Leaf(f.Runtime,now,crlUri:fixture.CrlUri)))
+        using(var mismatchCertificate=mismatchPublic.CopyWithPrivateKey(f.Runtime))
+        {
+            var fakeRuntime=Guid.NewGuid();var fakeOp=Guid.NewGuid();var fakeAssignment=Guid.NewGuid();
+            await Exec("""
+                INSERT security.Principal(PrincipalId,Kind,IssuerBytes,SubjectBytes) VALUES(@runtime,'R',0x66697874757265,@subject);
+                INSERT security.SecurityOperation(OperationId,ActorPrincipalId,RequestBytes,RequestHash,ScopeKind,ResultBytes) VALUES(@op,@actor,0x7B7D,HASHBYTES('SHA2_256',0x7B7D),'I',0x7B7D);
+                INSERT security.SecurityAudit(AuditId,OperationId,ActorPrincipalId,Action,Reason) VALUES(NEWID(),@op,@actor,'fixture-inconsistent-certificate',N'Synthetic integrity acceptance only');
+                INSERT security.RuntimeIdentity VALUES(@runtime,'R',@op);
+                INSERT security.RuntimeCredentialGeneration VALUES(@runtime,1,@keyHash,@from,@until,@op);
+                INSERT security.RuntimeCredentialPublicKey VALUES(@runtime,1,@spki,@keyHash,@op);
+                INSERT security.RuntimeCredentialState VALUES(@runtime,1);
+                INSERT security.RuntimeCredentialCeremony VALUES(@op,@runtime,1,@nonce,@first,@second,0x01,0x02,0x03);
+                INSERT security.RuntimeCertificateBinding VALUES(@runtime,1,@certificate,@certificateHash,@anchor,@anchorHash,@anchorKeyHash,@from,@until,@op);
+                INSERT configuration.RuntimeAssignment VALUES(@assignment,@site,@machine,@runtime,1,@from,NULL,@op);
+                INSERT configuration.RuntimeAssignmentState VALUES(@machine,@site,@assignment,1,@runtime);
+                """,("@runtime",fakeRuntime),("@subject",fakeRuntime.ToByteArray()),("@op",fakeOp),("@actor",admin),("@keyHash",SHA256.HashData(mismatchKey.ExportSubjectPublicKeyInfo())),
+                ("@from",now.AddMinutes(-1)),("@until",now.AddDays(30)),("@spki",mismatchKey.ExportSubjectPublicKeyInfo()),("@nonce",RandomNumberGenerator.GetBytes(32)),("@first",initial.ApproverKeyId),("@second",initial.ExecutorKeyId),
+                ("@certificate",mismatchCertificate.RawData),("@certificateHash",SHA256.HashData(mismatchCertificate.RawData)),("@anchor",f.Root.RawData),("@anchorHash",SHA256.HashData(f.Root.RawData)),("@anchorKeyHash",SHA256.HashData(f.Ca.ExportSubjectPublicKeyInfo())),
+                ("@assignment",fakeAssignment),("@site",site),("@machine",otherMachine));
+            await using var mismatchPair=await fixture.Connect(certificate:mismatchCertificate);
+            await Denied(()=>service.ReadRuntimeMachineAsync(mismatchPair.Channel,site,otherMachine,(_,_,_)=>Task.FromResult(true)),"runtime read independently rejects certificate and retained-key integrity mismatch");
+        }
         await Exec("UPDATE [master].Machine SET IsRetired=1 WHERE MachineId=@machine",("@machine",machine));
         await Denied(()=>Read(),"retired machine denies authenticated runtime reads");
         await Exec("UPDATE [master].Machine SET IsRetired=0 WHERE MachineId=@machine",("@machine",machine));
