@@ -57,7 +57,19 @@ export function RetainedMachineEvidence({
               <td>{row.quality === "unavailable" ? "Unavailable" : "Source reported"}</td>
               <td><time dateTime={row.observedAt}>{row.sourceTimestamp}</time></td>
               <td>{row.instanceId} / {row.sequence}</td>
-              <td><small>{row.batchId}</small></td>
+              <td><small>{row.batchId}</small>
+                <details>
+                  <summary>Observation provenance</summary>
+                  <dl>
+                    <dt>Mapping ID</dt><dd><code>{row.mappingId}</code></dd>
+                    <dt>Batch ID</dt><dd><code>{row.batchId}</code></dd>
+                    <dt>Runtime acknowledgement ID</dt><dd><code>{row.acknowledgementId}</code></dd>
+                    <dt>Source document SHA-256</dt><dd><code style={{ overflowWrap: "anywhere" }}>{row.documentHash}</code></dd>
+                    <dt>Receipt time</dt><dd><time dateTime={row.receivedAt}>{row.receivedAt}</time></dd>
+                    <dt>Observation time</dt><dd><time dateTime={row.observedAt}>{row.observedAt}</time></dd>
+                  </dl>
+                </details>
+              </td>
             </tr>)}</tbody>
           </table>
         </div>)}
