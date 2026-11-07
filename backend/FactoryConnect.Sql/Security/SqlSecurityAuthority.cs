@@ -255,7 +255,7 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
         foreach(var (name,value) in values)
             if(value is byte[] bytes)q.Parameters.Add(name,SqlDbType.VarBinary,-1).Value=bytes;
             else if(value is DateTimeOffset instant)q.Parameters.Add(name,SqlDbType.DateTimeOffset).Value=instant;
-            else if(name is "@site" or "@machine" or "@requiredGrant" or "@excludedPrincipal")q.Parameters.Add(name,SqlDbType.UniqueIdentifier).Value=value;
+            else if(name is "@site" or "@machine" or "@requiredGrant" or "@excludedPrincipal" or "@timezone" or "@schedule" or "@break")q.Parameters.Add(name,SqlDbType.UniqueIdentifier).Value=value;
             else q.Parameters.AddWithValue(name,value);
     }
     private static async Task Exec(SqlConnection c,SqlTransaction t,string sql,CancellationToken ct,params (string Name,object Value)[] values)

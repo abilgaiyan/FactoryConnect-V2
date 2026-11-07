@@ -125,6 +125,10 @@ try
     var operationalTarget=target with {ConnectionString=operationalDb.ConnectionString,Database=operationalDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(operationalTarget);
     passed += await MachineOperationalAcceptance.Run(operationalTarget with{InitializeEmpty=false});
+    var safetyDb=await NewDatabase();
+    var safetyTarget=target with {ConnectionString=safetyDb.ConnectionString,Database=safetyDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(safetyTarget);
+    passed += await SafetyRevocationAcceptance.Run(safetyTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);
