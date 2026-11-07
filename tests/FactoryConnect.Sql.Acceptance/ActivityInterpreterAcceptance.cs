@@ -116,6 +116,53 @@ internal static class ActivityInterpreterAcceptance
         Check(MachineActivityInterpreter.Evaluate(configured,[]).ClosedPeriods.Count==0,
             "no retained evidence produces no invented activity");
 
+        var identity=ActivityQualificationIdentity.From(configured,"qualified-continuity:fixture-revision-7");
+        var initial=ActivityCheckpointEvaluator.Initial(identity);
+        var fullSamples=new[] {Sample(100,0,"ACTIVE"),Sample(101,10,"ACTIVE"),
+            Sample(102,20,"READY"),Sample(103,30,"STOPPED")};
+        var single=ActivityCheckpointEvaluator.Advance(configured,identity,initial,fullSamples);
+        var firstPart=ActivityCheckpointEvaluator.Advance(configured,identity,initial,fullSamples[..2]);
+        Check(firstPart.ClosedPeriods.Count==0 && firstPart.Checkpoint.OpenAnchor==fullSamples[0] &&
+            firstPart.Checkpoint.LastConsumedSample==fullSamples[1] &&
+            firstPart.Checkpoint.OpenState==ActivityState.Running,
+            "split checkpoint retains original anchor, latest sample and interpreted open state");
+        var secondPart=ActivityCheckpointEvaluator.Advance(configured,identity,
+            firstPart.Checkpoint,fullSamples[2..]);
+        Check(single.ClosedPeriods.SequenceEqual(
+            firstPart.ClosedPeriods.Concat(secondPart.ClosedPeriods)) &&
+            single.Checkpoint.OpenAnchor==secondPart.Checkpoint.OpenAnchor &&
+            single.Checkpoint.OpenState==secondPart.Checkpoint.OpenState &&
+            single.Checkpoint.LastConsumedSample==secondPart.Checkpoint.LastConsumedSample,
+            "single and split batches yield identical closed periods and open state");
+        // A restart reloads the exact persisted state, not a new blank evaluator.
+        var saved=System.Text.Json.JsonSerializer.Serialize(firstPart.Checkpoint);
+        var restored=System.Text.Json.JsonSerializer.Deserialize<ActivityProcessorCheckpoint>(saved)!;
+        var restarted=ActivityCheckpointEvaluator.Advance(configured,identity,restored,fullSamples[2..]);
+        Check(secondPart.ClosedPeriods.SequenceEqual(restarted.ClosedPeriods) &&
+            secondPart.Checkpoint==restarted.Checkpoint,
+            "serialized checkpoint restart yields identical transitions without history traversal");
+        var empty=ActivityCheckpointEvaluator.Advance(configured,identity,firstPart.Checkpoint,[]);
+        Check(empty.Checkpoint==firstPart.Checkpoint && empty.ClosedPeriods.Count==0,
+            "empty poll retains open checkpoint and generation exactly");
+        var restartGap=ActivityCheckpointEvaluator.Advance(configured,identity,
+            firstPart.Checkpoint,[Sample(102,20,"READY",continuous:false),
+                Sample(103,30,"STOPPED")]);
+        Check(restartGap.ClosedPeriods.Count==1 &&
+            restartGap.ClosedPeriods[0].State==ActivityState.Idle &&
+            restartGap.ContinuityBreaks==1,
+            "restart continuity gap never bridges persisted open running interval");
+        Reject(()=>ActivityCheckpointEvaluator.Advance(configured,
+            identity with {ContinuityIdentity="different"},firstPart.Checkpoint,fullSamples[2..]),
+            "changed continuity qualification cannot resume old checkpoint");
+        Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
+            firstPart.Checkpoint,[Sample(101,25,"READY")]),
+            "replay of previously consumed sequence is rejected");
+        Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
+            firstPart.Checkpoint,[Sample(102,10,"READY")]),
+            "equal-timestamp contradiction across batch restart is rejected");
+        Check(single.Checkpoint.NextGeneration==1 && secondPart.Checkpoint.NextGeneration==2,
+            "processor generation advances only for nonempty committed candidate batches");
+
         return count;
     }
 }
