@@ -160,6 +160,13 @@ internal static class ActivityInterpreterAcceptance
         Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
             firstPart.Checkpoint,[Sample(102,10,"READY")]),
             "equal-timestamp contradiction across batch restart is rejected");
+        Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
+            firstPart.Checkpoint with { LastConsumedSample=Sample(101,10,"READY") },
+            [Sample(102,20,"READY")]),
+            "corrupt last-consumed state cannot silently extend persisted running anchor");
+        Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
+            firstPart.Checkpoint with { OpenAnchor=null },[Sample(102,20,"READY")]),
+            "missing open anchor cannot coexist with persisted running state");
         Check(single.Checkpoint.NextGeneration==1 && secondPart.Checkpoint.NextGeneration==2,
             "processor generation advances only for nonempty committed candidate batches");
 
