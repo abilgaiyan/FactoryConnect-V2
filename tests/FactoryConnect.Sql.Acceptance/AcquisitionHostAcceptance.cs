@@ -1,0 +1,150 @@
+using System.Data;
+using System.Buffers.Binary;
+using System.Globalization;
+using System.Xml.Linq;
+using System.Security.Cryptography.X509Certificates;
+using FactoryConnect.Protocols.MTConnect;
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using FactoryConnect.Sql;
+using FactoryConnect.Sql.Configuration;
+using FactoryConnect.Sql.Security;
+using Microsoft.Data.SqlClient;
+
+internal static class AcquisitionHostAcceptance
+{
+    const string Issuer="https://certificate.fixture/tenant";
+    const string Device="fixture-device";
+    const string Stream="mtconnect:uuid:"+Device;
+    internal static async Task<int> Run(InstallationTarget target)
+    {
+        var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
+        var now=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!;
+        var admin=Guid.NewGuid();var proposer=Guid.NewGuid();var approver=Guid.NewGuid();var holder=Guid.NewGuid();
+        var site=Guid.NewGuid();var line=Guid.NewGuid();var machine=Guid.NewGuid();var otherMachine=Guid.NewGuid();
+        await using var tls=new RuntimeMtlsFixture(target.InstallationId,proposer,now,0);var f=tls.Credentials;
+        var initial=new BootstrapPayload(target.InstallationId,Guid.NewGuid(),admin,Issuer,"administrator",BootstrapTrustManifest.AdministratorProfile,f.File.Keys[0].KeyId,f.File.Keys[1].KeyId,
+            now.AddSeconds(-1),now.AddMinutes(5),now.AddDays(30),0,RandomNumberGenerator.GetBytes(32),f.Trust.Hash,"operational authority acceptance bootstrap");
+        var initialBytes=BootstrapTrustManifest.Canonicalize(initial);
+        await new SqlBootstrapAuthority(target,f.Trust).ApplyAsync(new(initial,[RuntimeCertificateAcceptance.Fixture.Proof(initial.ApproverKeyId,f.A,initialBytes),RuntimeCertificateAcceptance.Fixture.Proof(initial.ExecutorKeyId,f.B,initialBytes)]));
+        var rootToken=RandomNumberGenerator.GetBytes(32);var bearer=RandomNumberGenerator.GetBytes(32);var token=SHA256.HashData(bearer);var reviewToken=RandomNumberGenerator.GetBytes(32);var holdToken=RandomNumberGenerator.GetBytes(32);
+        await Exec("""
+            INSERT security.SessionAuthority VALUES(@token,@actor,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()),N'fixture-only',1);
+            INSERT [master].Site(SiteId,DisplayName) VALUES(@site,N'Operational acceptance');
+            INSERT [master].ProductionLine(ProductionLineId,SiteId,DisplayName) VALUES(@line,@site,N'Fixture line');
+            INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(@machine,@site,N'Target'),(@other,@site,N'Other');
+            """,("@token",rootToken),("@actor",admin),("@site",site),("@line",line),("@machine",machine),("@other",otherMachine));
+        var service=new SqlSecurityAuthority(target.ConnectionString,target.InstallationId);
+        var enabling=new SqlSecurityAuthority(new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName="fc2host-revoker"}.ConnectionString,target.InstallationId);
+        var suspending=new SqlSecurityAuthority(new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName="fc2machine-holder"}.ConnectionString,target.InstallationId);
+        var acknowledging=new SqlSecurityAuthority(new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName="fc2ingest-writer"}.ConnectionString,target.InstallationId);
+        foreach(var(person,subject)in new[]{(proposer,"certificate-manager"),(approver,"independent-enabler"),(holder,"safety-holder")})await service.EnrollHumanAsync(rootToken,new(Guid.NewGuid(),person,Issuer,subject,await Epoch(),"enroll fixture operator"));
+        var grants=new Dictionary<(Guid,string),Guid>();
+        foreach(var permission in new[]{"runtime.credential.manage","runtime.assign","configuration.edit","configuration.submit","configuration.activate","machine.enable","commissioning.read"})
+            await Grant(proposer,permission,permission=="runtime.credential.manage"?AuthorizationScope.Installation:permission is "configuration.edit" or "configuration.submit"?AuthorizationScope.Site(site):AuthorizationScope.Machine(site,machine));
+        await Grant(approver,"machine.enable",AuthorizationScope.Machine(site,machine));await Grant(approver,"configuration.review",AuthorizationScope.Site(site));await Grant(holder,"machine.suspend",AuthorizationScope.Machine(site,machine));
+        await Grant(proposer,"configuration.read",AuthorizationScope.Site(site));await Grant(proposer,"policy.revoke",AuthorizationScope.Site(site));await Grant(approver,"policy.revoke",AuthorizationScope.Site(site));
+        await Session(token,proposer);await Session(reviewToken,approver);await Session(holdToken,holder);
+        var activities=new List<Activity>();using var listener=new ActivityListener{ShouldListenTo=source=>source.Name=="FactoryConnect.V2.Security",Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,ActivityStopped=activity=>{lock(activities)activities.Add(activity);}};ActivitySource.AddActivityListener(listener);
+        await service.EnrollRuntimeCertificateAsync(token,f.Sign(f.Payload with{ExpectedEpoch=await Epoch()},certificate:tls.Certificate));
+        var assignment=Guid.NewGuid();await service.AssignRuntimeAsync(token,new(Guid.NewGuid(),assignment,site,machine,f.Payload.RuntimeIdentityId,1,now.AddMinutes(-5),null,0,null,await Epoch(),"assign operational fixture"));
+        await using var pair=await tls.Connect();
+        var(package,review)=await Package();
+        var writer=new SqlSecurityAuthority(new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName="fc2ingest-writer"}.ConnectionString,target.InstallationId);
+        await Denied(()=>writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream),"unenabled runtime cannot acquire ingestion context");
+        var enable=new MachineEnableProposalRequest(Guid.NewGuid(),Guid.NewGuid(),site,machine,null,0,await Epoch(),now.AddMinutes(10),"enable ingestion fixture");await service.ProposeMachineEnableAsync(token,enable);await service.ApproveMachineEnableAsync(reviewToken,Guid.NewGuid(),enable.ProposalId,Guid.NewGuid(),site,machine,await Epoch(),"independent enable");
+        var activation=await Intent();await Denied(()=>writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream),"pending activation without acknowledgement cannot ingest");
+        var ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);
+        var temporary=Path.Combine(Path.GetTempPath(),"fc2-host-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(temporary);if(!OperatingSystem.IsWindows())File.SetUnixFileMode(temporary,UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.UserExecute);
+        var children=new List<Process>();var events=new System.Collections.Concurrent.ConcurrentQueue<JsonElement>();var stageMetrics=new List<object>();
+        await using var agent=new MtConnectAgentFixture();long available=140;int instance=7;var mode="normal";var stamp=now.ToString("O",CultureInfo.InvariantCulture);
+        agent.Reply=(from,batch)=>{var end=(ulong)Interlocked.Read(ref available);var first=mode=="gap"?from+1:100UL;var next=Math.Min(end,from+(ulong)batch);return(200,Frame(from,next,first,(ulong)Volatile.Read(ref instance)),null);};
+        var serverPem=Path.Combine(temporary,"server.pem");var serverKey=Path.Combine(temporary,"server-key.pem");var runtimePem=Path.Combine(temporary,"runtime.pem");var runtimeKey=Path.Combine(temporary,"runtime-key.pem");var anchor=Path.Combine(temporary,"anchor.cer");
+        await Secret(serverPem,tls.ServerCertificate.ExportCertificatePem());using(var key=tls.ServerCertificate.GetRSAPrivateKey()!)await Secret(serverKey,key.ExportPkcs8PrivateKeyPem());await Secret(runtimePem,tls.ClientCertificate.ExportCertificatePem());using(var key=tls.ClientCertificate.GetRSAPrivateKey()!)await Secret(runtimeKey,key.ExportPkcs8PrivateKeyPem());await File.WriteAllBytesAsync(anchor,f.Root.RawData);Protect(anchor);
+        try
+        {
+            var first=await Start("graceful");await WaitEvent(first,"committed");var stoppedTimer=Stopwatch.StartNew();await Stop(first);var cursor=await Cursor();var baseline=cursor;Check(first.ExitCode==0&&stoppedTimer.Elapsed<TimeSpan.FromSeconds(5),"machine host stops gracefully within bounded cancellation time");await Complete(cursor,"graceful stop preserves every accepted source sequence exactly once");
+            // Child 2 blocks after evidence insertion but before its commit. A killed process cannot advance durable progress.
+            await Exec("CREATE TRIGGER security.Fixture_HostBarrier ON security.SecurityAudit AFTER INSERT AS BEGIN DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='fc2:host:audit-barrier',@LockMode='Shared',@LockOwner='Transaction',@LockTimeout=10000; IF @r<0 THROW 51020,'host fixture barrier',1; END;");
+            await using(var barrier=new SqlConnection(target.ConnectionString))
+            {
+                await barrier.OpenAsync();await using var tx=(SqlTransaction)await barrier.BeginTransactionAsync();await using(var held=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='fc2:host:audit-barrier',@LockMode='Exclusive',@LockOwner='Transaction'; IF @r<0 THROW 51020,'fixture barrier',1;",barrier,tx))await held.ExecuteNonQueryAsync();
+                var blocked=await Start("crash-before-commit");try{await WaitAudit("fc2-host-crash-before-commit");var seen=agent.RequestCount;await Task.Delay(250);Check(agent.RequestCount==seen,"SQL backpressure prevents any next HTTP poll or queued frame");Check(!blocked.HasExited,"acquisition child remains in its blocked commit before crash");blocked.Kill(true);await blocked.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));}finally{await tx.CommitAsync();}
+            }
+            await WaitSessionGone("fc2-host-crash-before-commit");await Exec("DROP TRIGGER security.Fixture_HostBarrier");Check(await Cursor()==baseline,"whole-process crash before commit leaves cursor unchanged");await Complete(baseline,"crashed in-flight batch leaves no partial accepted observations");
+            // A new OS process reconstructs all runtime/TLS/HTTP state, then resumes the SQL cursor.
+            Interlocked.Exchange(ref available,300);var requestIndex=agent.RequestedFrom.Count;var restartTimer=Stopwatch.StartNew();var restarted=await Start("restarted");await WaitEvent(restarted,"committed");var firstCommitMs=restartTimer.Elapsed.TotalMilliseconds;Check(agent.RequestedFrom.ToArray()[requestIndex]==baseline,"new process starts HTTP acquisition at the committed cursor, not bootstrap");Check(restarted.Id!=first.Id&&restartTimer.Elapsed<TimeSpan.FromSeconds(10),"whole-process restart recovers within the measured fixture bound");
+            await WaitEvent(restarted,"idle");var beforeIdleOps=await Count("security.SecurityOperation");var current=await Cursor();await WaitPolls(restarted,15);Check(await Count("security.SecurityOperation")==beforeIdleOps&&await Cursor()==current,"caught-up polling writes no idle receipts and never changes durable cursor");await Stop(restarted);await Complete(await Cursor(),"restart and sustained polling lose or duplicate no accepted sample");
+            var samples=events.Where(x=>x.TryGetProperty("processId",out var pid)&&pid.GetInt32()==restarted.Id&&x.TryGetProperty("workingSetBytes",out _)).ToArray();
+            Check(agent.MaximumConcurrentRequests==1,"real agent observes at most one request in flight");Check(samples.Length>=10&&samples.Max(x=>x.GetProperty("workingSetBytes").GetInt64())<268435456,"sustained polling remains within the fixture process-memory ceiling");
+            var stopped=events.Last(x=>x.TryGetProperty("processId",out var pid)&&pid.GetInt32()==restarted.Id&&x.GetProperty("status").GetString()=="stopped");var trips=stopped.GetProperty("sqlRoundtrips").GetInt64();var polls=stopped.GetProperty("polls").GetInt64();var batches=stopped.GetProperty("batches").GetInt64();Check(trips<=polls*45+30,"polling SQL work is bounded by polls and committed batches, not history length");
+            stageMetrics.Add(new{stage="restart",recoveryMs=firstCommitMs,polls,batches,sqlRoundtrips=trips,maxConcurrentAgentRequests=agent.MaximumConcurrentRequests,sourceObservationsPerSecond=stopped.GetProperty("sourceObservations").GetInt64()/Math.Max(.001,stopped.GetProperty("elapsedMs").GetDouble()/1000),peakWorkingSet=samples.Max(x=>x.GetProperty("workingSetBytes").GetInt64())});Console.WriteLine($"MEASURE: acquisition host restart firstCommitMs={firstCommitMs:F2} polls={polls} batches={batches} sqlRoundtrips={trips} maxConcurrentRequests={agent.MaximumConcurrentRequests}");
+            // Kill after a confirmed commit, then restart an idle host. Accepted data survives the missing graceful shutdown.
+            var afterCommit=await Start("crash-after-commit");await WaitEvent(afterCommit,"idle");var committed=await Cursor();afterCommit.Kill(true);await afterCommit.WaitForExitAsync();await WaitSessionGone("fc2-host-crash-after-commit");Check(await Cursor()==committed,"whole-process crash after commit preserves the durable cursor");var recovered=await Start("after-commit-restart");await WaitEvent(recovered,"idle");await Stop(recovered);await Complete(committed,"post-commit restart deduplicates already accepted source data");
+            // The operator read is a separate executable path and requires its own current human permission.
+            var read=await ReadOperator();Check(read.GetProperty("status").GetString()=="accepted-evidence"&&read.GetProperty("historical").GetBoolean()&&read.GetProperty("rows").GetArrayLength()>0,"operator console displays actual accepted SQL evidence with historical status");
+            Check(read.GetProperty("rows").EnumerateArray().All(x=>x.GetProperty("RawValue").GetString()==x.GetProperty("Sequence").GetString()),"operator output contains the actual latest source values, not fixture UI placeholders");
+            // Stop during a blocked HTTP request: no overlapping fetch, no acceptance/cursor movement.
+            agent.ResponseDelayMilliseconds=2000;var beforeFetch=await Cursor();var fetchRequests=agent.RequestCount;Interlocked.Exchange(ref available,320);var fetching=await Start("cancel-fetch");await WaitUntil(()=>Task.FromResult(agent.RequestCount>fetchRequests),"HTTP fetch started");var cancelling=Stopwatch.StartNew();await Stop(fetching);Check(cancelling.Elapsed<TimeSpan.FromSeconds(5)&&await Cursor()==beforeFetch,"cancellation during HTTP fetch accepts no partial frame");agent.ResponseDelayMilliseconds=0;await WaitUntil(()=>Task.FromResult(agent.ActiveRequests==0),"cancelled agent request drained");
+            // Unsafe source identity/discontinuity yields a held process and leaves progress intact.
+            Volatile.Write(ref instance,8);var instanceHost=await Start("instance-hold");await instanceHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));Check(instanceHost.ExitCode==20&&await Cursor()==beforeFetch,"changed agent instance holds the process without checkpoint corruption");Volatile.Write(ref instance,7);mode="gap";var gapHost=await Start("gap-hold");await gapHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));Check(gapHost.ExitCode==20&&await Cursor()==beforeFetch,"retained source gap holds the process without automatic cursor reset");mode="normal";
+            // Stale runtime authority is checked in the running process before another batch may commit.
+            Interlocked.Exchange(ref available,(long)beforeFetch);var authorityHost=await Start("authority-hold");await WaitEvent(authorityHost,"idle");await service.RevokeRuntimeAssignmentAsync(token,Guid.NewGuid(),assignment,site,machine,1,await Epoch(),"stop running acquisition authority");await authorityHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));Check(authorityHost.ExitCode==20&&await Cursor()==beforeFetch,"running host rejects committed runtime assignment revocation without changing checkpoint");
+            var noBearer=await ReadOperator(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),expectSuccess:false);Check(noBearer.GetProperty("status").GetString()=="held","operator read rejects an unknown bearer instead of fabricating an empty result");
+            Directory.CreateDirectory("artifacts/ingestion");await File.WriteAllTextAsync("artifacts/ingestion/single-machine-host.json",JsonSerializer.Serialize(new{schemaVersion=1,fixture=true,commit=Environment.GetEnvironmentVariable("GITHUB_SHA"),scope="Whole child-process acquisition against controlled HTTP/mTLS and disposable SQL",checks=count,baseline="100",acceptedThrough=beforeFetch.ToString(CultureInfo.InvariantCulture),observations=await Count("acquisition.MtConnectObservation"),metrics=stageMetrics,operatorRead=read,limitations=new[]{"One trusted collocated SQL/runtime host with loopback-only internal mTLS carrier; no remote upload service or fleet claim.","Fixture-managed provisioning; no production endpoints, implicit enrollments or migrations."}},new JsonSerializerOptions{WriteIndented=true}));return count;
+        }
+        finally{foreach(var process in children){if(!process.HasExited){process.Kill(true);await process.WaitForExitAsync();}process.Dispose();}Directory.Delete(temporary,true);}
+
+        async Task Secret(string path,string value){await File.WriteAllTextAsync(path,value);Protect(path);}
+        void Protect(string path){if(!OperatingSystem.IsWindows())File.SetUnixFileMode(path,UnixFileMode.UserRead|UnixFileMode.UserWrite);}
+        string HostDll(){var directory=new DirectoryInfo(AppContext.BaseDirectory);while(directory is not null&&!File.Exists(Path.Combine(directory.FullName,"FactoryConnect.slnx")))directory=directory.Parent;return Path.Combine(directory!.FullName,"tools","FactoryConnect.AcquisitionHost","bin",new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name,"net10.0","FactoryConnect.AcquisitionHost.dll");}
+        async Task<string> Config(string name)
+        {
+            var path=Path.Combine(temporary,name+".json");var connection=new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName="fc2-host-"+name};
+            var options=new{version=1,installationId=target.InstallationId,siteId=site,machineId=machine,streamKey=Stream,agentBaseUri=agent.Endpoint.BaseUri.AbsoluteUri,bootstrapFromSequence="100",sqlConnectionString=connection.ConnectionString,trustAnchorPath=anchor,allowedCrlUri=tls.CrlUri.AbsoluteUri,serverCertificatePath=serverPem,serverKeyPath=serverKey,runtimeCertificatePath=runtimePem,runtimeKeyPath=runtimeKey,pollIntervalMilliseconds=50,batchCount=10,operationTimeoutSeconds=10};await Secret(path,JsonSerializer.Serialize(options));return path;
+        }
+        async Task<Process> Start(string name)
+        {
+            var config=await Config(name);var start=new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")??"dotnet"){RedirectStandardOutput=true,RedirectStandardError=true,RedirectStandardInput=true,UseShellExecute=false};start.ArgumentList.Add(HostDll());start.ArgumentList.Add("--config");start.ArgumentList.Add(config);var process=Process.Start(start)??throw new InvalidOperationException("Child host did not start");children.Add(process);
+            _=Task.Run(async()=>{string? line;while((line=await process.StandardOutput.ReadLineAsync())is not null){try{using var value=JsonDocument.Parse(line);var root=value.RootElement;var data=JsonSerializer.SerializeToElement(root.EnumerateObject().Where(x=>x.Name!="processId").ToDictionary(x=>x.Name,x=>(object)x.Value.Clone()).Append(new KeyValuePair<string,object>("processId",process.Id)).ToDictionary(x=>x.Key,x=>x.Value));events.Enqueue(data);}catch(JsonException){throw new InvalidOperationException("Host emitted non-JSON output");}}});_=process.StandardError.ReadToEndAsync();return process;
+        }
+        async Task WaitEvent(Process process,string status)=>await WaitUntil(()=>Task.FromResult(events.Any(x=>x.GetProperty("processId").GetInt32()==process.Id&&x.GetProperty("status").GetString()==status)),"child "+status,process);
+        async Task WaitPolls(Process process,int count)=>await WaitUntil(()=>Task.FromResult(events.Count(x=>x.GetProperty("processId").GetInt32()==process.Id&&x.GetProperty("status").GetString()=="idle")>=count),"sustained idle polls",process);
+        async Task Stop(Process process){await process.StandardInput.WriteLineAsync("stop");await process.StandardInput.FlushAsync();await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));await Task.Delay(30);}
+        async Task WaitUntil(Func<Task<bool>> condition,string name,Process? process=null){var timeout=Stopwatch.StartNew();while(timeout.Elapsed<TimeSpan.FromSeconds(10)){if(await condition())return;if(process?.HasExited==true)throw new InvalidOperationException("Host exited before "+name+": "+string.Join(";",events.Where(x=>x.GetProperty("processId").GetInt32()==process.Id).Select(x=>x.GetRawText())));await Task.Delay(20);}throw new InvalidOperationException("Timed out: "+name);}
+        async Task WaitAudit(string application)=>await WaitUntil(async()=>Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id=l.request_session_id WHERE s.program_name=@app AND l.resource_type='APPLICATION' AND l.request_status='WAIT' AND l.request_mode='S'",("@app",application)))>0,"child audit barrier");
+        async Task WaitSessionGone(string application)=>await WaitUntil(async()=>Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE program_name=@app",("@app",application)))==0,"crashed SQL session cleanup");
+        async Task<ulong> Cursor()=>decimal.ToUInt64((decimal)(await Scalar("SELECT NextSequence FROM acquisition.MtConnectCursor WHERE MachineId=@machine",("@machine",machine)))!);
+        async Task<long> Count(string table)=>Convert.ToInt64(await Scalar("SELECT COUNT_BIG(*) FROM "+table));
+        async Task Complete(ulong next,string label){var n=await Count("acquisition.MtConnectObservation");var distinct=Convert.ToInt64(await Scalar("SELECT COUNT_BIG(*) FROM (SELECT InstanceId,Sequence FROM acquisition.MtConnectObservation GROUP BY InstanceId,Sequence) r"));var min=Convert.ToUInt64(await Scalar("SELECT MIN(Sequence) FROM acquisition.MtConnectObservation"));var max=Convert.ToUInt64(await Scalar("SELECT MAX(Sequence) FROM acquisition.MtConnectObservation"));Check(n==(long)(next-100)&&distinct==n&&min==100&&max+1==next,label);}
+        byte[] Frame(ulong from,ulong next,ulong first,ulong sourceInstance){var rows=Enumerable.Range(0,checked((int)(next-from))).Select(i=>{var sequence=from+(ulong)i;return new XElement("PartCount",new XAttribute("dataItemId",sequence%2==0?"Counter":"counter"),new XAttribute("sequence",sequence),new XAttribute("timestamp",stamp),sequence==100?" 00042 ":sequence==102?"UNAVAILABLE":sequence.ToString(CultureInfo.InvariantCulture));});var document=new XElement("MTConnectStreams",new XElement("Header",new XAttribute("instanceId",sourceInstance),new XAttribute("firstSequence",first),new XAttribute("lastSequence",next-1),new XAttribute("nextSequence",next)),new XElement("Streams",new XElement("DeviceStream",new XAttribute("uuid",Device),new XElement("ComponentStream",new XElement("Samples",rows)))));return Encoding.UTF8.GetBytes(document.ToString(SaveOptions.DisableFormatting));}
+        async Task<JsonElement> ReadOperator(string? secret=null,bool expectSuccess=true){var config=await Config("operator-read");var start=new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")??"dotnet"){RedirectStandardOutput=true,RedirectStandardError=true,RedirectStandardInput=true,UseShellExecute=false};start.ArgumentList.Add(HostDll());start.ArgumentList.Add("--config");start.ArgumentList.Add(config);start.ArgumentList.Add("--read");using var child=Process.Start(start)!;await child.StandardInput.WriteLineAsync(secret??Convert.ToBase64String(bearer));child.StandardInput.Close();try{var outputTask=child.StandardOutput.ReadToEndAsync();var errorTask=child.StandardError.ReadToEndAsync();await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));var output=await outputTask;var error=await errorTask;if(expectSuccess&&child.ExitCode!=0)throw new InvalidOperationException("Operator read failed: "+output+error);using var result=JsonDocument.Parse(output.Trim());return result.RootElement.Clone();}finally{if(!child.HasExited){child.Kill(true);await child.WaitForExitAsync();}}}
+        ActivationAcknowledgementRequest Ack(ActivationRequestCommand request,long operating)=>new(Guid.NewGuid(),Guid.NewGuid(),site,machine,request.ActivationId,request.ExpectedActivationGeneration,request.PackageRevisionId,request.ContentHash,request.ApprovalReviewId,request.RuntimeIdentityId,request.AssignmentId,1,1,operating,"runtime exact application acknowledgement");
+        async Task Grant(Guid person,string permission,AuthorizationScope scope)
+        {var parent=(Guid)(await Scalar("SELECT GrantId FROM security.PermissionGrant WHERE GranteeId=@admin AND Permission=@permission",("@admin",admin),("@permission",permission)))!;var grant=Guid.NewGuid();await service.GrantPermissionAsync(rootToken,new(Guid.NewGuid(),grant,person,parent,permission,scope,true,false,now,now.AddDays(1),await Epoch(),"grant fixture authority"));grants[(person,permission)]=grant;}
+        async Task Session(byte[] session,Guid principal)=>await Exec("INSERT security.SessionAuthority VALUES(@token,@actor,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()),N'fixture-only',1)",("@token",session),("@actor",principal));
+        async Task<(PackageDefinition,Guid)> Package(int size=1)
+        {
+            var timezone=Guid.NewGuid();var schedule=Guid.NewGuid();var breaks=Guid.NewGuid();var bytes=Encoding.UTF8.GetBytes("{}");var hash=SHA256.HashData(bytes);
+            await Exec("INSERT configuration.SiteTimezoneRevision(TimezoneRevisionId,SiteId,IanaZoneId,TzdbRelease,ResolverVersion,GapPolicy,FoldPolicy,RulesBytes,RulesSha256,CanonicalBytes,ContentHash) VALUES(@timezone,@site,N'Etc/UTC','fixture','fixture','reject','reject',@bytes,@hash,@bytes,@hash); INSERT configuration.SharedScheduleRevision VALUES(@schedule,@site,@bytes,@hash); INSERT configuration.SharedBreakPolicyRevision VALUES(@break,@site,@bytes,@hash);",("@timezone",timezone),("@schedule",schedule),("@break",breaks),("@site",site),("@bytes",bytes),("@hash",hash));
+            var machines=new List<MachineConfiguration>();
+            for(var i=0;i<size;i++){var id=i==0?machine:Guid.NewGuid();if(i>0)await Exec("INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(@machine,@site,N'Batch fixture')",("@machine",id),("@site",site));machines.Add(new(id,line,now.AddMinutes(-5),null,new(schedule,hash),new(breaks,hash),[new(Guid.NewGuid(),"counter-upper","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("Counter"),"identity-v1"),new(Guid.NewGuid(),"counter-lower","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("counter"),"identity-v1")],["counter-reading"]));}
+            var package=new PackageDefinition(Guid.NewGuid(),Guid.NewGuid(),1,site,new(timezone,hash),machines);
+            await service.SubmitConfigurationAsync(token,Guid.NewGuid(),package,await Epoch(),"operational fixture package");var review=Guid.NewGuid();await service.ReviewConfigurationAsync(reviewToken,new(Guid.NewGuid(),review,site,package.RevisionId,PackageCanonicalizer.Hash(package),true,await Epoch(),"independent package review"));return(package,review);
+        }
+        async Task<ActivationRequestCommand> Intent(DateTimeOffset? from=null,DateTimeOffset? until=null)
+        {
+            Guid? prior=null;long generation=0;await using(var q=new SqlCommand("SELECT ActivationId,ActivationGeneration FROM configuration.MachineActivationRequestHead WHERE MachineId=@machine",c)){q.Parameters.AddWithValue("@machine",machine);await using var r=await q.ExecuteReaderAsync();if(await r.ReadAsync()){prior=r.GetGuid(0);generation=r.GetInt64(1);}}
+            var request=new ActivationRequestCommand(Guid.NewGuid(),Guid.NewGuid(),site,machine,package.RevisionId,PackageCanonicalizer.Hash(package),review,f.Payload.RuntimeIdentityId,assignment,1,1,from??now.AddMinutes(-1),until,generation,prior,await Epoch(),"explicit activation request");
+            await service.RequestActivationAsync(token,request);return request with{ExpectedActivationGeneration=generation+1};
+        }
+        async Task<long> Epoch()=>Convert.ToInt64(await Scalar("SELECT AuthorityEpoch FROM security.InstallationState"));
+        void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);count++;Console.WriteLine("PASS: "+name);}
+        async Task Denied(Func<Task> action,string name){try{await action();}catch(SecurityDeniedException){Check(true,name);return;}throw new InvalidOperationException(name);}
+        async Task<object?> Scalar(string sql,params (string,object)[] args){await using var q=new SqlCommand(sql,c);Add(q,args);return await q.ExecuteScalarAsync();}
+        async Task Exec(string sql,params (string,object)[] args){await using var q=new SqlCommand(sql,c);Add(q,args);await q.ExecuteNonQueryAsync();}
+    }
+    static void Add(SqlCommand q,params (string Name,object Value)[] args){foreach(var(name,value)in args)if(value is byte[] bytes)q.Parameters.Add(name,SqlDbType.VarBinary,-1).Value=bytes;else q.Parameters.AddWithValue(name,value);}
+}
