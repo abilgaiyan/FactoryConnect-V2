@@ -29,37 +29,37 @@ public sealed partial class SqlSecurityAuthority
             if(!allSite&&authorizedIds.Count==0)
                 return (IReadOnlyList<OperatorEvidenceMachine>)Array.Empty<OperatorEvidenceMachine>();
 
-            // Read the site's inventory in bounded pages. The authorization limit is
-            // applied only after exact machine-scoped eligibility, so revoked historical
-            // grants do not consume the 100 visible-machine budget.
+            // Site-wide grants are limited in SQL. For machine-only grants, pass
+            // only validated machine IDs to SQL; never walk unrelated site inventory.
+            // JSON is parameterized, not concatenated into the SQL text. No new
+            // schema type or migration is required.
+            var sql=allSite ? """
+                SELECT TOP (101) m.SiteId,m.MachineId,m.DisplayName
+                FROM [master].Machine m JOIN [master].Site s ON s.SiteId=m.SiteId
+                WHERE m.SiteId=@site AND m.IsRetired=0 AND s.IsRetired=0
+                ORDER BY m.MachineId
+                """ : """
+                SELECT TOP (101) m.SiteId,m.MachineId,m.DisplayName
+                FROM OPENJSON(@machineIds) WITH (MachineId uniqueidentifier '$') AS authorized
+                JOIN [master].Machine m ON m.MachineId=authorized.MachineId
+                JOIN [master].Site s ON s.SiteId=m.SiteId
+                WHERE m.SiteId=@site AND m.IsRetired=0 AND s.IsRetired=0
+                ORDER BY m.MachineId
+                """;
             var visible=new List<OperatorEvidenceMachine>();
-            var after=Guid.Empty;
-            while(true)
+            await using(var q=Command(c,t,sql))
             {
-                await using var q=Command(c,t,"""
-                    SELECT TOP(101) m.SiteId,m.MachineId,m.DisplayName
-                    FROM [master].Machine m JOIN [master].Site s ON s.SiteId=m.SiteId
-                    WHERE m.SiteId=@site AND m.MachineId>@after AND m.IsRetired=0 AND s.IsRetired=0
-                    ORDER BY m.MachineId
-                    """);
-                Add(q,("@site",siteId),("@after",after));
-                var found=0;
-                await using(var reader=await q.ExecuteReaderAsync(ct))
+                Add(q,("@site",siteId));
+                if(!allSite)
                 {
-                    while(await reader.ReadAsync(ct))
-                    {
-                        var site=reader.GetGuid(0);
-                        var machine=reader.GetGuid(1);
-                        after=machine;
-                        found++;
-                        if(allSite||authorizedIds.Contains(machine))
-                            visible.Add(new(site,machine,reader.GetString(2)));
-                        if(visible.Count>100)throw new SecurityDeniedException();
-                    }
+                    var ids=System.Text.Json.JsonSerializer.Serialize(authorizedIds.Order());
+                    q.Parameters.Add("@machineIds",System.Data.SqlDbType.NVarChar,-1).Value=ids;
                 }
-                if(found<101)break;
-                ct.ThrowIfCancellationRequested();
+                await using var reader=await q.ExecuteReaderAsync(ct);
+                while(await reader.ReadAsync(ct))
+                    visible.Add(new(reader.GetGuid(0),reader.GetGuid(1),reader.GetString(2)));
             }
+            if(visible.Count>100)throw new SecurityDeniedException();
             return (IReadOnlyList<OperatorEvidenceMachine>)visible.AsReadOnly();
         },ct);
     }
