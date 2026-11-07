@@ -189,7 +189,7 @@ internal static class ActivityInterpreterAcceptance
             "processor generation advances only for nonempty committed candidate batches");
 
         var approved=new ApprovedActivitySignal(Guid.NewGuid(),Guid.NewGuid(),
-            Guid.NewGuid(),new string('A',64),configured);
+            Guid.NewGuid(),new string('A',64),configured,from.AddMinutes(-1),null);
         var sourceBatchOne=Guid.NewGuid();
         var sourceBatchTwo=Guid.NewGuid();
         SqlAcceptedActivityEvidenceReader.AcceptedRow SourceRow(
