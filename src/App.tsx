@@ -71,7 +71,7 @@ export function App({ runtime }: AppProps) {
       if (!controller.signal.aborted) setLoginStatus(error instanceof HumanSessionFailure
         ? error.status === 401 ? "denied" : error.status === 503 ? "unavailable" : "failed"
         : "failed");
-    } finally { /* One-use proof is not retained. */ }
+    }
   }
 
   const validEvidenceSession = evidenceSession && Number.isFinite(Date.parse(evidenceSession.expiresAt))
