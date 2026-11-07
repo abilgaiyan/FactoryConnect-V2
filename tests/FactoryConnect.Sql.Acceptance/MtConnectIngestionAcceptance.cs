@@ -313,6 +313,45 @@ internal static class MtConnectIngestionAcceptance
         (package,review)=await Package();activation=await Intent();ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
         agent.Reply=(from,count)=>(200,Frame(from,count),null);var timer=Stopwatch.StartNew();var bulkFrame=await client.AcquireAsync(agent.Endpoint,Device,context.Cursor!.NextSequence,1000);var bulk=new MtConnectIngestionRequest(Guid.NewGuid(),site,machine,context.AcknowledgementId,Stream,context.Cursor.BatchId,context.Cursor.InstanceId,context.Cursor.NextSequence,bulkFrame.RawDocument);await Transport(bulk);timer.Stop();var trace=activities.Last(x=>x.GetTagItem("security.acquisition.ingest") is true&&x.GetTagItem("security.result")?.ToString()=="completed");var trips=Convert.ToInt64(trace.GetTagItem("security.sql.roundtrips"));Check(trips<=30&&timer.Elapsed<TimeSpan.FromSeconds(5),"1000-observation HTTP/TLS/SQL slice uses bounded full-transaction roundtrips and latency");Console.WriteLine($"MEASURE: MTConnect ingestion observations=1000 elapsedMs={timer.Elapsed.TotalMilliseconds:F2} roundtrips={trips}");
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
+        // An accepted 100-observation read sharing one acquisition batch
+        // transfers and hashes its source document only once, not 100 times.
+        var bulkCounter=latest.First(x=>x.Address=="Counter");
+        var bulkValue=bulkFrame.Observations.First(x=>x.DataItemId=="Counter").RawValue;
+        var bulkSignal=new QualifiedActivitySignal(machine,Stream,bulkCounter.MappingId,
+            "Counter",new Dictionary<string,ActivityState>(StringComparer.Ordinal)
+            {[bulkValue]=ActivityState.Running});
+        var bulkIdentity=ActivityQualificationIdentity.From(
+            bulkSignal,"accepted-reader-bulk-fixture");
+        var acceptedTraces=new List<Activity>();
+        using(var acceptedListener=new ActivityListener
+        {
+            ShouldListenTo=source=>source.Name=="FactoryConnect.V2.Activity.AcceptedEvidence",
+            Sample=(ref ActivityCreationOptions<ActivityContext> _)=>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped=a=>{lock(acceptedTraces)acceptedTraces.Add(a);}
+        })
+        {
+            ActivitySource.AddActivityListener(acceptedListener);
+            var firstBulkSequence=bulkFrame.Observations[0].Sequence;
+            var qualifiedRows=await acceptedReader.ReadBoundedAsync(site,bulkIdentity,
+                bulkFrame.InstanceId,firstBulkSequence-1,firstBulkSequence+199,100);
+            Check(qualifiedRows.Count==100 &&
+                qualifiedRows.All(x=>x.BatchId==bulk.OperationId &&
+                    x.CanonicalSha256.Length==64 && x.DocumentSha256.Length==64),
+                "100 retained observations are verified against the exact accepted acquisition batch");
+            Activity? sourceTrace;
+            lock(acceptedTraces)sourceTrace=acceptedTraces
+                .SingleOrDefault(x=>x.OperationName=="activity.accepted-source.read");
+            Check(sourceTrace is not null &&
+                Convert.ToInt32(sourceTrace.GetTagItem("accepted-source.observations"))==100 &&
+                Convert.ToInt32(sourceTrace.GetTagItem("accepted-source.distinct-batches"))==1 &&
+                Convert.ToInt32(sourceTrace.GetTagItem("accepted-source.batch-hash-verifications"))==1 &&
+                Convert.ToInt32(sourceTrace.GetTagItem("accepted-source.batch-parses"))==1,
+                "100-observation page verifies and parses the one source batch exactly once");
+            Console.WriteLine("MEASURE: activity accepted observations=100 distinctBatchDocuments=1 "+
+                $"aggregateBytes={sourceTrace?.GetTagItem("accepted-source.aggregate-bytes")} "+
+                $"sqlRoundtrips={sourceTrace?.GetTagItem("accepted-source.sql.roundtrips")}");
+        }
         for(var i=0;i<5;i++){var largeContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);var large=XDocument.Parse(Encoding.UTF8.GetString(Frame(largeContext.Cursor!.NextSequence,1)));large.Descendants("PartCount").Single().Value=new string('7',900000);var largeBytes=Encoding.UTF8.GetBytes(large.ToString(SaveOptions.DisableFormatting));await writer.IngestMtConnectAsync(pair.Channel,new(Guid.NewGuid(),site,machine,largeContext.AcknowledgementId,Stream,largeContext.Cursor.BatchId,largeContext.Cursor.InstanceId,largeContext.Cursor.NextSequence,largeBytes));}
         try{await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);throw new InvalidOperationException("unbounded evidence bytes");}catch(SqlException error)when(error.Number==51044){Check(true,"evidence read rejects an oversized byte page instead of transferring all requested LOB values");}
         Check((await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,1)).Single().RawValue.Length==900000,"bounded smaller page returns a legitimately retained large source value");
