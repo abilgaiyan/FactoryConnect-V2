@@ -82,6 +82,12 @@ internal static class MtConnectIngestionAcceptance
             Check(accepted.Count==first.Count&&accepted.Select(x=>(x.Sequence,x.InstanceId,x.RawValue,x.DocumentHash))
                 .SequenceEqual(first.Select(x=>(x.Sequence,x.InstanceId,x.RawValue,x.DocumentHash))),
                 "verified human sign-in reads identical retained SQL evidence through its own scoped session");
+            var permittedMachines=await writer.ReadOperatorEvidenceMachinesAsync(issuedHash);
+            Check(permittedMachines.Count==1&&permittedMachines[0].SiteId==site
+                &&permittedMachines[0].MachineId==machine,
+                "verified human sees only currently authorized machine in bounded operator roster");
+            Check((await writer.ReadOperatorEvidenceMachinesAsync(rootToken)).Count==0,
+                "administrator without commissioning grant has no implicit evidence machines");
             await Denied(()=>writer.ReadMtConnectEvidenceAsync(issuedHash,site,otherMachine,Stream),
                 "verified human session cannot read an unassigned machine");
             await Denied(()=>login.IssueAsync("sql-evidence-proof"),
