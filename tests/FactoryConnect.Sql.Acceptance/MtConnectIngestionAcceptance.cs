@@ -563,10 +563,42 @@ internal static class MtConnectIngestionAcceptance
             }
             finally { await SetCheckpoint(baselineCheckpoint); }
         }
+        var nextRows=await acceptedReader.ReadBoundedAsync(site,eligibleCut.Qualification,
+            continuationFrame.InstanceId,eligibleFrom+3,continuationFrom+3,100);
+        var nextSample=new ActivityInputSample(machine,Stream,currentActivity.Signal.MappingId,"execution",
+            nextRows[0].InstanceId,nextRows[0].Sequence,nextRows[0].ObservedAt,"ACTIVE","source-reported",false);
+        var forgedAdvance=baselineCheckpoint with {
+            LastConsumedSample=nextSample,OpenAnchor=nextSample,OpenState=ActivityState.Running,
+            AcceptedSource=baselineCheckpoint.AcceptedSource! with {
+                ThroughSequence=continuationFrom+1,LastObservation=nextRows[0],OpenAnchorObservation=nextRows[0] } };
+        await SetCheckpoint(forgedAdvance);
+        try
+        {
+            try { await Continue(continuationFrom+1,continuationFrom+3);throw new ArgumentException("Uncommitted real-row checkpoint accepted."); }
+            catch(InvalidDataException error)when(error.Message.Contains("immutable operation receipt",StringComparison.Ordinal))
+            {
+                Check(await Count("activity.ClosedPeriod")==baselinePeriods &&
+                    await Count("activity.ProcessorOperation")==baselineReceipts,
+                    "real retained rows cannot manufacture a checkpoint advance absent its immutable receipt");
+            }
+        }
+        finally { await SetCheckpoint(baselineCheckpoint); }
         await Exec("DISABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
         try
         {
             var counterMapping=package.Machines[0].Signals.Single(x=>x.SemanticKey=="counter-upper").MappingId;
+            await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@other WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
+                ("@other",counterMapping),("@machine",machine),("@sequence",(decimal)(eligibleFrom+3)));
+            try
+            {
+                await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+3),
+                    "Source cut changed","missing retained checkpoint predecessor blocks continuation");
+            }
+            finally
+            {
+                await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@mapping WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
+                    ("@mapping",currentActivity.Signal.MappingId),("@machine",machine),("@sequence",(decimal)(eligibleFrom+3)));
+            }
             await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@other WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
                 ("@other",counterMapping),("@machine",machine),("@sequence",(decimal)(continuationFrom+1)));
             await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+3),

@@ -39,7 +39,7 @@ public sealed record ActivityQualificationIdentity(
 /// an empty batch or a worker restart.
 /// </summary>
 public sealed record ActivityAcceptedFrontier(
-    ulong InstanceId,ulong ThroughSequence,Guid PackageRevisionId,
+    Guid OperationId,ulong InstanceId,ulong ThroughSequence,Guid PackageRevisionId,
     Guid AcknowledgementId,string PackageSha256,
     SqlAcceptedActivityEvidenceReader.AcceptedRow LastObservation,
     SqlAcceptedActivityEvidenceReader.AcceptedRow? OpenAnchorObservation);

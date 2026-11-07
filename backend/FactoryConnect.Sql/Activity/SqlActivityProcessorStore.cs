@@ -266,7 +266,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                     row=>row.InstanceId==anchor.InstanceId && row.Sequence==anchor.Sequence)
                     ?? checkpoint.AcceptedSource?.OpenAnchorObservation;
                 evaluated=evaluated with { Checkpoint=evaluated.Checkpoint with {
-                    AcceptedSource=new(accepted.InstanceId,accepted.ThroughSequence,
+                    AcceptedSource=new(operationId,accepted.InstanceId,accepted.ThroughSequence,
                         accepted.Approved.PackageRevisionId,accepted.Approved.AcknowledgementId,
                         accepted.Approved.PackageSha256,accepted.Rows[^1],anchorRow) } };
             }
@@ -571,6 +571,22 @@ public sealed class SqlActivityProcessorStore(string connectionString)
            frontier.PackageSha256!=binding.Approved.PackageSha256 ||
            frontier.LastObservation.Sequence>frontier.ThroughSequence)
             throw new InvalidDataException("Accepted source cut does not continue the exact checkpoint frontier.");
+        // The checkpoint must be the exact result of its immutable committed
+        // operation, not merely checksum-consistent fields naming real rows.
+        await using(var receipt=new SqlCommand("""
+            SELECT ResultBytes FROM activity.ProcessorOperation WITH(HOLDLOCK)
+            WHERE OperationId=@operation AND MachineId=@machine AND StreamKeyBytes=@stream
+                AND MappingId=@mapping AND AppliedGeneration=@generation
+            """,c,t))
+        {
+            BindScope(receipt,identity);
+            receipt.Parameters.AddWithValue("@operation",frontier.OperationId);
+            receipt.Parameters.AddWithValue("@generation",checked((long)checkpoint.NextGeneration));
+            var bytes=await receipt.ExecuteScalarAsync(ct) as byte[];
+            var committed=bytes is null ? null : JsonSerializer.Deserialize<ActivityDurableResult>(bytes);
+            if(committed is null || committed.Checkpoint!=checkpoint || committed.Replayed)
+                throw new InvalidDataException("Accepted checkpoint differs from its immutable operation receipt.");
+        }
         async Task Verify(SqlAcceptedActivityEvidenceReader.AcceptedRow row,ActivityInputSample? sample)
         {
             if(sample is null || row.SiteId!=binding.SiteId || row.MachineId!=identity.MachineId ||
