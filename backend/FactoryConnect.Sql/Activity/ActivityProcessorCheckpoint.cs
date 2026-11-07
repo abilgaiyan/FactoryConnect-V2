@@ -106,6 +106,11 @@ public static class ActivityCheckpointEvaluator
             if(anchor.InstanceId!=previous!.InstanceId ||
                anchor.Sequence>previous.Sequence ||
                anchor.ObservedAt>previous.ObservedAt ||
+               // A later consumed sample declaring a break cannot belong to
+               // the anchor's still-open continuity chain, even when its
+               // qualified state and timestamp otherwise look consistent.
+               (anchor.Sequence!=previous.Sequence &&
+                !previous.ContinuityFromPrevious) ||
                anchor.Quality!="source-reported" ||
                !map.TryGetValue(anchor.RawValue,out var interpreted) ||
                interpreted!=state ||
