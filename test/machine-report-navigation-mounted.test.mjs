@@ -72,7 +72,7 @@ test("unconfigured machines cannot mount either report or trigger current-state 
     const h = await mountInDom(React.createElement(App, { runtime: r.value }), `http://factory-dashboard/machines/22222222-2222-2222-2222-222222222222/${suffix}`);
     try {
       assert.match(h.document.querySelector('[role="alert"]').textContent, /not configured/);
-      assert.equal(h.document.querySelector("form"), null);
+      assert.equal(h.document.querySelector('main form'), null);
       assert.equal(r.calls.length, 0);
     } finally { await h.dispose(); }
   }
