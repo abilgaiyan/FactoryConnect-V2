@@ -144,8 +144,13 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         {
             if(accepted is not null)
             {
-                // Common lock order: configuration machine Shared, then
-                // activity processor Exclusive, then source/checkpoint rows.
+                // Join the existing authority revocation protocol before any
+                // machine/processor lock. Authority writers hold this Exclusive
+                // before their policy/machine gates; no policy lock is acquired
+                // after the machine gate here.
+                await SqlApprovedActivityMappingResolver.LockSecurityAuthorityAsync(
+                    c,t,accepted.InstallationId,ct);
+                // Then machine Shared, processor Exclusive, source/checkpoint rows.
                 await using(var machineGate=new SqlCommand("""
                     DECLARE @r int;
                     EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Shared',

@@ -586,6 +586,13 @@ internal static class MtConnectIngestionAcceptance
             {
                 await WaitForLock("fc2activity-expiry","X");
                 Check(!expiring.IsCompleted,"eligible activity passed preflight and waits on held processor gate");
+                Check(Convert.ToInt32(await Scalar("""
+                    SELECT COUNT(*) FROM sys.dm_tran_locks l
+                    JOIN sys.dm_exec_sessions s ON s.session_id=l.request_session_id
+                    WHERE s.program_name='fc2activity-expiry' AND l.resource_type='APPLICATION'
+                        AND l.request_status='GRANT' AND l.request_mode='S'
+                        AND l.resource_description LIKE '%fc2:security:%'
+                    """))==1,"waiting activity writer retains the shared global security authority gate");
                 while((DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!<activityDeadline)
                     await Task.Delay(20);
             }

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FactoryConnect.Sql.Configuration;
+using FactoryConnect.Sql.Security;
 using Microsoft.Data.SqlClient;
 
 namespace FactoryConnect.Sql.ActivityProcessing;
@@ -79,6 +80,7 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
             IsolationLevel.Serializable,ct);
         try
         {
+            await LockSecurityAuthorityAsync(connection,tx,installationId,ct);
             await using(var gate=new SqlCommand("""
                 DECLARE @code int;
                 EXEC @code=sys.sp_getapplock @Resource=@resource,@LockMode='Shared',
@@ -100,6 +102,27 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
             catch(Exception error)when(error is SqlException or InvalidOperationException){}
             throw;
         }
+    }
+
+    // All authority mutations take the existing security gate Exclusive before
+    // policy and machine gates. Readers join that protocol before machine/source
+    // locks; row locks alone are not a substitute for revocation ordering.
+    internal static async Task LockSecurityAuthorityAsync(
+        SqlConnection connection,SqlTransaction tx,Guid installationId,CancellationToken ct)
+    {
+        await using var gate=new SqlCommand("""
+            DECLARE @r int;
+            EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Shared',
+                @LockOwner='Transaction',@LockTimeout=10000;
+            IF @r<0 THROW 51078,'Activity security authority gate unavailable.',1;
+            IF NOT EXISTS (SELECT 1 FROM platform.InstallationIdentity
+                WHERE Singleton=1 AND InstallationId=@installation)
+                THROW 51078,'Activity installation authority mismatch.',1;
+            """,connection,tx);
+        gate.Parameters.Add("@resource",SqlDbType.NVarChar,255).Value=
+            SqlSecurityAuthority.GateResource(installationId);
+        gate.Parameters.Add("@installation",SqlDbType.UniqueIdentifier).Value=installationId;
+        await gate.ExecuteNonQueryAsync(ct);
     }
 
     internal async Task<ApprovedActivitySignal> ResolveInTransactionAsync(
