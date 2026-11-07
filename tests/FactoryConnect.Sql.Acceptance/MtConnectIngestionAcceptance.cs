@@ -127,6 +127,15 @@ internal static class MtConnectIngestionAcceptance
                     "100-machine discovery SQL roundtrips stay bounded independently of machine count");
                 Console.WriteLine($"MEASURE: operator visible machines=100 elapsedMs={clock.Elapsed.TotalMilliseconds:F2} maxRoundtrips={readings.Max(a=>Convert.ToInt64(a.GetTagItem("security.sql.roundtrips")))}");
             }
+            // Retire the extra roster machines before unrelated fixture assertions
+            // that deliberately test bounded configuration/discovery behavior.
+            await using(var cleanup=new SqlCommand("DELETE FROM [master].Machine WHERE SiteId=@site AND MachineId<>@primary AND MachineId<>@other",c))
+            {
+                cleanup.Parameters.AddWithValue("@site",site);
+                cleanup.Parameters.AddWithValue("@primary",machine);
+                cleanup.Parameters.AddWithValue("@other",otherMachine);
+                await cleanup.ExecuteNonQueryAsync();
+            }
             // Revoke broad permission before exercising exact machine denial.
             await service.RevokeGrantAsync(rootToken,Guid.NewGuid(),rosterGrant,await Epoch(),"restore exact-machine grant");
             Check((await rosterReader.ReadOperatorEvidenceMachinesAsync(issuedHash,site)).Count==1,
