@@ -17,6 +17,11 @@ internal static class MtConnectIngestionAcceptance
     const string Issuer="https://certificate.fixture/tenant";
     const string Device="fixture-device";
     const string Stream="mtconnect:uuid:"+Device;
+    private sealed class EvidenceLoginVerifier(VerifiedHumanIdentity identity):IHumanIdentityVerifier
+    {
+        public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
+            => assertion=="sql-evidence-proof" ? Task.FromResult(identity) : throw new SecurityDeniedException();
+    }
     internal static async Task<int> Run(InstallationTarget target)
     {
         var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
@@ -63,6 +68,30 @@ internal static class MtConnectIngestionAcceptance
         var request=await Request(fetched);var epoch=await Epoch();await Transport(request);Check(await Epoch()==epoch,"ordinary ingestion commits without advancing security epoch");
         var first=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream);Check(first.Count==2&&first.Single(x=>x.Address=="Counter").RawValue==" 00042 "&&first.Select(x=>x.MappingId).Distinct().Count()==2,"protected read returns actual saved values with case-distinct mapping identities");
         Check(first.All(x=>x.BatchId==request.OperationId&&x.AcknowledgementId==ack.AcknowledgementId&&x.DocumentHash==Convert.ToHexString(SHA256.HashData(fetched.RawDocument)).ToLowerInvariant()),"saved values retain exact batch acknowledgement and raw-document provenance");
+        // End-to-end SQL authority: a freshly verified human proof issues a one-use
+        // bearer, and that session reads only the machine explicitly granted to it.
+        var loginIdentity=new VerifiedHumanIdentity(Issuer,"certificate-manager",Guid.NewGuid().ToString("N"),
+            "fixture-mfa",now,now.AddMinutes(10));
+        var login=new SqlHumanSessionAuthority(target.ConnectionString,target.InstallationId,
+            new EvidenceLoginVerifier(loginIdentity));
+        var issued=await login.IssueAsync("sql-evidence-proof");
+        var issuedHash=SHA256.HashData(issued.Token);
+        try
+        {
+            var accepted=await writer.ReadMtConnectEvidenceAsync(issuedHash,site,machine,Stream);
+            Check(accepted.Count==first.Count&&accepted.Select(x=>(x.Sequence,x.InstanceId,x.RawValue,x.DocumentHash))
+                .SequenceEqual(first.Select(x=>(x.Sequence,x.InstanceId,x.RawValue,x.DocumentHash))),
+                "verified human sign-in reads identical retained SQL evidence through its own scoped session");
+            await Denied(()=>writer.ReadMtConnectEvidenceAsync(issuedHash,site,otherMachine,Stream),
+                "verified human session cannot read an unassigned machine");
+            await Denied(()=>login.IssueAsync("sql-evidence-proof"),
+                "verified authentication assertion cannot issue a second evidence session");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(issued.Token);
+            CryptographicOperations.ZeroMemory(issuedHash);
+        }
         await Denied(()=>writer.ReadMtConnectEvidenceAsync(rootToken,site,machine,Stream),"administrator has no implicit raw-evidence read authority");await Denied(()=>writer.ReadMtConnectEvidenceAsync(token,site,otherMachine,Stream),"raw evidence read respects exact machine grant");
         var repeat=await writer.IngestMtConnectAsync(pair.Channel,request);var repeatedAgain=await writer.IngestMtConnectAsync(pair.Channel,request);Check(repeat.SequenceEqual(repeatedAgain)&&await Count("acquisition.MtConnectBatch")==1&&await Count("acquisition.MtConnectObservation")==2,"exact ingestion retry records one effect and returns saved receipt");
         await Conflict(()=>writer.IngestMtConnectAsync(pair.Channel,request with{FromSequence=101,RawDocument=Frame(101,1)}),"operation identity rejects changed request bytes");
