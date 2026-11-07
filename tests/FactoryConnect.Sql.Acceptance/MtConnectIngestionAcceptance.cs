@@ -449,7 +449,13 @@ internal static class MtConnectIngestionAcceptance
             site,machine,currentActivity.Signal.MappingId,Stream,
             eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,0);
         var persisted=await atomicStore.ReadPeriodPageAsync(eligibleCut.Qualification);
+        var expectedPeriod=new ClosedActivityPeriod(machine,Stream,currentActivity.Signal.MappingId,
+            ActivityState.Running,eligibleRows[0].ObservedAt,eligibleRows[1].ObservedAt,
+            TimeSpan.FromSeconds(2).Ticks,eligibleFrame.InstanceId,
+            eligibleRows[0].Sequence,eligibleRows[1].Sequence,"ACTIVE","READY");
         Check(!committed.Replayed && replay.Replayed && committed.NewPeriods.Count==1 &&
+            committed.NewPeriods[0]==expectedPeriod &&
+            committed.Checkpoint.LastConsumedSample==eligibleCut.Samples[1] &&
             JsonSerializer.Serialize(committed.Checkpoint)==JsonSerializer.Serialize(replay.Checkpoint) &&
             JsonSerializer.Serialize(committed.Checkpoint)==JsonSerializer.Serialize(
                 await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)) &&
@@ -532,6 +538,10 @@ internal static class MtConnectIngestionAcceptance
         AcceptedActivityContinuityQualifier.Qualify(expiringMapping,raceRows);
         Check(raceRows.Count==2 && raceRows.All(x=>x.ObservedAt>=expiringMapping.EffectiveFrom &&
             x.ObservedAt<expiringMapping.EffectiveTo),"activity expiry race starts with eligible accepted source");
+        var beforeCheckpoint=await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+            ("@machine",machine),("@mapping",currentActivity.Signal.MappingId));
+        var beforePeriods=await Count("activity.ClosedPeriod");
+        var beforeReceipts=await Count("activity.ProcessorOperation");
         foreach(var boundary in new[]{
             (Time:expiringMapping.EffectiveFrom.AddTicks(-1),Label:"before from"),
             (Time:activityDeadline,Label:"exclusive to"),
@@ -553,14 +563,14 @@ internal static class MtConnectIngestionAcceptance
             catch(InvalidDataException error)when(error.Message==
                 "Accepted observation is outside the exact approved activity interpretation interval.")
             {
-                Check(true,"accepted source rejects interpretation boundary "+boundary.Label);
+                Check(Equals(beforeCheckpoint,await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                        ("@machine",machine),("@mapping",currentActivity.Signal.MappingId))) &&
+                    await Count("activity.ClosedPeriod")==beforePeriods &&
+                    await Count("activity.ProcessorOperation")==beforeReceipts,
+                    "accepted source rejects interpretation boundary without effects "+boundary.Label);
             }
         }
         var raceOperation=Guid.NewGuid();
-        var beforeCheckpoint=await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
-            ("@machine",machine),("@mapping",currentActivity.Signal.MappingId));
-        var beforePeriods=await Count("activity.ClosedPeriod");
-        var beforeReceipts=await Count("activity.ProcessorOperation");
         var racingStore=new SqlActivityProcessorStore(new SqlConnectionStringBuilder(target.ConnectionString)
             {ApplicationName="fc2activity-expiry"}.ConnectionString);
         var processorResource=$"fc2:activity:{machine:N}:{currentActivity.Signal.MappingId:N}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Stream)))}";
