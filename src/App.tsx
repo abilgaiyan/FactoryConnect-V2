@@ -53,7 +53,10 @@ export function App({ runtime }: AppProps) {
   useEffect(() => {
     if (!validEvidenceSession) return;
     const remaining = Date.parse(validEvidenceSession.expiresAt) - Date.now();
-    const timer = window.setTimeout(() => setSessionClock(Date.now()), Math.max(0, Math.min(remaining, 2147483647)));
+    const timer = window.setTimeout(() => {
+      if (Date.now() >= Date.parse(validEvidenceSession.expiresAt)) setEvidenceSession(null);
+      else setSessionClock(Date.now());
+    }, Math.max(1, Math.min(remaining + 10, 2147483647)));
     return () => window.clearTimeout(timer);
   }, [validEvidenceSession?.expiresAt]);
   const publicRuntime: DashboardApplicationRuntime = {
