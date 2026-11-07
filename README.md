@@ -83,3 +83,5 @@ Runtime assignment prerequisite: [scoped assignment, explicit replacement and re
 Runtime X.509 prerequisite: [controlled exact certificate and pinned-CA registration](docs/implementation/FC2-G2-runtime-certificate-registration.md). Registration creates a new signing credential generation; it is offline public-material validation and does not authenticate a TLS channel or check CA revocation.
 
 Runtime transport boundary: [real mTLS verification and protected assigned-machine reads](docs/implementation/FC2-G2-runtime-mtls-verification.md). Online CA status and current exact SQL certificate/credential/assignment authority are required per bounded read. No default listener, runtime HTTP route, acknowledgement or active roster is enabled.
+
+Runtime application fact: [durable exact activation acknowledgements](docs/implementation/FC2-G3-runtime-activation-acknowledgement.md). Real mTLS and exact current package/approval/request/assignment/credential pins are required. Historical receipts and acknowledgement heads are not active-roster or connectivity verdicts.

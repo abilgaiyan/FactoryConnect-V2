@@ -117,6 +117,10 @@ try
     var mtlsTarget=target with {ConnectionString=mtlsDb.ConnectionString,Database=mtlsDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(mtlsTarget);
     passed += await RuntimeMtlsSqlAcceptance.Run(mtlsTarget with{InitializeEmpty=false});
+    var acknowledgementDb=await NewDatabase();
+    var acknowledgementTarget=target with {ConnectionString=acknowledgementDb.ConnectionString,Database=acknowledgementDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(acknowledgementTarget);
+    passed += await ActivationAcknowledgementAcceptance.Run(acknowledgementTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);

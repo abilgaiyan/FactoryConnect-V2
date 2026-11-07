@@ -59,18 +59,7 @@ public sealed partial class SqlSecurityAuthority
             if(final.Epoch!=command.ExpectedSecurityEpoch)throw new SecurityConflictException();
             if(until is {} expired&&expired<=final.Now)throw new SecurityDeniedException();
             await ValidateActivationPrerequisites(c,t,command,machine,from,until,final.Now,ct);
-            var timezone=root.GetProperty("timezone");var schedule=machine.GetProperty("schedule");var breaks=machine.GetProperty("breakPolicy");
-            await using(var q=Command(c,t,"""
-                SELECT COUNT(*) FROM configuration.PolicySafetyRevocation WHERE SiteId=@site AND EffectiveFrom<=@now AND
-                    ((PolicyKind='timezone' AND TimezoneRevisionId=@timezone AND ContentHash=@timezoneHash) OR
-                     (PolicyKind='schedule' AND ScheduleRevisionId=@schedule AND ContentHash=@scheduleHash) OR
-                     (PolicyKind='break' AND BreakPolicyRevisionId=@break AND ContentHash=@breakHash));
-                """))
-            {
-                Add(q,("@site",command.SiteId),("@now",from>final.Now?from:final.Now),("@timezone",timezone.GetProperty("revisionId").GetGuid()),("@timezoneHash",PinHash(timezone)),
-                    ("@schedule",schedule.GetProperty("revisionId").GetGuid()),("@scheduleHash",PinHash(schedule)),("@break",breaks.GetProperty("revisionId").GetGuid()),("@breakHash",PinHash(breaks)));
-                if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityDeniedException();
-            }
+            await ValidatePinnedPolicies(c,t,root,machine,command.SiteId,from>final.Now?from:final.Now,ct);
             Guid? head=null;long generation=0;
             await using(var q=Command(c,t,"SELECT ActivationId,ActivationGeneration FROM configuration.MachineActivationRequestHead WHERE SiteId=@site AND MachineId=@machine"))
             {
@@ -164,6 +153,21 @@ public sealed partial class SqlSecurityAuthority
         var credentialFrom=r.GetDateTimeOffset(2);var credentialTo=r.GetDateTimeOffset(3);var firstUse=from>now?from:now;
         if(assignmentFrom>now||assignmentTo is {} end&&end<=now||!Contains(assignmentFrom,assignmentTo,from,until)||
             credentialFrom>now||credentialTo<=now||credentialFrom>firstUse||credentialTo<=firstUse)throw new SecurityDeniedException();
+    }
+    private static async Task ValidatePinnedPolicies(SqlConnection c,SqlTransaction t,JsonElement root,JsonElement machine,Guid siteId,DateTimeOffset at,CancellationToken ct)
+    {
+            var timezone=root.GetProperty("timezone");var schedule=machine.GetProperty("schedule");var breaks=machine.GetProperty("breakPolicy");
+            await using(var q=Command(c,t,"""
+                SELECT COUNT(*) FROM configuration.PolicySafetyRevocation WHERE SiteId=@site AND EffectiveFrom<=@now AND
+                    ((PolicyKind='timezone' AND TimezoneRevisionId=@timezone AND ContentHash=@timezoneHash) OR
+                     (PolicyKind='schedule' AND ScheduleRevisionId=@schedule AND ContentHash=@scheduleHash) OR
+                     (PolicyKind='break' AND BreakPolicyRevisionId=@break AND ContentHash=@breakHash));
+                """))
+            {
+                Add(q,("@site",siteId),("@now",at),("@timezone",timezone.GetProperty("revisionId").GetGuid()),("@timezoneHash",PinHash(timezone)),
+                    ("@schedule",schedule.GetProperty("revisionId").GetGuid()),("@scheduleHash",PinHash(schedule)),("@break",breaks.GetProperty("revisionId").GetGuid()),("@breakHash",PinHash(breaks)));
+                if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityDeniedException();
+            }
     }
     private static async Task MachineAuthorityOperation(SqlConnection c,SqlTransaction t,Guid op,Guid actor,AuthorizationScope scope,byte[] request,byte[] result,string action,string reason,CancellationToken ct)
     {
