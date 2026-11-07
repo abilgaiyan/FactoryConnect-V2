@@ -7,8 +7,9 @@ public sealed partial class SqlSecurityAuthority
     /// <summary>Only currently authorized machine assignments are visible. The list is not an
     /// active-connection roster and carries no assertion of machine operational health.</summary>
     public Task<IReadOnlyList<OperatorEvidenceMachine>> ReadOperatorEvidenceMachinesAsync(
-        byte[] sessionHash,CancellationToken ct=default)
+        byte[] sessionHash,Guid siteId,CancellationToken ct=default)
     {
+        if(siteId==Guid.Empty)throw new ArgumentException("Explicit evidence site required.",nameof(siteId));
         var token=sessionHash.ToArray();
         return Transaction(null,false,async(c,t)=>
         {
@@ -19,7 +20,7 @@ public sealed partial class SqlSecurityAuthority
                 SELECT TOP(101) m.SiteId,m.MachineId,m.DisplayName
                 FROM [master].Machine m
                 JOIN [master].Site s ON s.SiteId=m.SiteId
-                WHERE m.IsRetired=0 AND s.IsRetired=0
+                WHERE m.SiteId=@site AND m.IsRetired=0 AND s.IsRetired=0
                   AND EXISTS (SELECT 1 FROM security.PermissionGrant g WHERE
                     g.GranteeId=@actor AND g.Permission='commissioning.read' AND g.UseAllowed=1
                     AND g.EffectiveFrom<=@now AND g.ExpiresAt>@now
@@ -28,7 +29,7 @@ public sealed partial class SqlSecurityAuthority
                 ORDER BY m.SiteId,m.MachineId
                 """))
             {
-                Add(q,("@actor",actor),("@now",state.Now));
+                Add(q,("@actor",actor),("@now",state.Now),("@site",siteId));
                 await using var reader=await q.ExecuteReaderAsync(ct);
                 while(await reader.ReadAsync(ct))
                     machines.Add(new(reader.GetGuid(0),reader.GetGuid(1),reader.GetString(2)));
