@@ -50,7 +50,7 @@ test('supporting report initializes machine/day and return context',async t=>{
     assert.deepEqual([...h.document.querySelectorAll('input[type=date]')].map(i=>i.value),['2026-10-16','2026-10-16']);
     assert.equal(h.document.querySelectorAll('input[type=checkbox]:checked').length,1);
     assert.equal([...h.document.querySelectorAll('a')].find(a=>a.textContent==='Back to selected overview').getAttribute('href'),'/overview?day=2026-10-16&line=line2');
-    await h.submit(h.document.querySelector('form'));
+    await h.submit(h.document.querySelector('main form'));
     assert.match(h.document.body.textContent,/processor p2/);assert.doesNotMatch(h.document.body.textContent,/processor p1/);
 });
 test('invalid filters fail without machine requests',async t=>{
