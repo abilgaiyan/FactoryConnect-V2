@@ -37,6 +37,9 @@ export async function mountInDom(element, initialUrl = "http://factory-dashboard
     window,
     document: window.document,
     container,
+    async rerender(nextElement) {
+      await act(async () => root.render(nextElement));
+    },
     async click(element) {
       await act(async () => {
         element.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));

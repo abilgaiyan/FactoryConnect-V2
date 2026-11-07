@@ -17,6 +17,11 @@ internal static class MtConnectIngestionAcceptance
     const string Issuer="https://certificate.fixture/tenant";
     const string Device="fixture-device";
     const string Stream="mtconnect:uuid:"+Device;
+    private sealed class EvidenceLoginVerifier(VerifiedHumanIdentity identity):IHumanIdentityVerifier
+    {
+        public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
+            => assertion=="sql-evidence-proof" ? Task.FromResult(identity) : throw new SecurityDeniedException();
+    }
     internal static async Task<int> Run(InstallationTarget target)
     {
         var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
@@ -63,6 +68,131 @@ internal static class MtConnectIngestionAcceptance
         var request=await Request(fetched);var epoch=await Epoch();await Transport(request);Check(await Epoch()==epoch,"ordinary ingestion commits without advancing security epoch");
         var first=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream);Check(first.Count==2&&first.Single(x=>x.Address=="Counter").RawValue==" 00042 "&&first.Select(x=>x.MappingId).Distinct().Count()==2,"protected read returns actual saved values with case-distinct mapping identities");
         Check(first.All(x=>x.BatchId==request.OperationId&&x.AcknowledgementId==ack.AcknowledgementId&&x.DocumentHash==Convert.ToHexString(SHA256.HashData(fetched.RawDocument)).ToLowerInvariant()),"saved values retain exact batch acknowledgement and raw-document provenance");
+        // End-to-end SQL authority: a freshly verified human proof issues a one-use
+        // bearer, and that session reads only the machine explicitly granted to it.
+        var loginIdentity=new VerifiedHumanIdentity(Issuer,"certificate-manager",Guid.NewGuid().ToString("N"),
+            "fixture-mfa",now,now.AddMinutes(10));
+        var login=new SqlHumanSessionAuthority(target.ConnectionString,target.InstallationId,
+            new EvidenceLoginVerifier(loginIdentity));
+        var issued=await login.IssueAsync("sql-evidence-proof");
+        var issuedHash=SHA256.HashData(issued.Token);
+        try
+        {
+            var accepted=await writer.ReadMtConnectEvidenceAsync(issuedHash,site,machine,Stream);
+            Check(accepted.Count==first.Count&&accepted.Select(x=>(x.Sequence,x.InstanceId,x.RawValue,x.DocumentHash))
+                .SequenceEqual(first.Select(x=>(x.Sequence,x.InstanceId,x.RawValue,x.DocumentHash))),
+                "verified human sign-in reads identical retained SQL evidence through its own scoped session");
+            var permittedMachines=await writer.ReadOperatorEvidenceMachinesAsync(issuedHash,site);
+            Check(permittedMachines.Count==1&&permittedMachines[0].SiteId==site
+                &&permittedMachines[0].MachineId==machine,
+                "verified human sees only currently authorized machine in bounded operator roster");
+            // Sparse-access performance regression: one machine grant among 1,200
+            // unrelated same-site machines must cost one inventory command, not
+            // proportional discovery pages. This runs on disposable SQL only.
+            await Exec("""
+                INSERT [master].Machine(MachineId,SiteId,DisplayName)
+                SELECT TOP (1200) NEWID(),@site,N'Sparse discovery fixture'
+                FROM sys.all_objects a CROSS JOIN sys.all_objects b;
+                """,("@site",site));
+            Check(Convert.ToInt32(await Scalar(
+                "SELECT COUNT(*) FROM [master].Machine WHERE SiteId=@site AND DisplayName=N'Sparse discovery fixture'",
+                ("@site",site)))==1200,"sparse fixture retains 1200 unauthorized same-site machines");
+            var sparseActivities=new List<Activity>();
+            using(var sparseListener=new ActivityListener
+            {
+                ShouldListenTo=s=>s.Name=="FactoryConnect.V2.Security",
+                Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped=a=>{lock(sparseActivities)sparseActivities.Add(a);}
+            })
+            {
+                ActivitySource.AddActivityListener(sparseListener);
+                var sparseClock=Stopwatch.StartNew();
+                var sparse=await writer.ReadOperatorEvidenceMachinesAsync(issuedHash,site);
+                sparseClock.Stop();
+                Check(sparse.Count==1&&sparse[0].MachineId==machine,
+                    "one-machine operator does not discover 1200 unauthorized same-site machines");
+                Activity[] observed;
+                lock(sparseActivities)observed=sparseActivities
+                    .Where(a=>a.OperationName=="security.transaction").ToArray();
+                Check(observed.Length==1&&observed[0].GetTagItem("security.sql.roundtrips") is not null
+                    &&Convert.ToInt64(observed[0].GetTagItem("security.sql.roundtrips"))<=12,
+                    "sparse one-machine discovery SQL roundtrips are independent of site size");
+                Console.WriteLine($"MEASURE: operator sparse siteMachines=1202 visible=1 elapsedMs={sparseClock.Elapsed.TotalMilliseconds:F2} sqlRoundtrips={Convert.ToInt64(observed.Single().GetTagItem("security.sql.roundtrips"))}");
+            }
+            await Exec("DELETE [master].Machine WHERE SiteId=@site AND DisplayName=N'Sparse discovery fixture'",
+                ("@site",site));
+            // A full 100-machine visible roster must stay query-bounded. Historical
+            // revoked grants must not consume the visible-machine limit.
+            var rosterMachines=Enumerable.Range(0,98).Select(_=>Guid.NewGuid()).ToArray();
+            await using(var rosterInsert=new SqlCommand("",c))
+            {
+                var rosterValues=string.Join(",",rosterMachines.Select((_,i)=>$"(@id{i},@site,N'Roster fixture')"));
+                rosterInsert.CommandText="INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES "+rosterValues;
+                rosterInsert.Parameters.AddWithValue("@site",site);
+                for(var i=0;i<rosterMachines.Length;i++)rosterInsert.Parameters.AddWithValue($"@id{i}",rosterMachines[i]);
+                await rosterInsert.ExecuteNonQueryAsync();
+            }
+            var rootGrant=(Guid)(await Scalar(
+                "SELECT GrantId FROM security.PermissionGrant WHERE GranteeId=@admin AND Permission=N'commissioning.read'",
+                ("@admin",admin)))!;
+            // Set up a broad delegated grant so one SQL-authority verification
+            // covers the entire visible 100-machine inventory.
+            var rosterGrant=Guid.NewGuid();
+            await service.GrantPermissionAsync(rootToken,new(Guid.NewGuid(),rosterGrant,proposer,
+                rootGrant,"commissioning.read",AuthorizationScope.Site(site),
+                true,false,now,now.AddHours(1),await Epoch(),"site roster performance acceptance"));
+            var rosterReader=new SqlSecurityAuthority(target.ConnectionString,target.InstallationId);
+            var rosterActivities=new List<Activity>();
+            using(var rosterListener=new ActivityListener
+            {
+                ShouldListenTo=s=>s.Name=="FactoryConnect.V2.Security",
+                Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped=a=>{lock(rosterActivities)rosterActivities.Add(a);}
+            })
+            {
+                ActivitySource.AddActivityListener(rosterListener);
+                var clock=Stopwatch.StartNew();
+                // Fixture includes both original machines; the broad grant sees 98 new plus two retained.
+                var all=await rosterReader.ReadOperatorEvidenceMachinesAsync(issuedHash,site);
+                clock.Stop();
+                Check(all.Count==100&&all.Select(m=>m.MachineId).Distinct().Count()==100,
+                    "100 authorized machines enumerate without truncation");
+                Activity[] readings;
+                lock(rosterActivities)readings=rosterActivities.Where(a=>a.OperationName=="security.transaction").ToArray();
+                Check(readings.Length>0&&readings.Max(a=>Convert.ToInt64(a.GetTagItem("security.sql.roundtrips")))<=12,
+                    "100-machine discovery SQL roundtrips stay bounded independently of machine count");
+                Console.WriteLine($"MEASURE: operator visible machines=100 elapsedMs={clock.Elapsed.TotalMilliseconds:F2} maxRoundtrips={readings.Max(a=>Convert.ToInt64(a.GetTagItem("security.sql.roundtrips")))}");
+            }
+            // Retire the extra roster machines before unrelated fixture assertions
+            // that deliberately test bounded configuration/discovery behavior.
+            await using(var cleanup=new SqlCommand("DELETE FROM [master].Machine WHERE SiteId=@site AND MachineId<>@primary AND MachineId<>@other",c))
+            {
+                cleanup.Parameters.AddWithValue("@site",site);
+                cleanup.Parameters.AddWithValue("@primary",machine);
+                cleanup.Parameters.AddWithValue("@other",otherMachine);
+                await cleanup.ExecuteNonQueryAsync();
+            }
+            // Revoke broad permission before exercising exact machine denial.
+            await service.RevokeGrantAsync(rootToken,Guid.NewGuid(),rosterGrant,await Epoch(),"restore exact-machine grant");
+            Check((await rosterReader.ReadOperatorEvidenceMachinesAsync(issuedHash,site)).Count==1,
+                "revoked broad grant cannot disclose another machine");
+            Check((await writer.ReadOperatorEvidenceMachinesAsync(rootToken,site)).Count==0,
+                "administrator without commissioning grant has no implicit evidence machines");
+            await Denied(()=>writer.ReadMtConnectEvidenceAsync(issuedHash,site,otherMachine,Stream),
+                "verified human session cannot read an unassigned machine");
+            await Denied(()=>login.IssueAsync("sql-evidence-proof"),
+                "verified authentication assertion cannot issue a second evidence session");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(issued.Token);
+            CryptographicOperations.ZeroMemory(issuedHash);
+        }
+        if(Environment.GetEnvironmentVariable("FC2_BROWSER_ACCEPTANCE")=="1")
+            count += await OperatorBrowserAcceptance.Run(target.ConnectionString,target.InstallationId,
+                site,machine,rootToken,Epoch);
+        count += await OperatorEvidenceHttpAcceptance.Run(target.ConnectionString,
+            target.InstallationId,site,machine,otherMachine,rootToken,Epoch);
         await Denied(()=>writer.ReadMtConnectEvidenceAsync(rootToken,site,machine,Stream),"administrator has no implicit raw-evidence read authority");await Denied(()=>writer.ReadMtConnectEvidenceAsync(token,site,otherMachine,Stream),"raw evidence read respects exact machine grant");
         var repeat=await writer.IngestMtConnectAsync(pair.Channel,request);var repeatedAgain=await writer.IngestMtConnectAsync(pair.Channel,request);Check(repeat.SequenceEqual(repeatedAgain)&&await Count("acquisition.MtConnectBatch")==1&&await Count("acquisition.MtConnectObservation")==2,"exact ingestion retry records one effect and returns saved receipt");
         await Conflict(()=>writer.IngestMtConnectAsync(pair.Channel,request with{FromSequence=101,RawDocument=Frame(101,1)}),"operation identity rejects changed request bytes");

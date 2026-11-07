@@ -97,3 +97,11 @@ body { margin: 0; background: #f4f7fb; color: #172b3a; font: 16px/1.6 system-ui,
   #main-content .commissioning-table-scroll table,
   #main-content .commissioning-processors-table th { min-width: 0; }
 }
+
+/* Authentication controls must not inherit the hidden skip-link placement. */
+.operator-session-control a, .operator-session-control button {
+  display: inline-flex; align-items: center; min-height: 44px;
+  padding: .55rem .85rem; border: 1px solid #8baec8; border-radius: .4rem;
+  background: transparent; color: white; font: inherit; text-decoration: none; cursor: pointer;
+}
+.operator-session-control :focus-visible { outline: 3px solid #ffbf47; outline-offset: 3px; }

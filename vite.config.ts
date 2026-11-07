@@ -41,7 +41,7 @@ function mockApiPlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), mockApiPlugin()],
+  plugins: [react(), ...(process.env.VITE_ENABLE_FIXTURES === "true" ? [mockApiPlugin()] : [])],
   server: {
     port: 3000,
     host: "0.0.0.0",

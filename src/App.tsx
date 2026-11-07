@@ -1,5 +1,7 @@
 import { lazy, Suspense } from "react";
 import { CommissioningPage } from "./presentation/CommissioningPage.tsx";
+import { OperatorEvidencePage } from "./presentation/OperatorEvidencePage.tsx";
+import { RetainedMachineEvidence } from "./presentation/RetainedMachineEvidence.tsx";
 import { overviewReturn } from "./routing/overview-return.ts";
 import { ManagementOverviewPage } from "./presentation/ManagementOverviewPage.tsx";
 import { MachineCounterReportPage } from "./presentation/MachineCounterReportPage.tsx";
@@ -12,6 +14,8 @@ import {
   type MouseEvent,
   type PropsWithChildren,
   useState,
+  useEffect,
+  useMemo,
 } from "react";
 
 import type { DashboardApplicationRuntime } from "./application/application-runtime.ts";
@@ -44,6 +48,47 @@ export interface AppProps {
 
 export function App({ runtime }: AppProps) {
   const { route, navigate } = useApplicationRouter();
+  const [evidenceSession, setEvidenceSession] = useState(runtime.evidenceSession ?? null);
+  const [sessionClock, setSessionClock] = useState(() => Date.now());
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/api/security/v2/session", { signal: controller.signal, cache: "no-store", redirect: "error" })
+      .then(async response => {
+        if (response.ok) {
+          const session = await response.json();
+          if (!controller.signal.aborted && typeof session.bearer === "string" && typeof session.expiresAt === "string") {
+            setEvidenceSession(session); setSessionClock(Date.now());
+          }
+        }
+      }).catch(() => {});
+    return () => controller.abort();
+  }, []);
+  async function endEvidenceSession() {
+    setEvidenceSession(null);
+    await fetch("/api/security/v2/logout", { method: "POST", cache: "no-store", redirect: "error" });
+  }
+
+  const validEvidenceSession = evidenceSession && Number.isFinite(Date.parse(evidenceSession.expiresAt))
+    && Date.parse(evidenceSession.expiresAt) > sessionClock ? evidenceSession : null;
+  useEffect(() => {
+    if (!validEvidenceSession) return;
+    const remaining = Date.parse(validEvidenceSession.expiresAt) - Date.now();
+    const timer = window.setTimeout(() => {
+      if (Date.now() >= Date.parse(validEvidenceSession.expiresAt)) setEvidenceSession(null);
+      else setSessionClock(Date.now());
+    }, Math.max(1, Math.min(remaining + 10, 2147483647)));
+    return () => window.clearTimeout(timer);
+  }, [validEvidenceSession?.expiresAt]);
+  const publicRuntime: DashboardApplicationRuntime = useMemo(() => ({
+    configuration: runtime.configuration,
+    reportingClient: runtime.reportingClient,
+    currentStateClient: runtime.currentStateClient,
+    ...(runtime.now ? { now: runtime.now } : {}),
+  }), [runtime.configuration, runtime.reportingClient, runtime.currentStateClient, runtime.now]);
+  const routedRuntime = useMemo(() => validEvidenceSession
+    ? { ...publicRuntime, evidenceSession: validEvidenceSession }
+    : publicRuntime, [publicRuntime, validEvidenceSession]);
+  useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); setSessionClock(Date.now()); }, [runtime.evidenceSession]);
   const returnToOverview = overviewReturn(window.location.search, runtime.configuration.sources);
 
   return (
@@ -56,8 +101,12 @@ export function App({ runtime }: AppProps) {
             `${source.groupName ?? 'Group not configured'} · ${source.siteId}`,
           ))].map(label => <span key={label}>{label}</span>)}
         </div>
+        <div className="operator-session-control">{validEvidenceSession
+          ? <button type="button" onClick={() => { void endEvidenceSession(); }}>End evidence session</button>
+          : <a href="/api/security/v2/login">Sign in to view machine evidence</a>}</div>
         <nav aria-label="Dashboard">
           {SupervisorWorkspace && <ApplicationLink href="/supervisor-preview" navigate={navigate} current={route.kind === "supervisorPreview"}>Supervisor desk preview</ApplicationLink>}
+          <ApplicationLink href="/operator-evidence" navigate={navigate} current={route.kind === "operatorEvidence"}>Operator evidence</ApplicationLink>{" "}
           <ApplicationLink href="/commissioning" navigate={navigate} current={route.kind === "commissioning"}>Commissioning</ApplicationLink>{" "}
           <ApplicationLink href="/overview" navigate={navigate} current={route.kind === "overview"}>Overview</ApplicationLink>{" "}
           <ApplicationLink href="/fleet" navigate={navigate} current={route.kind === "fleet"}>Fleet status</ApplicationLink>{" "}
@@ -69,7 +118,7 @@ export function App({ runtime }: AppProps) {
       </header>
       <main id="main-content">
         {returnToOverview && <ApplicationLink href={returnToOverview} navigate={navigate}>Back to selected overview</ApplicationLink>}
-        <RouteView route={route} navigate={navigate} runtime={runtime} />
+        <RouteView route={route} navigate={navigate} runtime={routedRuntime} />
       </main>
     </div>
   );
@@ -111,6 +160,8 @@ function RouteView({ route, navigate, runtime }: RouteViewProps) {
       ? <Suspense fallback={<p role="status">Loading screen review…</p>}><SupervisorWorkspace runtime={runtime} /></Suspense>
       : <section><h1>Supervisor workspace not enabled</h1><p>The screen-review preview is available only in development builds. No production data-entry service is connected.</p></section>;
     case "commissioning": return <CommissioningPage />;
+    case "operatorEvidence": return <OperatorEvidencePage sessionBearer={runtime.evidenceSession?.bearer ?? null}
+      baseAddress={new URL(runtime.configuration.reportingBasePath, window.location.origin).toString()} />;
     case "overview": return <ManagementOverviewPage runtime={runtime} search={route.search} navigate={navigate} />;
     case "fleet": return <FleetStatusPage runtime={runtime} />;
     case "dateRange": return <DateRangePage key={window.location.search} runtime={runtime} />;
@@ -292,7 +343,17 @@ function ConfiguredMachineDetail(props: {
   readonly runtime: DashboardApplicationRuntime;
 }) {
   const currentState = useMachineCurrentState(props.source.machineId, props.runtime);
-  return <MachineCurrentStatePage source={props.source} state={currentState.state} refresh={currentState.refresh} />;
+  return <>
+    <MachineCurrentStatePage source={props.source} state={currentState.state} refresh={currentState.refresh} />
+    {props.runtime.evidenceSession
+      ? <RetainedMachineEvidence machineId={props.source.machineId}
+          baseAddress={new URL(props.runtime.configuration.reportingBasePath, window.location.origin).toString()}
+          sessionBearer={props.runtime.evidenceSession.bearer} />
+      : <section aria-label="Retained machine evidence">
+          <h2>Accepted machine observations</h2>
+          <p>Protected historical evidence is unavailable until an authenticated human session is established. No observations are inferred.</p>
+        </section>}
+  </>;
 }
 
 interface DailyReportSelectionProps {

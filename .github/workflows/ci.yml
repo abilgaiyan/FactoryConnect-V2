@@ -77,6 +77,19 @@ jobs:
             sleep 2
           done
           echo 'SQL did not become ready'; exit 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Build browser and install isolated Chromium acceptance
+        run: |
+          npm ci
+          npm run build
+          npx playwright install --with-deps chromium
+      - name: Real OIDC HTTPS SQL Chromium acceptance
+        env:
+          FC2_BROWSER_ACCEPTANCE: '1'
+        run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
       - name: Run first-machine HTTP TLS SQL demonstration
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
       - name: Whole-process single-machine acquisition host
@@ -95,7 +108,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: first-machine-ingestion
-          path: artifacts/ingestion/*.json
+          path: artifacts/ingestion/*
           if-no-files-found: warn
       - name: Remove disposable SQL container
         if: always()
