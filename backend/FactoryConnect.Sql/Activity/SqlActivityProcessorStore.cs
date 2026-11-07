@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -28,6 +29,7 @@ public sealed record ActivityPeriodPage(
 public sealed class SqlActivityProcessorStore(string connectionString)
 {
     private static readonly UTF8Encoding Utf8=new(false,true);
+    private static readonly ActivitySource Diagnostics=new("FactoryConnect.V2.Activity");
 
     public async Task<ActivityProcessorCheckpoint> ReadCheckpointAsync(
         ActivityQualificationIdentity identity,CancellationToken ct=default)
@@ -67,6 +69,10 @@ public sealed class SqlActivityProcessorStore(string connectionString)
            expectedGeneration>long.MaxValue-1 ||
            identity!=ActivityQualificationIdentity.From(signal,identity.ContinuityIdentity))
             throw new ArgumentException("Exact bounded activity operation required.");
+        using var activity=Diagnostics.StartActivity("activity.sql.apply",ActivityKind.Internal);
+        var started=Stopwatch.GetTimestamp();
+        var insertElapsed=TimeSpan.Zero;
+        var periodInsertCommands=0;
         var savedSamples=samples.ToArray();
         var request=JsonSerializer.SerializeToUtf8Bytes(new {
             version=1,operationId,identity,expectedGeneration,samples=savedSamples
@@ -74,7 +80,9 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         var requestHash=SHA256.HashData(request);
         var resource=$"fc2:activity:{identity.MachineId:N}:{identity.MappingId:N}:{Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(identity.StreamKey)))}";
         await using var c=new SqlConnection(connectionString);
+        if(activity is not null)c.StatisticsEnabled=true;
         await c.OpenAsync(ct);
+        if(activity is not null)c.ResetStatistics();
         await using var t=(SqlTransaction)await c.BeginTransactionAsync(IsolationLevel.Serializable,ct);
         try
         {
@@ -204,7 +212,10 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                 insert.Parameters.Add("@ticks",SqlDbType.BigInt).Value=period.DurationTicks;
                 insert.Parameters.Add("@startValue",SqlDbType.NVarChar,-1).Value=period.StartRawValue;
                 insert.Parameters.Add("@endValue",SqlDbType.NVarChar,-1).Value=period.EndRawValue;
+                var insertStarted=Stopwatch.GetTimestamp();
                 await insert.ExecuteNonQueryAsync(ct);
+                insertElapsed+=Stopwatch.GetElapsedTime(insertStarted);
+                periodInsertCommands++;
             }
             if(injectRollback)throw new InvalidOperationException("Controlled atomic activity rollback fixture.");
             await t.CommitAsync(ct);
@@ -215,6 +226,17 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             try{await t.RollbackAsync(CancellationToken.None);}
             catch(Exception error)when(error is SqlException or InvalidOperationException){}
             throw;
+        }
+        finally
+        {
+            if(activity is not null)
+            {
+                activity.SetTag("activity.sql.period.insert.commands",periodInsertCommands);
+                activity.SetTag("activity.sql.period.insert.elapsed.ms",insertElapsed.TotalMilliseconds);
+                activity.SetTag("activity.sql.apply.elapsed.ms",Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                if(c.State==ConnectionState.Open)
+                    activity.SetTag("activity.sql.roundtrips",c.RetrieveStatistics()["ServerRoundtrips"]);
+            }
         }
     }
 
