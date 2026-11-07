@@ -470,6 +470,103 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         return page.Rows.Select(row=>row.Period).ToArray();
     }
 
+    private static async Task VerifyAcceptedSourceInTransactionAsync(
+        SqlConnection c,SqlTransaction t,ActivityQualificationIdentity identity,
+        AcceptedSourceBinding binding,CancellationToken ct)
+    {
+        if(binding.Rows.Count is <1 or >100||
+           identity.MachineId!=binding.Approved.Signal.MachineId||
+           identity.MappingId!=binding.Approved.Signal.MappingId)
+            throw new InvalidDataException("Accepted source binding cannot be empty or ambiguous.");
+        await using var q=new SqlCommand("""
+            DECLARE @expected TABLE(
+                Sequence decimal(20,0) NOT NULL PRIMARY KEY,
+                BatchId uniqueidentifier NOT NULL,
+                Ack uniqueidentifier NOT NULL,
+                Canonical binary(32) NOT NULL,
+                Document binary(32) NOT NULL,
+                RawValue nvarchar(max) NOT NULL,
+                Quality varchar(32) NOT NULL,
+                SourceTimestamp nvarchar(128) NOT NULL,
+                ObservedAt datetimeoffset(7) NOT NULL
+            );
+            INSERT @expected(Sequence,BatchId,Ack,Canonical,Document,
+                RawValue,Quality,SourceTimestamp,ObservedAt)
+            SELECT j.Sequence,j.BatchId,j.Ack,CONVERT(binary(32),j.Canonical,2),
+                CONVERT(binary(32),j.Document,2),j.RawValue,j.Quality,
+                j.SourceTimestamp,j.ObservedAt
+            FROM OPENJSON(@proof) WITH(
+                Sequence decimal(20,0) '$.sequence',
+                BatchId uniqueidentifier '$.batch',
+                Ack uniqueidentifier '$.ack',
+                Canonical varchar(64) '$.canonical',
+                Document varchar(64) '$.document',
+                RawValue nvarchar(max) '$.value',
+                Quality varchar(32) '$.quality',
+                SourceTimestamp nvarchar(128) '$.timestamp',
+                ObservedAt datetimeoffset(7) '$.observed') j;
+            IF (SELECT COUNT_BIG(*) FROM @expected)<>@count
+                THROW 51078,'Changed activity source proof cardinality.',1;
+            IF (SELECT COUNT_BIG(*) FROM acquisition.MtConnectObservation o WITH(HOLDLOCK)
+                WHERE o.SiteId=@site AND o.MachineId=@machine
+                    AND o.StreamKeyBytes=@stream AND o.MappingId=@mapping
+                    AND o.AddressBytes=@address AND o.InstanceId=@instance
+                    AND o.Sequence>@after AND o.Sequence<=@through)<>@count
+                THROW 51078,'Source cut changed before activity checkpoint commit.',1;
+            IF EXISTS(
+                SELECT 1 FROM @expected e
+                LEFT JOIN acquisition.MtConnectObservation o WITH(HOLDLOCK)
+                    ON o.SiteId=@site AND o.MachineId=@machine
+                    AND o.StreamKeyBytes=@stream AND o.MappingId=@mapping
+                    AND o.AddressBytes=@address AND o.InstanceId=@instance
+                    AND o.Sequence=e.Sequence
+                LEFT JOIN acquisition.MtConnectBatch b WITH(HOLDLOCK)
+                    ON b.BatchId=o.BatchId AND b.SiteId=o.SiteId
+                    AND b.MachineId=o.MachineId AND b.StreamKeyBytes=o.StreamKeyBytes
+                WHERE o.MachineId IS NULL OR b.BatchId IS NULL
+                    OR e.Sequence<=@after OR e.Sequence>@through
+                    OR o.BatchId<>e.BatchId OR b.AcknowledgementId<>@ack
+                    OR b.AcknowledgementId<>e.Ack
+                    OR b.InstanceId<>@instance OR e.Sequence<b.FromSequence
+                    OR e.Sequence>=b.NextSequence
+                    OR o.ContentHash<>e.Canonical OR b.DocumentHash<>e.Document
+                    OR o.ContentHash<>HASHBYTES('SHA2_256',o.CanonicalBytes)
+                    OR CONVERT(varbinary(max),o.RawValue)<>
+                        CONVERT(varbinary(max),e.RawValue)
+                    OR CONVERT(varbinary(max),o.Quality)<>
+                        CONVERT(varbinary(max),e.Quality)
+                    OR CONVERT(varbinary(max),o.SourceTimestamp)<>
+                        CONVERT(varbinary(max),e.SourceTimestamp)
+                    OR o.ObservedAt<>e.ObservedAt
+            ) THROW 51078,'Accepted observation no longer matches operation proof.',1;
+            IF EXISTS(
+                SELECT 1 FROM acquisition.MtConnectBatch b WITH(HOLDLOCK)
+                JOIN (SELECT DISTINCT BatchId FROM @expected) distinctBatches
+                    ON distinctBatches.BatchId=b.BatchId
+                WHERE b.DocumentHash<>HASHBYTES('SHA2_256',b.RawDocument)
+            ) THROW 51078,'Accepted source batch document integrity changed.',1;
+            """,c,t);
+        BindScope(q,identity);
+        q.Parameters.Add("@site",SqlDbType.UniqueIdentifier).Value=binding.SiteId;
+        q.Parameters.Add("@address",SqlDbType.VarBinary,512).Value=
+            Utf8.GetBytes(identity.SourceAddress);
+        q.Parameters.Add("@ack",SqlDbType.UniqueIdentifier).Value=
+            binding.Approved.AcknowledgementId;
+        q.Parameters.Add("@proof",SqlDbType.NVarChar,-1).Value=binding.ProofJson;
+        q.Parameters.Add("@count",SqlDbType.Int).Value=binding.Rows.Count;
+        static void Number(SqlCommand command,string name,ulong value)
+        {
+            var parameter=command.Parameters.Add(name,SqlDbType.Decimal);
+            parameter.Precision=20;
+            parameter.Scale=0;
+            parameter.Value=(decimal)value;
+        }
+        Number(q,"@instance",binding.InstanceId);
+        Number(q,"@after",binding.AfterSequence);
+        Number(q,"@through",binding.ThroughSequence);
+        await q.ExecuteNonQueryAsync(ct);
+    }
+
     private static byte[] QualificationHash(ActivityQualificationIdentity identity)
         => SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(identity));
 
