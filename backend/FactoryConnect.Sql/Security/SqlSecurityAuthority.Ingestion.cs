@@ -114,8 +114,13 @@ public sealed partial class SqlSecurityAuthority
             var state=await State(c,t,ct);var actor=await Session(c,t,token,state.Now,ct);await Authorize(c,t,actor,"commissioning.read",scope,state.Now,ct);
             await using var q=Command(c,t,"""
                 IF NOT EXISTS(SELECT 1 FROM [master].Machine WHERE SiteId=@site AND MachineId=@machine) THROW 51042,'Unknown evidence machine.',1;
-                SELECT TOP(@take) o.Sequence,o.InstanceId,o.MappingId,o.AddressBytes,o.RawValue,o.Quality,o.SourceTimestamp,o.ObservedAt,b.ReceivedAt,o.BatchId,b.AcknowledgementId,b.DocumentHash
-                FROM acquisition.MtConnectObservation o JOIN acquisition.MtConnectBatch b ON b.BatchId=o.BatchId
+                DECLARE @selected TABLE(InstanceId decimal(20,0),Sequence decimal(20,0),PRIMARY KEY(InstanceId,Sequence));
+                INSERT @selected SELECT TOP(@take) InstanceId,Sequence FROM acquisition.MtConnectObservation WHERE SiteId=@site AND MachineId=@machine AND StreamKeyBytes=@stream ORDER BY InstanceId DESC,Sequence DESC;
+                IF (SELECT SUM(CONVERT(bigint,DATALENGTH(o.RawValue))+DATALENGTH(o.SourceTimestamp)+DATALENGTH(o.AddressBytes)+256)
+                    FROM acquisition.MtConnectObservation o JOIN @selected selected ON selected.InstanceId=o.InstanceId AND selected.Sequence=o.Sequence
+                    WHERE o.MachineId=@machine AND o.StreamKeyBytes=@stream)>8388608 THROW 51044,'Evidence page exceeds byte budget; reduce requested row count.',1;
+                SELECT o.Sequence,o.InstanceId,o.MappingId,o.AddressBytes,o.RawValue,o.Quality,o.SourceTimestamp,o.ObservedAt,b.ReceivedAt,o.BatchId,b.AcknowledgementId,b.DocumentHash
+                FROM acquisition.MtConnectObservation o JOIN @selected selected ON selected.InstanceId=o.InstanceId AND selected.Sequence=o.Sequence JOIN acquisition.MtConnectBatch b ON b.BatchId=o.BatchId
                 WHERE o.SiteId=@site AND o.MachineId=@machine AND o.StreamKeyBytes=@stream ORDER BY o.InstanceId DESC,o.Sequence DESC;
                 """);IngestionArgs(q,siteId,machineId,stream,null);q.Parameters.Add("@take",SqlDbType.Int).Value=take;var rows=new List<MtConnectAcceptedObservation>();
             await using var r=await q.ExecuteReaderAsync(ct);while(await r.ReadAsync(ct))rows.Add(new(decimal.ToUInt64(r.GetDecimal(0)).ToString(CultureInfo.InvariantCulture),decimal.ToUInt64(r.GetDecimal(1)).ToString(CultureInfo.InvariantCulture),r.GetGuid(2),AcquisitionUtf8.GetString((byte[])r[3]),r.GetString(4),r.GetString(5),r.GetString(6),r.GetDateTimeOffset(7),r.GetDateTimeOffset(8),r.GetGuid(9),r.GetGuid(10),Convert.ToHexString((byte[])r[11]).ToLowerInvariant()));

@@ -48,7 +48,7 @@ The writer revalidates actual mTLS/CA evidence and current runtime/assignment/cr
 
 Lock order is operation ID Exclusive, installation security Shared, ordinal policy Shared, machine Exclusive. Ordinary acquisition cannot mutate authority; security mutations take installation Exclusive. Evidence, raw batch, cursor, operation receipt and audit commit together. Polling does not advance the security epoch. One set-based compare/insert handles the batch; there is no SQL connection or command per observation. An absent cursor with retained batches fails closed.
 
-`ReadMtConnectEvidenceAsync` requires current machine-scoped `commissioning.read`, takes the shared security/machine gates, and returns at most 100 accepted observations using the exact stream key index. It is a historical commissioning evidence read, including after a safety hold; it does not claim current connectivity, active eligibility, numeric validity, quantity or OEE. Unavailable remains explicit, and missing evidence is not a fabricated zero.
+`ReadMtConnectEvidenceAsync` requires current machine-scoped `commissioning.read`, takes the shared security/machine gates, and returns at most 100 accepted observations using the exact stream key index, with an 8 MiB payload estimate checked in SQL before transferring values. An oversized page fails explicitly and can be retried with a smaller row count. It is a historical commissioning evidence read, including after a safety hold; it does not claim current connectivity, active eligibility, numeric validity, quantity or OEE. Unavailable remains explicit, and missing evidence is not a fabricated zero.
 
 ## Acceptance and limits
 
