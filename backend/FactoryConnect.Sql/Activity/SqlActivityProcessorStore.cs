@@ -73,6 +73,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         var started=Stopwatch.GetTimestamp();
         var insertElapsed=TimeSpan.Zero;
         var periodInsertCommands=0;
+        var evaluatedPeriodRows=0;
         var savedSamples=samples.ToArray();
         var request=JsonSerializer.SerializeToUtf8Bytes(new {
             version=1,operationId,identity,expectedGeneration,samples=savedSamples
@@ -190,32 +191,59 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                 receipt.Parameters.Add("@result",SqlDbType.VarBinary,-1).Value=resultBytes;
                 await receipt.ExecuteNonQueryAsync(ct);
             }
-            foreach(var period in evaluated.ClosedPeriods)
+            // One command per bounded page of derived periods, not one command
+            // per transition. The transaction, operation receipt and immutable
+            // effect IDs are unchanged. Each input batch admits at most 1000
+            // samples, so payload size is bounded independently of history.
+            evaluatedPeriodRows=evaluated.ClosedPeriods.Count;
+            if(evaluated.ClosedPeriods.Count>0)
             {
-                await using var insert=new SqlCommand("""
-                    INSERT activity.ClosedPeriod(EffectId,OperationId,MachineId,StreamKeyBytes,MappingId,
-                        QualificationHash,InstanceId,StartSequence,EndSequence,State,StartedAt,
-                        EndedAt,DurationTicks,StartRawValue,EndRawValue)
-                    VALUES(@effect,@operation,@machine,@stream,@mapping,@qual,@instance,@start,@end,
-                        @state,@started,@ended,@ticks,@startValue,@endValue)
-                    """,c,t);
-                BindScope(insert,identity);
-                insert.Parameters.Add("@effect",SqlDbType.UniqueIdentifier).Value=PeriodEffect(identity,period);
-                insert.Parameters.Add("@operation",SqlDbType.UniqueIdentifier).Value=operationId;
-                insert.Parameters.Add("@qual",SqlDbType.Binary,32).Value=oldHash;
-                insert.Parameters.Add("@instance",SqlDbType.Decimal).Value=Convert.ToDecimal(period.InstanceId,CultureInfo.InvariantCulture);
-                insert.Parameters.Add("@start",SqlDbType.Decimal).Value=Convert.ToDecimal(period.StartSequence,CultureInfo.InvariantCulture);
-                insert.Parameters.Add("@end",SqlDbType.Decimal).Value=Convert.ToDecimal(period.EndSequence,CultureInfo.InvariantCulture);
-                insert.Parameters.Add("@state",SqlDbType.VarChar,20).Value=period.State.ToString();
-                insert.Parameters.Add("@started",SqlDbType.DateTimeOffset).Value=period.StartedAt;
-                insert.Parameters.Add("@ended",SqlDbType.DateTimeOffset).Value=period.EndedAt;
-                insert.Parameters.Add("@ticks",SqlDbType.BigInt).Value=period.DurationTicks;
-                insert.Parameters.Add("@startValue",SqlDbType.NVarChar,-1).Value=period.StartRawValue;
-                insert.Parameters.Add("@endValue",SqlDbType.NVarChar,-1).Value=period.EndRawValue;
-                var insertStarted=Stopwatch.GetTimestamp();
-                await insert.ExecuteNonQueryAsync(ct);
-                insertElapsed+=Stopwatch.GetElapsedTime(insertStarted);
-                periodInsertCommands++;
+                const int periodPageSize=100;
+                for(var offset=0;offset<evaluated.ClosedPeriods.Count;offset+=periodPageSize)
+                {
+                    var page=evaluated.ClosedPeriods.Skip(offset).Take(periodPageSize)
+                        .Select(period=>new {
+                            effect=PeriodEffect(identity,period),
+                            instance=period.InstanceId.ToString(CultureInfo.InvariantCulture),
+                            start=period.StartSequence.ToString(CultureInfo.InvariantCulture),
+                            end=period.EndSequence.ToString(CultureInfo.InvariantCulture),
+                            state=period.State.ToString(),
+                            started=period.StartedAt.ToString("O",CultureInfo.InvariantCulture),
+                            ended=period.EndedAt.ToString("O",CultureInfo.InvariantCulture),
+                            ticks=period.DurationTicks,
+                            startValue=period.StartRawValue,endValue=period.EndRawValue
+                        }).ToArray();
+                    var payload=JsonSerializer.Serialize(page);
+                    await using var insert=new SqlCommand("""
+                        INSERT activity.ClosedPeriod(
+                            EffectId,OperationId,MachineId,StreamKeyBytes,MappingId,
+                            QualificationHash,InstanceId,StartSequence,EndSequence,
+                            State,StartedAt,EndedAt,DurationTicks,StartRawValue,EndRawValue)
+                        SELECT r.EffectId,@operation,@machine,@stream,@mapping,@qual,
+                            r.InstanceId,r.StartSequence,r.EndSequence,r.State,
+                            r.StartedAt,r.EndedAt,r.DurationTicks,r.StartRawValue,r.EndRawValue
+                        FROM OPENJSON(@periods) WITH(
+                            EffectId uniqueidentifier '$.effect',
+                            InstanceId decimal(20,0) '$.instance',
+                            StartSequence decimal(20,0) '$.start',
+                            EndSequence decimal(20,0) '$.end',
+                            State varchar(20) '$.state',
+                            StartedAt datetimeoffset(7) '$.started',
+                            EndedAt datetimeoffset(7) '$.ended',
+                            DurationTicks bigint '$.ticks',
+                            StartRawValue nvarchar(max) '$.startValue',
+                            EndRawValue nvarchar(max) '$.endValue'
+                        ) AS r;
+                        """,c,t);
+                    BindScope(insert,identity);
+                    insert.Parameters.Add("@operation",SqlDbType.UniqueIdentifier).Value=operationId;
+                    insert.Parameters.Add("@qual",SqlDbType.Binary,32).Value=oldHash;
+                    insert.Parameters.Add("@periods",SqlDbType.NVarChar,-1).Value=payload;
+                    var insertStarted=Stopwatch.GetTimestamp();
+                    await insert.ExecuteNonQueryAsync(ct);
+                    insertElapsed+=Stopwatch.GetElapsedTime(insertStarted);
+                    periodInsertCommands++;
+                }
             }
             if(injectRollback)throw new InvalidOperationException("Controlled atomic activity rollback fixture.");
             await t.CommitAsync(ct);
@@ -232,6 +260,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             if(activity is not null)
             {
                 activity.SetTag("activity.sql.period.insert.commands",periodInsertCommands);
+                activity.SetTag("activity.sql.period.insert.rows",evaluatedPeriodRows);
                 activity.SetTag("activity.sql.period.insert.elapsed.ms",insertElapsed.TotalMilliseconds);
                 activity.SetTag("activity.sql.apply.elapsed.ms",Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 if(c.State==ConnectionState.Open)
