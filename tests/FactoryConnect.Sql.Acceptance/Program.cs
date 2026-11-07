@@ -153,7 +153,7 @@ try
     var ingestionDb=await NewDatabase();
     var ingestionTarget=target with {ConnectionString=ingestionDb.ConnectionString,Database=ingestionDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(ingestionTarget);
-    passed += await MtConnectIngestionAcceptance.Run(ingestionTarget with{InitializeEmpty=false});
+    passed += await MtConnectIngestionAcceptance.Run(ingestionTarget with{InitializeEmpty=false},measureActivityHistory:true);
     var activityDb=await NewDatabase();
     var activityTarget=target with {ConnectionString=activityDb.ConnectionString,Database=activityDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(activityTarget);

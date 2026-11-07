@@ -88,8 +88,11 @@ public sealed class SqlActivityProcessorStore(string connectionString)
            mappingId==Guid.Empty||operationId==Guid.Empty||
            string.IsNullOrWhiteSpace(streamKey)||afterSequence>=throughSequence)
             throw new ArgumentException("Exact accepted evidence operation and frontier required.");
+        using var acceptedActivity=Diagnostics.StartActivity("activity.accepted.apply",ActivityKind.Internal);
         var resolver=new SqlApprovedActivityMappingResolver(connectionString,installationId);
-        var approved=await resolver.ResolveAsync(siteId,machineId,mappingId,streamKey,ct);
+        ApprovedActivitySignal approved;
+        using(Diagnostics.StartActivity("activity.mapping.discover",ActivityKind.Internal))
+            approved=await resolver.ResolveAsync(siteId,machineId,mappingId,streamKey,ct);
         var discovery=ActivityQualificationIdentity.From(
             approved.Signal,"accepted-observation-discovery-only");
         var rows=await new SqlAcceptedActivityEvidenceReader(connectionString)
@@ -173,6 +176,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             }
             if(accepted is not null)
             {
+                using var verification=Diagnostics.StartActivity("activity.sql.source.verify",ActivityKind.Internal);
                 // Re-resolve on the *writer connection and transaction*, after
                 // both potentially blocking gates. The SQL query obtains its
                 // eligibility clock after the waits, and its locks are held
@@ -245,7 +249,8 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             var evaluationSamples=savedSamples.ToArray();
             if(accepted is not null)
             {
-                await VerifyPredecessorAsync(c,t,identity,checkpoint,accepted,ct);
+                using(Diagnostics.StartActivity("activity.sql.predecessor.verify",ActivityKind.Internal))
+                    await VerifyPredecessorAsync(c,t,identity,checkpoint,accepted,ct);
                 var prior=checkpoint.AcceptedSource?.LastObservation;
                 var first=accepted.Rows[0];
                 // A verified predecessor permits only the existing same-batch
@@ -270,6 +275,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                         accepted.Approved.PackageRevisionId,accepted.Approved.AcknowledgementId,
                         accepted.Approved.PackageSha256,accepted.Rows[^1],anchorRow) } };
             }
+            using var publication=Diagnostics.StartActivity("activity.sql.publish",ActivityKind.Internal);
             var resultBytes=JsonSerializer.SerializeToUtf8Bytes(
                 new ActivityDurableResult(evaluated.Checkpoint,evaluated.ClosedPeriods,false));
             var snapshot=JsonSerializer.Serialize(evaluated.Checkpoint);

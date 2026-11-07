@@ -23,7 +23,7 @@ internal static class MtConnectIngestionAcceptance
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
             => assertion=="sql-evidence-proof" ? Task.FromResult(identity) : throw new SecurityDeniedException();
     }
-    internal static async Task<int> Run(InstallationTarget target)
+    internal static async Task<int> Run(InstallationTarget target,bool measureActivityHistory=false)
     {
         var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
         var now=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!;
@@ -655,6 +655,28 @@ internal static class MtConnectIngestionAcceptance
         var processPending=await ProcessSource(40);
         count+=await ActivityProcessRestartAcceptance.RunAsync(target,site,currentActivity,
             eligibleCut.Qualification,processOpening,processCrossBatch,processPending);
+        if(measureActivityHistory)
+        {
+            // Supply a bounded source-document factory; history setup still uses
+            // the real HTTP/mTLS ingestion path and original accepted bytes.
+            var historyBatch=0;
+            async Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>> HistorySource()
+            {
+                var sourceContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+                var sourceFrom=sourceContext.Cursor!.NextSequence;
+                var sourceStart=currentActivity.EffectiveFrom.AddSeconds(60).AddMilliseconds(4L*historyBatch++);
+                agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+                    activityStart:sourceStart,activityStep:TimeSpan.FromMilliseconds(1)),null);
+                var frame=await client.AcquireAsync(agent.Endpoint,Device,sourceFrom,100);
+                await Transport(await Request(frame));
+                // Do not retain setup-only security Activity objects per historical batch.
+                lock(activities)activities.Clear();
+                return await acceptedReader.ReadBoundedAsync(site,eligibleCut.Qualification,
+                    frame.InstanceId,sourceFrom-1,frame.NextSequence-1,100);
+            }
+            count+=await ActivityHistoryMeasurementAcceptance.RunAsync(target,site,currentActivity,
+                eligibleCut.Qualification,processPending,HistorySource);
+        }
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.
@@ -813,7 +835,7 @@ internal static class MtConnectIngestionAcceptance
         async Task<bool> Race(MtConnectIngestionRequest r){try{await writer.IngestMtConnectAsync(pair.Channel,r);return true;}catch(SecurityConflictException){return false;}}
         async Task Conflict(Func<Task> action,string name){try{await action();}catch(SecurityConflictException){Check(true,name);return;}throw new InvalidOperationException(name);}
         async Task<long> Count(string table)=>Convert.ToInt64(await Scalar("SELECT COUNT_BIG(*) FROM "+table));
-        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false,bool activity=false,DateTimeOffset? activityStart=null,bool activityRepeats=false)
+        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false,bool activity=false,DateTimeOffset? activityStart=null,bool activityRepeats=false,TimeSpan? activityStep=null)
         {
             var samples=Enumerable.Range(0,count).Where(i=>!activity || (i is not (1 or 3) && (!activityRepeats || i!=5)))
                 .Select(i=>{
@@ -829,7 +851,7 @@ internal static class MtConnectIngestionAcceptance
             {
                 component.Add(new XElement("Events",(activityRepeats?new[]{1,3,5}:new[]{1,3}).Where(i=>i<count).Select(i=>
                     new XElement("Execution",new XAttribute("dataItemId","execution"),
-                        new XAttribute("timestamp",(activityStart?.AddSeconds(i-1)??now.AddSeconds(i)).ToString("O",CultureInfo.InvariantCulture)),
+                        new XAttribute("timestamp",(activityStart?.AddTicks((activityStep??TimeSpan.FromSeconds(1)).Ticks*(i-1))??now.AddSeconds(i)).ToString("O",CultureInfo.InvariantCulture)),
                         new XAttribute("sequence",from+(ulong)i),(i==1 || (activityRepeats && i==3))?"ACTIVE":"READY"))));
             }
             var xml=new XElement("MTConnectStreams",
