@@ -62,6 +62,41 @@ internal static class MtConnectIngestionAcceptance
         var enable=new MachineEnableProposalRequest(Guid.NewGuid(),Guid.NewGuid(),site,machine,null,0,await Epoch(),now.AddMinutes(10),"enable ingestion fixture");await service.ProposeMachineEnableAsync(token,enable);await service.ApproveMachineEnableAsync(reviewToken,Guid.NewGuid(),enable.ProposalId,Guid.NewGuid(),site,machine,await Epoch(),"independent enable");
         var activation=await Intent();await Denied(()=>writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream),"pending activation without acknowledgement cannot ingest");
         var ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);
+        var approvedActivityMapping=package.Machines[0].Signals.Single(
+            x=>x.SemanticKey=="machine-activity");
+        var mappingResolver=new SqlApprovedActivityMappingResolver(
+            target.ConnectionString,target.InstallationId);
+        var resolved=await mappingResolver.ResolveAsync(
+            site,machine,approvedActivityMapping.MappingId,Stream);
+        Check(resolved.PackageRevisionId==package.RevisionId &&
+            resolved.AcknowledgementId==ack.AcknowledgementId &&
+            resolved.PackageSha256==Convert.ToHexString(PackageCanonicalizer.Hash(package)) &&
+            resolved.Signal.SourceAddress=="execution" &&
+            resolved.Signal.ExactValues.Count==2 &&
+            resolved.Signal.ExactValues["ACTIVE"]==ActivityState.Running &&
+            resolved.Signal.ExactValues["READY"]==ActivityState.Idle,
+            "approved activity state mapping resolves exact acknowledged package values");
+        try
+        {
+            await mappingResolver.ResolveAsync(site,machine,
+                package.Machines[0].Signals.Single(x=>x.SemanticKey=="counter-upper")
+                    .MappingId,Stream);
+            throw new InvalidOperationException("Counter mapping was interpreted as activity.");
+        }
+        catch(InvalidDataException)
+        {
+            Check(true,"approved counter normalization cannot be interpreted as machine activity");
+        }
+        try
+        {
+            await mappingResolver.ResolveAsync(site,machine,
+                approvedActivityMapping.MappingId,Stream.ToUpperInvariant());
+            throw new InvalidOperationException("Folded mapping stream accepted.");
+        }
+        catch(InvalidDataException)
+        {
+            Check(true,"mapping resolution rejects case-folded source stream");
+        }
         await using var agent=new MtConnectAgentFixture();using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(5)};var client=new MtConnectSampleClient(http);
         var stamp=now.ToString("O",CultureInfo.InvariantCulture);agent.Reply=(from,count)=>(200,Frame(from,Math.Min(count,2)),null);
         var context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);Check(context.Cursor is null&&context.AcknowledgementId==ack.AcknowledgementId,"fresh acknowledged stream has explicit retained-window bootstrap context");
@@ -410,7 +445,7 @@ internal static class MtConnectIngestionAcceptance
             var timezone=Guid.NewGuid();var schedule=Guid.NewGuid();var breaks=Guid.NewGuid();var bytes=Encoding.UTF8.GetBytes("{}");var hash=SHA256.HashData(bytes);
             await Exec("INSERT configuration.SiteTimezoneRevision(TimezoneRevisionId,SiteId,IanaZoneId,TzdbRelease,ResolverVersion,GapPolicy,FoldPolicy,RulesBytes,RulesSha256,CanonicalBytes,ContentHash) VALUES(@timezone,@site,N'Etc/UTC','fixture','fixture','reject','reject',@bytes,@hash,@bytes,@hash); INSERT configuration.SharedScheduleRevision VALUES(@schedule,@site,@bytes,@hash); INSERT configuration.SharedBreakPolicyRevision VALUES(@break,@site,@bytes,@hash);",("@timezone",timezone),("@schedule",schedule),("@break",breaks),("@site",site),("@bytes",bytes),("@hash",hash));
             var machines=new List<MachineConfiguration>();
-            for(var i=0;i<size;i++){var id=i==0?machine:Guid.NewGuid();if(i>0)await Exec("INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(@machine,@site,N'Batch fixture')",("@machine",id),("@site",site));machines.Add(new(id,line,now.AddMinutes(-5),null,new(schedule,hash),new(breaks,hash),[new(Guid.NewGuid(),"counter-upper","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("Counter"),"identity-v1"),new(Guid.NewGuid(),"counter-lower","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("counter"),"identity-v1")],["counter-reading"]));}
+            for(var i=0;i<size;i++){var id=i==0?machine:Guid.NewGuid();if(i>0)await Exec("INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(@machine,@site,N'Batch fixture')",("@machine",id),("@site",site));machines.Add(new(id,line,now.AddMinutes(-5),null,new(schedule,hash),new(breaks,hash),[new(Guid.NewGuid(),"counter-upper","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("Counter"),"identity-v1"),new(Guid.NewGuid(),"counter-lower","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("counter"),"identity-v1"),new(Guid.NewGuid(),"machine-activity","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("execution"),"activity-state-v1|ACTIVE=Running|READY=Idle")],["counter-reading"]));}
             var package=new PackageDefinition(Guid.NewGuid(),Guid.NewGuid(),1,site,new(timezone,hash),machines);
             await service.SubmitConfigurationAsync(token,Guid.NewGuid(),package,await Epoch(),"operational fixture package");var review=Guid.NewGuid();await service.ReviewConfigurationAsync(reviewToken,new(Guid.NewGuid(),review,site,package.RevisionId,PackageCanonicalizer.Hash(package),true,await Epoch(),"independent package review"));return(package,review);
         }
