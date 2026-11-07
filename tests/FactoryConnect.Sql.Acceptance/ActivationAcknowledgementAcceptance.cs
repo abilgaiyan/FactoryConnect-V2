@@ -186,6 +186,7 @@ internal static class ActivationAcknowledgementAcceptance
                 INSERT configuration.SharedScheduleRevision VALUES(@schedule,@site,@bytes,@hash); INSERT configuration.SharedBreakPolicyRevision VALUES(@break,@site,@bytes,@hash);
                 INSERT [master].Machine(MachineId,SiteId,DisplayName) SELECT id,@site,N'Additional fixture machine' FROM OPENJSON(@machines) WITH(id uniqueidentifier '$') WHERE id<>@machine;
                 """,("@timezone",timezone),("@schedule",schedule),("@break",breaks),("@site",site),("@bytes",bytes),("@hash",hash),("@machines",JsonSerializer.Serialize(ids)),("@machine",machine));
+            await MachineOperationalFixture.Enable(c,site,ids,admin,rootToken,reviewer,now);
             var machines=ids.Select(id=>new MachineConfiguration(id,line,now.AddMinutes(-5),null,new(schedule,hash),new(breaks,hash),[new(Guid.NewGuid(),"counter","fixture","fixture:ack","opaque",[65],"identity-v1")],["counter-reading"])).ToArray();
             var package=new PackageDefinition(Guid.NewGuid(),Guid.NewGuid(),1,site,new(timezone,hash),machines);packages[package.RevisionId]=package;
             await service.SubmitConfigurationAsync(token,Guid.NewGuid(),package,await Epoch(),"submit acknowledgement fixture");var review=Guid.NewGuid();
@@ -196,7 +197,7 @@ internal static class ActivationAcknowledgementAcceptance
             var request=new ActivationRequestCommand(Guid.NewGuid(),Guid.NewGuid(),site,machine,package.RevisionId,PackageCanonicalizer.Hash(package),review,f.Payload.RuntimeIdentityId,assignment,assignmentGeneration,credentialGeneration,effectiveFrom??now.AddMinutes(-1),effectiveTo,generation,prior,await Epoch(),"request fixture runtime application");
             await service.RequestActivationAsync(token,request);return request with{ExpectedActivationGeneration=generation+1};
         }
-        ActivationAcknowledgementRequest Ack(ActivationRequestCommand request)=>new(Guid.NewGuid(),Guid.NewGuid(),site,machine,request.ActivationId,request.ExpectedActivationGeneration,request.PackageRevisionId,request.ContentHash.ToArray(),request.ApprovalReviewId,request.RuntimeIdentityId,request.AssignmentId,request.AssignmentGeneration,request.CredentialGeneration,"runtime confirms exact package application");
+        ActivationAcknowledgementRequest Ack(ActivationRequestCommand request)=>new(Guid.NewGuid(),Guid.NewGuid(),site,machine,request.ActivationId,request.ExpectedActivationGeneration,request.PackageRevisionId,request.ContentHash.ToArray(),request.ApprovalReviewId,request.RuntimeIdentityId,request.AssignmentId,request.AssignmentGeneration,request.CredentialGeneration,1,"runtime confirms exact package application");
         async Task<bool> Attempt(ActivationAcknowledgementRequest value,RuntimeMtlsChannel channel){try{await service.AcknowledgeActivationAsync(channel,value);return true;}catch(SecurityConflictException){return false;}}
         async Task<ActivationAcknowledgementRequest> ThroughWire(ActivationAcknowledgementRequest value)
         {

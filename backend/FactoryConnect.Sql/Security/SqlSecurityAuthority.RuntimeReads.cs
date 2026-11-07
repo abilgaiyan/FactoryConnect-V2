@@ -6,7 +6,7 @@ using Microsoft.Data.SqlClient;
 
 namespace FactoryConnect.Sql.Security;
 
-public sealed record RuntimeMachineAuthority(Guid RuntimeIdentityId,Guid AssignmentId,long AssignmentGeneration,long CredentialGeneration,Guid SiteId,Guid MachineId);
+public sealed record RuntimeMachineAuthority(Guid RuntimeIdentityId,Guid AssignmentId,long AssignmentGeneration,long CredentialGeneration,Guid SiteId,Guid MachineId,long OperationalGeneration);
 
 public sealed partial class SqlSecurityAuthority
 {
@@ -33,7 +33,7 @@ public sealed partial class SqlSecurityAuthority
             if(Stopwatch.GetElapsedTime(evidence.CheckedAt)>TimeSpan.FromSeconds(5)||evidence.RootFrom>now||evidence.RootUntil<=now)throw new SecurityDeniedException();
             RuntimeMachineAuthority authority;
             await using(var q=Command(c,t,"""
-                SELECT b.RuntimeIdentityId,a.AssignmentId,a.AssignmentGeneration,b.CredentialGeneration,b.CertificateDer
+                SELECT b.RuntimeIdentityId,a.AssignmentId,a.AssignmentGeneration,b.CredentialGeneration,b.CertificateDer,o.Generation
                 FROM security.RuntimeCertificateBinding b
                 JOIN security.RuntimeCredentialState currentCredential ON currentCredential.RuntimeIdentityId=b.RuntimeIdentityId AND currentCredential.CredentialGeneration=b.CredentialGeneration
                 JOIN security.RuntimeCredentialGeneration g ON g.RuntimeIdentityId=b.RuntimeIdentityId AND g.CredentialGeneration=b.CredentialGeneration
@@ -42,6 +42,8 @@ public sealed partial class SqlSecurityAuthority
                 JOIN configuration.RuntimeAssignmentState s ON s.RuntimeIdentityId=b.RuntimeIdentityId AND s.SiteId=@site AND s.MachineId=@machine
                 JOIN configuration.RuntimeAssignment a ON a.AssignmentId=s.AssignmentId AND a.AssignmentGeneration=s.AssignmentGeneration
                 JOIN [master].Machine m ON m.MachineId=s.MachineId AND m.SiteId=s.SiteId
+                JOIN configuration.MachineOperationalState operational ON operational.SiteId=m.SiteId AND operational.MachineId=m.MachineId
+                JOIN configuration.MachineOperationalTransition o ON o.StateId=operational.StateId AND o.Generation=operational.Generation AND o.Status='enabled' AND o.EffectiveFrom<=@now
                 JOIN [master].Site site ON site.SiteId=s.SiteId
                 WHERE b.CertificateHash=@certificateHash AND b.TrustAnchorHash=@anchorHash AND g.CredentialBindingHash=@keyHash
                     AND b.ValidFrom<=@now AND b.ExpiresAt>@now AND g.ValidFrom<=@now AND g.ExpiresAt>@now
@@ -58,7 +60,7 @@ public sealed partial class SqlSecurityAuthority
                 q.Parameters.Add("@keyHash",SqlDbType.Binary,32).Value=evidence.KeyHash;
                 await using var r=await q.ExecuteReaderAsync(ct);
                 if(!await r.ReadAsync(ct)||!((byte[])r[4]).AsSpan().SequenceEqual(evidence.Certificate))throw new SecurityDeniedException();
-                authority=new(r.GetGuid(0),r.GetGuid(1),r.GetInt64(2),r.GetInt64(3),siteId,machineId);
+                authority=new(r.GetGuid(0),r.GetGuid(1),r.GetInt64(2),r.GetInt64(3),siteId,machineId,r.GetInt64(5));
                 if(await r.ReadAsync(ct))throw new SecurityDeniedException();
             }
         return authority;

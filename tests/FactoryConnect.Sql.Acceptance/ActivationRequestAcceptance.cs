@@ -124,7 +124,7 @@ internal static class ActivationRequestAcceptance
         {
             ActivitySource.AddActivityListener(listener);await service.RequestActivationAsync(tokens[controller],await Request(single));var small=measurements.Single();measurements.Clear();
             await service.RequestActivationAsync(tokens[controller],await Request(large));var big=measurements.Single();
-            Check(small.Trips>0&&small.Trips==big.Trips&&big.Trips<=24,"activation SQL roundtrip count is constant for 1- and 100-machine approved packages");
+            Check(small.Trips>0&&small.Trips==big.Trips&&big.Trips<=25,"activation SQL roundtrip count is constant for 1- and 100-machine approved packages");
             Check(small.Locks==4&&big.Locks==4,"per-machine intent locks only its three pins and target machine");
             Check(big.Elapsed<5000,"selected-machine activation request stays within CI five-second ceiling");
             Console.WriteLine($"MEASURE: activation request packageMachines=100 requestedMachines=1 roundtrips={big.Trips} locks={big.Locks} elapsedMs={big.Elapsed:F2}; synthetic SQL, not runtime activation capacity");
@@ -196,6 +196,7 @@ internal static class ActivationRequestAcceptance
                 INSERT configuration.SharedBreakPolicyRevision VALUES(@break,@site,@bytes,@hash);
                 INSERT [master].Machine(MachineId,SiteId,DisplayName) SELECT machineId,@site,N'Synthetic machine' FROM OPENJSON(@pairs) WITH(machineId uniqueidentifier '$.machineId');
                 """,("@timezone",timezone),("@schedule",schedule),("@break",breaks),("@site",site),("@bytes",policyBytes),("@hash",policyHash),("@pairs",JsonSerializer.Serialize(pairs)));
+            await MachineOperationalFixture.Enable(c,site,pairs.Select(pair=>pair.machineId).ToArray(),admin,tokens[admin],reviewer,now);
             var machines=pairs.Select(pair=>new MachineConfiguration(pair.machineId,line,now.AddHours(-1),packageUntil,new(schedule,policyHash),new(breaks,policyHash),
                 [new(Guid.NewGuid(),"counter","fixture","fixture:runtime","opaque",[0,65,255,32],"identity-v1")],["counter-reading"])).ToArray();
             var package=new PackageDefinition(Guid.NewGuid(),Guid.NewGuid(),1,site,new(timezone,policyHash),machines);

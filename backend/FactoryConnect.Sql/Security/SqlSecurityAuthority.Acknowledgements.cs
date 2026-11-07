@@ -6,7 +6,7 @@ namespace FactoryConnect.Sql.Security;
 
 public sealed record ActivationAcknowledgementRequest(Guid OperationId,Guid AcknowledgementId,Guid SiteId,Guid MachineId,
     Guid ActivationId,long ActivationGeneration,Guid PackageRevisionId,byte[] ContentHash,Guid ApprovalReviewId,
-    Guid RuntimeIdentityId,Guid AssignmentId,long AssignmentGeneration,long CredentialGeneration,string Reason);
+    Guid RuntimeIdentityId,Guid AssignmentId,long AssignmentGeneration,long CredentialGeneration,long OperationalGeneration,string Reason);
 
 public sealed partial class SqlSecurityAuthority
 {
@@ -14,12 +14,12 @@ public sealed partial class SqlSecurityAuthority
     {
         ValidateIdentityChange(request.OperationId,request.AcknowledgementId,0,request.Reason);
         if(new[]{request.SiteId,request.MachineId,request.ActivationId,request.PackageRevisionId,request.ApprovalReviewId,request.RuntimeIdentityId,request.AssignmentId}.Any(id=>id==Guid.Empty)||
-            request.ActivationGeneration<=0||request.AssignmentGeneration<=0||request.CredentialGeneration<=0||request.ContentHash.Length!=32)throw new ArgumentException("Exact acknowledgement identities and generations required.");
+            request.ActivationGeneration<=0||request.AssignmentGeneration<=0||request.CredentialGeneration<=0||request.OperationalGeneration<=0||request.ContentHash.Length!=32)throw new ArgumentException("Exact acknowledgement identities and generations required.");
         ArgumentNullException.ThrowIfNull(channel);var hash=request.ContentHash.ToArray();var evidence=channel.Revalidate(ct);
         var certificateHash=SHA256.HashData(evidence.Certificate);
         var bytes=JsonSerializer.SerializeToUtf8Bytes(new{version=1,action="acknowledge-activation",acknowledgementId=request.AcknowledgementId,siteId=request.SiteId,machineId=request.MachineId,activationId=request.ActivationId,
             activationGeneration=Decimal(request.ActivationGeneration),packageRevisionId=request.PackageRevisionId,contentHash=Convert.ToHexString(hash),approvalReviewId=request.ApprovalReviewId,runtimeIdentityId=request.RuntimeIdentityId,assignmentId=request.AssignmentId,
-            assignmentGeneration=Decimal(request.AssignmentGeneration),credentialGeneration=Decimal(request.CredentialGeneration),certificateHash=Convert.ToHexString(certificateHash),reason=request.Reason});
+            assignmentGeneration=Decimal(request.AssignmentGeneration),credentialGeneration=Decimal(request.CredentialGeneration),operationalGeneration=Decimal(request.OperationalGeneration),certificateHash=Convert.ToHexString(certificateHash),reason=request.Reason});
         return Transaction(request.OperationId,true,async(c,t)=>
         {
             Activity.Current?.SetTag("security.runtime.acknowledgement",true);
@@ -35,12 +35,12 @@ public sealed partial class SqlSecurityAuthority
                 JOIN configuration.PackageReview v ON v.ReviewId=a.ReviewId AND v.Decision='approved' AND v.PackageRevisionId=p.PackageRevisionId AND v.ContentHash=p.ContentHash
                 WHERE a.ActivationId=@activation AND a.SiteId=@site AND a.MachineId=@machine AND a.ActivationGeneration=@generation
                     AND a.PackageRevisionId=@revision AND a.ContentHash=@hash AND a.ReviewId=@review
-                    AND a.RuntimeIdentityId=@runtime AND a.AssignmentId=@assignment AND a.AssignmentGeneration=@assignmentGeneration AND a.CredentialGeneration=@credentialGeneration AND p.SubmittedAt IS NOT NULL;
+                    AND a.RuntimeIdentityId=@runtime AND a.AssignmentId=@assignment AND a.AssignmentGeneration=@assignmentGeneration AND a.CredentialGeneration=@credentialGeneration AND a.OperationalGeneration=@operationalGeneration AND p.SubmittedAt IS NOT NULL;
                 """))
             {
                 Add(q,("@activation",request.ActivationId),("@site",request.SiteId),("@machine",request.MachineId),("@generation",request.ActivationGeneration),
                     ("@revision",request.PackageRevisionId),("@hash",hash),("@review",request.ApprovalReviewId),("@runtime",request.RuntimeIdentityId),("@assignment",request.AssignmentId),
-                    ("@assignmentGeneration",request.AssignmentGeneration),("@credentialGeneration",request.CredentialGeneration));
+                    ("@assignmentGeneration",request.AssignmentGeneration),("@credentialGeneration",request.CredentialGeneration),("@operationalGeneration",request.OperationalGeneration));
                 await using var r=await q.ExecuteReaderAsync(ct);if(!await r.ReadAsync(ct))throw new SecurityDeniedException();
                 canonical=(byte[])r[0];from=r.GetDateTimeOffset(1);until=r.IsDBNull(2)?null:r.GetDateTimeOffset(2);
             }
@@ -75,13 +75,13 @@ public sealed partial class SqlSecurityAuthority
                 if(Convert.ToInt32(await q.ExecuteScalarAsync(ct))!=0)throw new SecurityConflictException();
             }
             var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId=request.OperationId,acknowledgementId=request.AcknowledgementId,activationId=request.ActivationId,
-                activationGeneration=Decimal(request.ActivationGeneration),appliedFrom=final.Now,effectiveTo=until,status="runtime-acknowledgement-recorded-not-connectivity"});
+                activationGeneration=Decimal(request.ActivationGeneration),operationalGeneration=Decimal(request.OperationalGeneration),appliedFrom=final.Now,effectiveTo=until,status="runtime-acknowledgement-recorded-not-connectivity"});
             await Exec(c,t,"""
                 INSERT security.SecurityOperation(OperationId,ActorPrincipalId,RequestBytes,RequestHash,ScopeKind,SiteId,MachineId,ResultBytes)
                     VALUES(@op,@runtime,@bytes,@requestHash,'M',@site,@machine,@result);
                 INSERT configuration.RuntimeActivationAcknowledgement(AcknowledgementId,SiteId,MachineId,ActivationId,ActivationGeneration,PackageRevisionId,ContentHash,ReviewId,
-                    RuntimeIdentityId,AssignmentId,AssignmentGeneration,CredentialGeneration,CertificateHash,AppliedFrom,EffectiveTo,OperationId)
-                    VALUES(@ack,@site,@machine,@activation,@generation,@revision,@hash,@review,@runtime,@assignment,@assignmentGeneration,@credentialGeneration,@certificateHash,@now,@until,@op);
+                    RuntimeIdentityId,AssignmentId,AssignmentGeneration,CredentialGeneration,CertificateHash,AppliedFrom,EffectiveTo,OperationId,OperationalGeneration)
+                    VALUES(@ack,@site,@machine,@activation,@generation,@revision,@hash,@review,@runtime,@assignment,@assignmentGeneration,@credentialGeneration,@certificateHash,@now,@until,@op,@operationalGeneration);
                 UPDATE configuration.MachineAcknowledgementHead SET AcknowledgementId=@ack,ActivationGeneration=@generation WHERE SiteId=@site AND MachineId=@machine;
                 IF @@ROWCOUNT=0 INSERT configuration.MachineAcknowledgementHead(SiteId,MachineId,AcknowledgementId,ActivationGeneration) VALUES(@site,@machine,@ack,@generation);
                 INSERT security.SecurityAudit(AuditId,OperationId,ActorPrincipalId,Action,Reason) VALUES(@audit,@op,@runtime,'runtime-acknowledge-activation',@reason);
@@ -89,7 +89,7 @@ public sealed partial class SqlSecurityAuthority
                 """,ct,("@op",request.OperationId),("@runtime",actor.RuntimeIdentityId),("@bytes",bytes),("@requestHash",SHA256.HashData(bytes)),("@site",request.SiteId),("@machine",request.MachineId),("@result",result),
                 ("@ack",request.AcknowledgementId),("@activation",request.ActivationId),("@generation",request.ActivationGeneration),("@revision",request.PackageRevisionId),("@hash",hash),("@review",request.ApprovalReviewId),
                 ("@assignment",request.AssignmentId),("@assignmentGeneration",request.AssignmentGeneration),("@credentialGeneration",request.CredentialGeneration),("@certificateHash",certificateHash),("@now",final.Now),
-                ("@until",(object?)until??DBNull.Value),("@audit",Guid.NewGuid()),("@reason",request.Reason));
+                ("@until",(object?)until??DBNull.Value),("@operationalGeneration",request.OperationalGeneration),("@audit",Guid.NewGuid()),("@reason",request.Reason));
             return result;
         },ct);
     }
@@ -104,12 +104,12 @@ public sealed partial class SqlSecurityAuthority
             using var parsed=JsonDocument.Parse(completed.Request);var root=parsed.RootElement;
             if(!root.TryGetProperty("action",out var action)||action.GetString()!="acknowledge-activation"||
                 root.GetProperty("assignmentId").GetGuid()!=authority.AssignmentId||root.GetProperty("assignmentGeneration").GetString()!=Decimal(authority.AssignmentGeneration)||
-                root.GetProperty("credentialGeneration").GetString()!=Decimal(authority.CredentialGeneration))throw new SecurityDeniedException();return completed.Result;
+                root.GetProperty("credentialGeneration").GetString()!=Decimal(authority.CredentialGeneration)||(!root.TryGetProperty("operationalGeneration",out var operating)||operating.GetString()!=Decimal(authority.OperationalGeneration)))throw new SecurityDeniedException();return completed.Result;
         },ct);
     }
     private static void MatchAcknowledgingRuntime(ActivationAcknowledgementRequest request,RuntimeMachineAuthority authority)
     {
         if(request.RuntimeIdentityId!=authority.RuntimeIdentityId||request.AssignmentId!=authority.AssignmentId||
-            request.AssignmentGeneration!=authority.AssignmentGeneration||request.CredentialGeneration!=authority.CredentialGeneration)throw new SecurityDeniedException();
+            request.AssignmentGeneration!=authority.AssignmentGeneration||request.CredentialGeneration!=authority.CredentialGeneration||request.OperationalGeneration!=authority.OperationalGeneration)throw new SecurityDeniedException();
     }
 }

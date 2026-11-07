@@ -36,6 +36,7 @@ internal static class RuntimeMtlsSqlAcceptance
             await service.GrantPermissionAsync(rootToken,new(Guid.NewGuid(),Guid.NewGuid(),manager,parent,permission,permission=="runtime.assign"?AuthorizationScope.Machine(site,machine):AuthorizationScope.Installation,true,false,now,now.AddDays(1),await Epoch(),"grant explicit fixture authority"));
         }
         await Exec("INSERT security.SessionAuthority VALUES(@token,@actor,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()),N'fixture-only',4)",("@token",token),("@actor",manager));
+        await MachineOperationalFixture.Enable(c,site,[machine,otherMachine],admin,rootToken,manager,now);
         await using var pair=await fixture.Connect();
         Check(typeof(RuntimeMtlsChannel).IsSealed&&typeof(RuntimeMtlsChannel).GetConstructors().Length==0,"authenticated channel cannot be caller-constructed or subclassed");
         await Denied(()=>Read(),"valid CA and handshake do not replace SQL certificate enrollment");
