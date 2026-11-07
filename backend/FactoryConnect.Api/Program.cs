@@ -31,10 +31,19 @@ app.MapPost("/api/security/v2/human-sessions", async (
     string? assertion;
     try
     {
-        using var reader = new StreamReader(http.Request.Body);
-        assertion = await reader.ReadToEndAsync(ct);
+        // Bound the actual streamed body, including chunked requests without Content-Length.
+        using var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+        int read;
+        while ((read = await http.Request.Body.ReadAsync(chunk, ct)) != 0)
+        {
+            if (buffer.Length + read > 65536)
+                return Results.Problem(statusCode: 413, title: "Authentication assertion too large");
+            buffer.Write(chunk, 0, read);
+        }
+        assertion = new System.Text.UTF8Encoding(false, true).GetString(buffer.ToArray());
     }
-    catch (IOException) { return Results.BadRequest(); }
+    catch (Exception e) when (e is IOException or System.Text.DecoderFallbackException) { return Results.BadRequest(); }
     if (string.IsNullOrWhiteSpace(assertion) || assertion.Length > 65536)
         return Results.BadRequest();
     try
