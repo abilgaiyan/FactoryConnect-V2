@@ -29,6 +29,16 @@ test("mounted evidence shows literal saved value and decimal sequence without cl
   assert.match(h.document.body.textContent, /18446744073709551615/);
   assert.equal(h.document.querySelector("tbody code").textContent, " 00042 ");
   assert.match(h.document.body.textContent, /does not establish current connectivity/);
+  const detail = h.document.querySelector("details");
+  assert.ok(detail, "evidence provenance must be inspectable");
+  assert.match(detail.textContent, /Mapping ID/);
+  assert.match(detail.textContent, /mapping/);
+  assert.match(detail.textContent, /Runtime acknowledgement ID/);
+  assert.match(detail.textContent, /ack/);
+  assert.match(detail.textContent, /Source document SHA-256/);
+  assert.match(detail.textContent, /abc/);
+  assert.match(detail.textContent, /Receipt time/);
+  assert.match(detail.textContent, /2026-11-07T06:30:01Z/);
 });
 test("no session is denied without issuing a request", async t => {
   const original = globalThis.fetch;
