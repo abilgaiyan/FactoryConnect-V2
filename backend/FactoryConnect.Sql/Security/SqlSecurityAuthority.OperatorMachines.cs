@@ -1,7 +1,3 @@
-using System.Data;
-using System.Security.Cryptography;
-using Microsoft.Data.SqlClient;
-
 namespace FactoryConnect.Sql.Security;
 
 public sealed record OperatorEvidenceMachine(Guid SiteId,Guid MachineId,string DisplayName);
