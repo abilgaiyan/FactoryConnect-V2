@@ -660,7 +660,7 @@ internal static class MtConnectIngestionAcceptance
             // Supply a bounded source-document factory; history setup still uses
             // the real HTTP/mTLS ingestion path and original accepted bytes.
             var historyBatch=0;
-            async Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>> HistorySource()
+            async Task<ActivityHistoryMeasurementAcceptance.Input> HistorySource()
             {
                 var sourceContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
                 var sourceFrom=sourceContext.Cursor!.NextSequence;
@@ -671,8 +671,9 @@ internal static class MtConnectIngestionAcceptance
                 await Transport(await Request(frame));
                 // Do not retain setup-only security Activity objects per historical batch.
                 lock(activities)activities.Clear();
-                return await acceptedReader.ReadBoundedAsync(site,eligibleCut.Qualification,
+                var rows=await acceptedReader.ReadBoundedAsync(site,eligibleCut.Qualification,
                     frame.InstanceId,sourceFrom-1,frame.NextSequence-1,100);
+                return new(rows,frame.NextSequence-1,frame.Observations.Count);
             }
             count+=await ActivityHistoryMeasurementAcceptance.RunAsync(target,site,currentActivity,
                 eligibleCut.Qualification,processPending,HistorySource);

@@ -8,6 +8,8 @@ using Microsoft.Data.SqlClient;
 
 internal static class ActivityHistoryMeasurementAcceptance
 {
+    internal sealed record Input(IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> Rows,
+        ulong Through,int RawObservationCount);
     internal sealed record Span(string Name,DateTimeOffset Start,TimeSpan Duration,IReadOnlyDictionary<string,object?> Tags);
     private sealed record Trial(int Depth,int Sample,bool Profiled,double ElapsedMs,long AllocatedBytes,
         long WorkingSetBefore,long WorkingSetAfter,long ManagedBefore,long ManagedAfter,
@@ -19,7 +21,7 @@ internal static class ActivityHistoryMeasurementAcceptance
     internal static async Task<int> RunAsync(InstallationTarget target,Guid site,
         ApprovedActivitySignal approved,ActivityQualificationIdentity identity,
         IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> pending,
-        Func<Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>>> ingest)
+        Func<Task<Input>> ingest)
     {
         const string prefix="FactoryConnect_V2_Test_";
         if(!target.Database.StartsWith(prefix,StringComparison.Ordinal) ||
@@ -33,7 +35,7 @@ internal static class ActivityHistoryMeasurementAcceptance
         ActivityDurableResult? lastResult=null;
         Guid lastOperation=Guid.Empty;
         ulong lastAfter=0,lastThrough=0,lastGeneration=0;
-        await Apply(store,pending); // Consume the restart fixture's intentionally pending cut.
+        await Apply(store,new Input(pending,pending[^1].Sequence,4)); // Consume the restart fixture's intentionally pending cut.
         expectedHash.GetHashAndReset(); // Pending restart cut belongs to the baseline, not the new history oracle.
         var baseline=await SnapshotState();
         var baselinePage=await store.ReadPeriodPageAsync(identity,100);
@@ -76,7 +78,7 @@ internal static class ActivityHistoryMeasurementAcceptance
                 "depth "+depth+" preserves exact checkpoint and accepted provenance");
             var beforeReplay=await SnapshotState();
             var replay=await store.ApplyAcceptedAsync(lastOperation,target.InstallationId,site,identity.MachineId,
-                identity.MappingId,identity.StreamKey,profileRows[0].InstanceId,lastAfter,lastThrough,lastGeneration);
+                identity.MappingId,identity.StreamKey,profileRows.Rows[0].InstanceId,lastAfter,lastThrough,lastGeneration);
             Check(replay.Replayed && replay.Checkpoint==lastResult!.Checkpoint &&
                 replay.NewPeriods.SequenceEqual(lastResult.NewPeriods) && await SnapshotState()==beforeReplay,
                 "depth "+depth+" exact receipt replay adds no effects");
@@ -125,9 +127,9 @@ internal static class ActivityHistoryMeasurementAcceptance
             await ChangeAddress(prior.Sequence,Encoding.UTF8.GetBytes("MISSING"));
             try { await Reject(next,"retained predecessor",sqlNumber:51078); }
             finally { await ChangeAddress(prior.Sequence,Encoding.UTF8.GetBytes(identity.SourceAddress)); }
-            await ChangeAddress(next[0].Sequence,Encoding.UTF8.GetBytes("MISSING"));
+            await ChangeAddress(next.Rows[0].Sequence,Encoding.UTF8.GetBytes("MISSING"));
             try { await Reject(next,"selected document observation",expected:"omits or duplicates"); }
-            finally { await ChangeAddress(next[0].Sequence,Encoding.UTF8.GetBytes(identity.SourceAddress)); }
+            finally { await ChangeAddress(next.Rows[0].Sequence,Encoding.UTF8.GetBytes(identity.SourceAddress)); }
         }
         finally { await Exec("ENABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation"); }
         var original=(byte[])(await Scalar("SELECT RawDocument FROM acquisition.MtConnectBatch WHERE BatchId=@batch",("@batch",prior.BatchId)))!;
@@ -175,13 +177,14 @@ internal static class ActivityHistoryMeasurementAcceptance
         return checks;
 
         async Task<ActivityDurableResult> Apply(SqlActivityProcessorStore writer,
-            IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> rows)
+            Input input)
         {
+            var rows=input.Rows;
             if(rows.Count!=2 || rows[0].AcknowledgementId!=approved.AcknowledgementId ||
                 rows[0].RawValue!="ACTIVE" || rows[1].RawValue!="READY")
                 throw new InvalidDataException("History cut must contain exact independently ingested ACTIVE/READY rows.");
             lastOperation=Guid.NewGuid();lastAfter=checkpoint.AcceptedSource!.ThroughSequence;
-            lastThrough=rows[1].Sequence;lastGeneration=checkpoint.NextGeneration;
+            lastThrough=input.Through;lastGeneration=checkpoint.NextGeneration;
             var result=await writer.ApplyAcceptedAsync(lastOperation,target.InstallationId,site,
                 identity.MachineId,identity.MappingId,identity.StreamKey,rows[0].InstanceId,
                 lastAfter,lastThrough,lastGeneration);
@@ -199,9 +202,11 @@ internal static class ActivityHistoryMeasurementAcceptance
             if(expectedHash is not null)Hash(expectedHash,expected);
             return result;
         }
-        async Task<Trial> Measure(string connection,IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> rows,
+        async Task<Trial> Measure(string connection,Input rows,
             int depth,int sample,bool profiled)
         {
+            if(rows.RawObservationCount!=100 || rows.Through<rows.Rows[^1].Sequence)
+                throw new InvalidDataException("Measured history cut must cover its complete accepted 100-observation frontier.");
             var spans=new List<Span>();
             using var listener=new ActivityListener {
                 ShouldListenTo=source=>source.Name is "FactoryConnect.V2.Activity" or "FactoryConnect.V2.Activity.AcceptedEvidence",
@@ -222,15 +227,16 @@ internal static class ActivityHistoryMeasurementAcceptance
             return new(depth,sample,profiled,clock.Elapsed.TotalMilliseconds,allocatedBytes,
                 workingBefore,workingAfter,managedBefore,managedAfter,spans.ToArray());
         }
-        async Task Reject(IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> rows,string label,
+        async Task Reject(Input input,string label,
             string? expected=null,int? sqlNumber=null)
         {
+            var rows=input.Rows;
             var clock=Stopwatch.StartNew();
             try
             {
                 await store.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,site,identity.MachineId,
                     identity.MappingId,identity.StreamKey,rows[0].InstanceId,checkpoint.AcceptedSource!.ThroughSequence,
-                    rows[1].Sequence,checkpoint.NextGeneration);
+                    input.Through,checkpoint.NextGeneration);
             }
             catch(Exception error)when((error is SqlException sql && sql.Number==sqlNumber) ||
                 (error is InvalidDataException && expected is not null && error.Message.Contains(expected,StringComparison.Ordinal)))
