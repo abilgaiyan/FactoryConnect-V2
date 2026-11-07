@@ -1,6 +1,6 @@
 # G3 policy safety revocation and approval withdrawal
 
-Status: implementation and disposable SQL qualification in progress. No production migration or host deployment.
+Status: backend implementation qualified in PR #28, CI 42344254704. No production migration or host deployment.
 
 ## Commands and authority
 
@@ -27,3 +27,9 @@ The dedicated SQL suite exercises real authenticated command producers after dua
 Coverage includes permission and site boundaries, exact hashes, proposer self-approval, original-session and grant revocation, audit rollback, concurrent exact retries, conflicting operation reuse, scheduled first-use blocking, immediate acceleration, no postponement, all three policy types, lock-wait expiry/time clamping, pending acknowledgement denial, both withdrawal/acknowledgement SQL commit orders, immutable provenance and a full 100-machine withdrawal transaction budget of 30 TDS roundtrips and five seconds in the disposable fixture. These are regression gates, not production capacity claims.
 
 Active roster publication, commissioning discovery, notification delivery, browser/OIDC composition and runtime HTTP hosting remain separate work. No production database or machine runtime is changed.
+
+## Qualification evidence
+
+CI 42344254704 passed 794 combined acceptance checks (102 pure/transport checks plus 692 real SQL checks), with no skips, 463 dashboard tests and 15 bootstrap CLI checks. Both policy-revocation/acknowledgement and approval-withdrawal/acknowledgement commit orders passed using observed SQL lock waits. Local .NET build passed without warnings or errors; all 102 pure checks passed locally.
+
+The complete 100-machine approval withdrawal took 11.92 ms and 20 TDS roundtrips; successful safety commands used at most 25 roundtrips. Existing regression measurements remained within their budgets: 100-machine submission 36.42 ms/25 roundtrips; selected-machine activation 13.30 ms/23 roundtrips; acknowledgement 9.65 ms/17 roundtrips. Inventory p99 was 4.29 ms at one reader and 11.21 ms at eight readers, with nine roundtrips and 384 logical reads per 128 samples. These disposable fixture results do not establish production capacity.
