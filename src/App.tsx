@@ -101,9 +101,9 @@ export function App({ runtime }: AppProps) {
             `${source.groupName ?? 'Group not configured'} · ${source.siteId}`,
           ))].map(label => <span key={label}>{label}</span>)}
         </div>
-        {validEvidenceSession
+        <div className="operator-session-control">{validEvidenceSession
           ? <button type="button" onClick={() => { void endEvidenceSession(); }}>End evidence session</button>
-          : <a href="/api/security/v2/login">Sign in to view machine evidence</a>}
+          : <a href="/api/security/v2/login">Sign in to view machine evidence</a>}</div>
         <nav aria-label="Dashboard">
           {SupervisorWorkspace && <ApplicationLink href="/supervisor-preview" navigate={navigate} current={route.kind === "supervisorPreview"}>Supervisor desk preview</ApplicationLink>}
           <ApplicationLink href="/operator-evidence" navigate={navigate} current={route.kind === "operatorEvidence"}>Operator evidence</ApplicationLink>{" "}
