@@ -65,8 +65,8 @@ internal static class ActivityInterpreterAcceptance
             "unavailable source breaks interpretation without inventing stopped time");
 
         var reset=MachineActivityInterpreter.Evaluate(configured,
-            [Sample(100,0,"ACTIVE"),Sample(1,10,"READY",instance:8),
-             Sample(3,20,"STOPPED",instance:8)]);
+            [Sample(100,0,"ACTIVE"),Sample(1,10,"READY",instance:1),
+             Sample(3,20,"STOPPED",instance:1)]);
         Check(reset.ContinuityBreaks==1 && reset.ClosedPeriods.Count==1 &&
             reset.ClosedPeriods[0].State==ActivityState.Idle,
             "instance change fences old state");
