@@ -188,6 +188,60 @@ internal static class ActivityInterpreterAcceptance
         Check(single.Checkpoint.NextGeneration==1 && secondPart.Checkpoint.NextGeneration==2,
             "processor generation advances only for nonempty committed candidate batches");
 
+        var approved=new ApprovedActivitySignal(Guid.NewGuid(),Guid.NewGuid(),
+            Guid.NewGuid(),new string('A',64),configured);
+        var sourceBatchOne=Guid.NewGuid();
+        var sourceBatchTwo=Guid.NewGuid();
+        SqlAcceptedActivityEvidenceReader.AcceptedRow SourceRow(
+            ulong sequence,int seconds,string value,Guid batch,Guid? ack=null)
+            => new(approved.SiteId,machineId,streamKey,mapping,"execution",
+                7,sequence,batch,ack??approved.AcknowledgementId,from.AddSeconds(seconds),
+                value,"source-reported",from.AddSeconds(seconds).ToString("O"),
+                new string('B',64),new string('C',64));
+        var provenanceRows=new[]{
+            SourceRow(100,0,"ACTIVE",sourceBatchOne),
+            SourceRow(101,10,"READY",sourceBatchOne),
+            SourceRow(102,20,"ACTIVE",sourceBatchTwo),
+            SourceRow(103,30,"READY",sourceBatchTwo)
+        };
+        var cut=AcceptedActivityContinuityQualifier.Qualify(approved,provenanceRows);
+        Check(!cut.Samples[0].ContinuityFromPrevious &&
+            cut.Samples[1].ContinuityFromPrevious &&
+            !cut.Samples[2].ContinuityFromPrevious &&
+            cut.Samples[3].ContinuityFromPrevious &&
+            cut.ProvenInternalLinks==2 && cut.UnprovenBoundaryLinks==1 &&
+            cut.Assurance.Contains("not-physical-completeness",StringComparison.Ordinal),
+            "candidate continuity derives only from equal verified batch identity, never adjacent sequence guesses");
+        var continuityEvaluated=ActivityCheckpointEvaluator.Advance(configured,
+            cut.Qualification,ActivityCheckpointEvaluator.Initial(cut.Qualification),cut.Samples);
+        Check(continuityEvaluated.ClosedPeriods.Count==2 &&
+            continuityEvaluated.ContinuityBreaks==1 &&
+            continuityEvaluated.ClosedPeriods.All(x=>x.DurationTicks==TimeSpan.FromSeconds(10).Ticks),
+            "unproven cross-batch continuity cannot bridge otherwise adjacent source transitions");
+        Reject(()=>AcceptedActivityContinuityQualifier.Qualify(approved,
+            [provenanceRows[0],provenanceRows[1] with {
+                AcknowledgementId=Guid.NewGuid()
+            }]),"candidate cut rejects changed approved acknowledgement");
+        Reject(()=>AcceptedActivityContinuityQualifier.Qualify(approved,
+            [provenanceRows[1],provenanceRows[0]]),
+            "candidate cut rejects reversed accepted source positions");
+        Reject(()=>AcceptedActivityContinuityQualifier.Qualify(approved,
+            [provenanceRows[0] with { MappingId=Guid.NewGuid() }]),
+            "candidate cut rejects mismatched mapping identity");
+        var approvedMap=ApprovedActivityValueMap.Parse(
+            "activity-state-v1|ACTIVE=Running|READY=Idle");
+        Check(approvedMap["ACTIVE"]==ActivityState.Running&&
+            approvedMap["READY"]==ActivityState.Idle,
+            "canonical approved activity-state profile preserves exact state values");
+        Reject(()=>ApprovedActivityValueMap.Parse("identity-v1"),
+            "legacy counter normalization cannot authorize activity interpretation");
+        Reject(()=>ApprovedActivityValueMap.Parse(
+            "activity-state-v1|READY=Idle|ACTIVE=Running"),
+            "unapproved mapping order cannot be silently canonicalized");
+        Reject(()=>ApprovedActivityValueMap.Parse(
+            "activity-state-v1|ACTIVE=Running|ACTIVE=Idle"),
+            "ambiguous repeated raw state values are rejected");
+
         return count;
     }
 }
