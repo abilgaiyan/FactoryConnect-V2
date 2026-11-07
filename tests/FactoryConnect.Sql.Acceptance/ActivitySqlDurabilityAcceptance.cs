@@ -128,13 +128,17 @@ internal static class ActivitySqlDurabilityAcceptance
             finalPeriods.Skip(stored.Count).SequenceEqual(winningEffects),
             "reconstructed store reads the original immutable periods plus the winning concurrent effect");
         var pageOne=await restored.ReadPeriodPageAsync(identity,take:1);
+        var expectedPersistedHash=Convert.ToHexString(
+            SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(identity)));
         Check(pageOne.Rows.Count==1 && pageOne.Next is not null &&
-            pageOne.Rows[0].Qualification==identity,
-            "first keyset page preserves exact qualification and continuation");
+            pageOne.Rows[0].Qualification==identity &&
+            pageOne.Rows[0].PersistedQualificationSha256==expectedPersistedHash,
+            "first keyset page preserves actual persisted qualification hash and continuation");
         var pageTwo=await restored.ReadPeriodPageAsync(identity,take:1,after:pageOne.Next);
         Check(pageTwo.Rows.Count==1 && pageTwo.Rows[0].Qualification==identity &&
+            pageTwo.Rows[0].PersistedQualificationSha256==expectedPersistedHash &&
             pageTwo.Rows[0].Period==finalPeriods[1],
-            "second keyset page resumes without repeating the previous effect");
+            "second keyset page resumes with stored qualification, without repeating effects");
         Check((pageTwo.Next is null)==(finalPeriods.Count==2),
             "keyset page signals exhaustion exactly at the final committed effect");
         if(pageTwo.Next is not null)
