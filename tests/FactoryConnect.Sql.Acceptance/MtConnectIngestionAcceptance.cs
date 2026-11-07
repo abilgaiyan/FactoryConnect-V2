@@ -374,6 +374,10 @@ internal static class MtConnectIngestionAcceptance
             activityObserved[1].RawValue=="READY" &&
             activityObserved.All(x=>x.BatchId==bulk.OperationId),
             "approved execution-state signal resolves two actual immutable accepted observations");
+        Check(currentActivity.EffectiveFrom<=activityObserved[0].ObservedAt &&
+            (currentActivity.EffectiveTo is null||
+                activityObserved[^1].ObservedAt<currentActivity.EffectiveTo),
+            "ingested execution evidence falls inside exact approved interpretation interval");
         var trustedCandidate=AcceptedActivityContinuityQualifier.Qualify(
             currentActivity,activityObserved);
         var interpretedCandidate=ActivityCheckpointEvaluator.Advance(
@@ -420,6 +424,47 @@ internal static class MtConnectIngestionAcceptance
         Check(acceptedReplay.Replayed &&
             acceptedReplay.NewPeriods.SequenceEqual(acceptedCommit.NewPeriods),
             "verified accepted-source operation replays without a second activity period");
+        // An approved later activation must not reinterpret previously
+        // retained immutable execution samples. Drive a new *approved*
+        // acknowledgement head whose effective start is after this batch.
+        var previousActivationRevision=package.RevisionId;
+        var previousMappingId=currentActivity.Signal.MappingId;
+        var earlierSource=activityObserved[0].ObservedAt;
+        (package,review)=await Package();
+        activation=await Intent(from:earlierSource.AddMinutes(1));
+        ack=Ack(activation,1);
+        await service.AcknowledgeActivationAsync(pair.Channel,ack);
+        var laterSignal=package.Machines[0].Signals.Single(
+            x=>x.SemanticKey=="machine-activity");
+        var laterMapping=await mappingResolver.ResolveAsync(
+            site,machine,laterSignal.MappingId,Stream);
+        Check(laterMapping.EffectiveFrom>earlierSource &&
+            laterMapping.PackageRevisionId!=previousActivationRevision,
+            "new approved activation has a strictly later interpretation start");
+        try
+        {
+            await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+                site,machine,previousMappingId,Stream,bulkFrame.InstanceId,
+                firstBulk,firstBulk+3,0);
+            throw new InvalidOperationException(
+                "Historical source was interpreted under the old mapping.");
+        }
+        catch(InvalidDataException)
+        {
+            Check(true,"superseded approved activity mapping cannot reinterpret historical source");
+        }
+        try
+        {
+            await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+                site,machine,laterMapping.Signal.MappingId,Stream,
+                bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
+            throw new InvalidOperationException(
+                "Historical source was interpreted under a later activation.");
+        }
+        catch(InvalidDataException)
+        {
+            Check(true,"pre-activation historical observations cannot use current approved state mapping");
+        }
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.
