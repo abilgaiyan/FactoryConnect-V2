@@ -41,7 +41,7 @@ export async function readRetainedEvidence(
   const response = await fetchImplementation(
     new URL(`api/commissioning/v2/machines/${encodeURIComponent(machineId)}/evidence`, baseAddress),
     { method: "GET", headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
-      signal, cache: "no-store" },
+      ...(signal ? { signal } : {}), cache: "no-store" },
   );
   if (!response.ok) throw new EvidenceReadFailure(response.status);
   const body: unknown = await response.json();
