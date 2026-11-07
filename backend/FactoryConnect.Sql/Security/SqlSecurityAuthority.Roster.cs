@@ -28,7 +28,7 @@ public sealed partial class SqlSecurityAuthority
                     CASE
                     WHEN os.StateId IS NULL AND EXISTS(SELECT 1 FROM configuration.MachineOperationalTransition history WHERE history.SiteId=@site AND history.MachineId=m.MachineId) THEN 'MissingOperationalHead'
                     WHEN h.AcknowledgementId IS NULL AND EXISTS(SELECT 1 FROM configuration.RuntimeActivationAcknowledgement history WHERE history.SiteId=@site AND history.MachineId=m.MachineId) THEN 'MissingAcknowledgementHead'
-                    WHEN h.AcknowledgementId IS NOT NULL AND (p.PackageRevisionId IS NULL OR p.SubmittedAt IS NULL OR v.ReviewId IS NULL OR pa.MachineId IS NULL OR ah.ActivationId IS NULL OR cs.RuntimeIdentityId IS NULL OR ass.AssignmentId IS NULL) THEN 'IncompleteAuthority'
+                    WHEN h.AcknowledgementId IS NOT NULL AND (p.PackageRevisionId IS NULL OR p.SubmittedAt IS NULL OR v.ReviewId IS NULL OR pa.MachineId IS NULL OR ah.ActivationId IS NULL OR cs.RuntimeIdentityId IS NULL OR ass.AssignmentId IS NULL OR line.ProductionLineId IS NULL) THEN 'IncompleteAuthority'
                     WHEN m.IsRetired=1 OR site.IsRetired=1 OR line.IsRetired=1 THEN 'Retired'
                     WHEN os.StateId IS NULL THEN 'UnknownOperationalState'
                     WHEN o.Status<>'enabled' THEN 'DisabledOrSuspended'
