@@ -94,7 +94,7 @@ internal static class MtConnectIngestionAcceptance
                 var rosterValues=string.Join(",",rosterMachines.Select((_,i)=>$"(@id{i},@site,N'Roster fixture')"));
                 rosterInsert.CommandText="INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES "+rosterValues;
                 rosterInsert.Parameters.AddWithValue("@site",site);
-                for(var i=0;i<rosterMachines.Length;i++)bulk.Parameters.AddWithValue($"@id{i}",rosterMachines[i]);
+                for(var i=0;i<rosterMachines.Length;i++)rosterInsert.Parameters.AddWithValue($"@id{i}",rosterMachines[i]);
                 await rosterInsert.ExecuteNonQueryAsync();
             }
             var rootGrant=(Guid)(await Scalar(
