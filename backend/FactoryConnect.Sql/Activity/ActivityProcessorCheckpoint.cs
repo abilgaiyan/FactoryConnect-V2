@@ -108,8 +108,11 @@ public static class ActivityCheckpointEvaluator
                anchor.ObservedAt>previous.ObservedAt ||
                anchor.Quality!="source-reported" ||
                !map.TryGetValue(anchor.RawValue,out var interpreted) ||
-               interpreted!=state)
-                throw new InvalidDataException("Checkpoint anchor and open state disagree.");
+               interpreted!=state ||
+               previous.Quality!="source-reported" ||
+               !map.TryGetValue(previous.RawValue,out var lastState) ||
+               lastState!=state)
+                throw new InvalidDataException("Checkpoint anchor, last sample and open state disagree.");
         }
 
         foreach(var sample in samples)
