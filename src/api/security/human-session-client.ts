@@ -20,10 +20,12 @@ export async function issueHumanSession(
   signal?: AbortSignal,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<HumanSession> {
-  if (!baseAddress.startsWith("https://")) throw new Error("Human session issuance requires HTTPS.");
+  const endpoint = new URL("api/security/v2/human-sessions", baseAddress);
+  if (endpoint.protocol !== "https:" || (typeof window !== "undefined" && endpoint.origin !== window.location.origin))
+    throw new Error("Human session issuance requires same-origin HTTPS.");
   if (assertion.length < 1 || assertion.length > 65536) throw new Error("Invalid assertion length.");
   const response = await fetchImplementation(
-    new URL("api/security/v2/human-sessions", baseAddress),
+    endpoint,
     { method: "POST", headers: { "Content-Type": "text/plain; charset=utf-8", Accept: "application/json" },
       body: assertion, cache: "no-store", redirect: "error", ...(signal ? { signal } : {}) },
   );
@@ -31,7 +33,10 @@ export async function issueHumanSession(
   const body: unknown = await response.json();
   if (!isRecord(body) || typeof body.bearer !== "string"
     || typeof body.principalId !== "string" || typeof body.expiresAt !== "string"
-    || !isBase64Token(body.bearer)) throw new HumanSessionFailure(502);
+    || !isBase64Token(body.bearer)
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.principalId)
+    || !Number.isFinite(Date.parse(body.expiresAt)) || Date.parse(body.expiresAt) <= Date.now())
+    throw new HumanSessionFailure(502);
   return { bearer: body.bearer, principalId: body.principalId, expiresAt: body.expiresAt };
 }
 
