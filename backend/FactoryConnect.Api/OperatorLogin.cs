@@ -139,6 +139,8 @@ internal static class OperatorLogin
                 return Results.Ok(new { bearer, expiresAt = until });
             }
             catch (SecurityDeniedException) { return Results.Unauthorized(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception) { return Results.Problem(statusCode: 503, title: "Session authority unavailable"); }
             finally { CryptographicOperations.ZeroMemory(hash); }
         });
         app.MapPost("/api/security/v2/logout", async (HttpContext http, IConfiguration config, CancellationToken ct) =>

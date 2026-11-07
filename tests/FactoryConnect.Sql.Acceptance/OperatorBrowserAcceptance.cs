@@ -10,6 +10,7 @@ using System.Text.Json;
 using FactoryConnect.Api;
 using FactoryConnect.Sql.Security;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Data.SqlClient;
@@ -52,13 +53,14 @@ internal static class OperatorBrowserAcceptance
             var codes=new ConcurrentDictionary<string,Login>();
             var mode="bad-audience";
             var callback="";
-            var issuer="";
+            const string issuer="https://certificate.fixture/tenant";
+            var providerAddress="";
             var providerBuilder=WebApplication.CreateBuilder();
             providerBuilder.Logging.ClearProviders();
             providerBuilder.WebHost.ConfigureKestrel(o=>o.Listen(IPAddress.Loopback,0,l=>l.UseHttps(certificate)));
             await using var provider=providerBuilder.Build();
             provider.MapGet("/.well-known/openid-configuration",()=>Results.Json(new{
-                issuer,authorization_endpoint=issuer+"/authorize",token_endpoint=issuer+"/token",jwks_uri=issuer+"/keys",
+                issuer,authorization_endpoint=providerAddress+"/authorize",token_endpoint=providerAddress+"/token",jwks_uri=providerAddress+"/keys",
                 response_types_supported=new[]{"code"},subject_types_supported=new[]{"public"},
                 id_token_signing_alg_values_supported=new[]{"RS256"},code_challenge_methods_supported=new[]{"S256"},
                 token_endpoint_auth_methods_supported=new[]{"client_secret_post"}}));
@@ -99,7 +101,7 @@ internal static class OperatorBrowserAcceptance
                     (mode=="expired"?now.AddMinutes(-10):now.AddSeconds(-1)).UtcDateTime,(mode=="expired"?now.AddMinutes(-5):now.AddMinutes(3)).UtcDateTime,new SigningCredentials(securityKey,SecurityAlgorithms.RsaSha256));
                 return Results.Json(new{access_token="unused-fixture-access-token",token_type="Bearer",expires_in=180,id_token=new JwtSecurityTokenHandler().WriteToken(token)});
             });
-            await provider.StartAsync(ct);issuer=provider.Urls.Single();
+            await provider.StartAsync(ct);providerAddress=provider.Urls.Single();
             var authority=new SqlSecurityAuthority(sql,installation);
             var principal=Guid.NewGuid();
             await authority.EnrollHumanAsync(adminToken,new(Guid.NewGuid(),principal,issuer,"browser-operator",await epoch(),"enroll isolated browser operator"));
@@ -112,6 +114,10 @@ internal static class OperatorBrowserAcceptance
             await using var api=EvidenceApiHost.Build([],builder=>
             {
                 builder.Logging.ClearProviders();
+                // Resolve the pinned test issuer's discovery document over the fixture's
+                // actual TLS listener; token issuer validation remains exact and enabled.
+                builder.Services.PostConfigure<OpenIdConnectOptions>("operator-oidc", options =>
+                    options.MetadataAddress=providerAddress+"/.well-known/openid-configuration");
                 builder.WebHost.UseWebRoot(Path.GetFullPath("dist"));
                 builder.WebHost.ConfigureKestrel(o=>o.Listen(IPAddress.Loopback,0,l=>l.UseHttps(certificate)));
                 builder.Configuration.AddInMemoryCollection(new Dictionary<string,string?>{

@@ -108,7 +108,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: first-machine-ingestion
-          path: artifacts/ingestion/*.json
+          path: artifacts/ingestion/*
           if-no-files-found: warn
       - name: Remove disposable SQL container
         if: always()

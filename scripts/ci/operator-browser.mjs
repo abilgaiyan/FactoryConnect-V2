@@ -1,6 +1,7 @@
 import { chromium, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
+import { mkdir, writeFile } from 'node:fs/promises';
 const input = createInterface({ input: process.stdin });
 const pending = [];
 input.on('line', line => pending.shift()?.(line));
@@ -40,7 +41,16 @@ try {
   expect(denied).toBe(401);
   await page.reload();
   await expect(page.locator('tbody')).toHaveCount(0);
+  const loggedOut = await accepted();
+  const logoutResponse = page.waitForResponse(response => response.url().endsWith('/api/security/v2/logout'));
+  await page.getByRole('button', { name: 'End evidence session' }).click();
+  expect((await logoutResponse).status()).toBe(204);
+  expect(await page.evaluate(async () => (await fetch('/api/security/v2/session')).status)).toBe(401);
+  expect(await page.evaluate(async ({ machine, bearer }) => (await fetch(`/api/commissioning/v2/machines/${machine}/evidence`, { headers: { Authorization: 'Bearer ' + bearer } })).status,
+    { machine: process.env.FC2_BROWSER_MACHINE, bearer: loggedOut })).toBe(401);
   const second = await accepted();
+  await mkdir('artifacts/ingestion', { recursive: true });
+  await page.screenshot({ path: 'artifacts/ingestion/operator-evidence.png', fullPage: true });
   await stage('revoke-grant');
   const grantDenied = await page.evaluate(async ({ machine, bearer }) => (await fetch(`/api/commissioning/v2/machines/${machine}/evidence`, { headers: { Authorization: 'Bearer ' + bearer } })).status,
     { machine: process.env.FC2_BROWSER_MACHINE, bearer: second });
@@ -48,5 +58,6 @@ try {
   await page.reload();
   await expect(page.locator('select')).toHaveCount(0);
   await expect(page.getByText('No machines currently authorized for commissioning evidence.')).toBeVisible();
+  await writeFile('artifacts/ingestion/operator-browser.json', JSON.stringify({ controlledFixture: true, https: true, browser: 'Chromium', oidcCodePkce: true, invalidAudienceNonceExpiryDenied: true, literalValuePreserved: true, sessionRevocationDenied: true, logoutRevokesSqlSession: true, grantRevocationDenied: true }));
   await stage('complete');
 } finally { await browser.close(); input.close(); }
