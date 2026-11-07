@@ -69,3 +69,20 @@ test("switching machines hides prior evidence before the new request resolves", 
   await act(async () => resolveSecond(Response.json({ ...page, machineId: nextMachine, rows: [] })));
   assert.match(h.document.body.textContent, /No retained observations/);
 });
+
+test("ending a session removes previously rendered evidence and makes no new request", async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json(page); };
+  const props = bearer => React.createElement(RetainedMachineEvidence,
+    { machineId, baseAddress: "https://localhost/", sessionBearer: bearer });
+  const h = await mountInDom(props("fixture-session"), "https://localhost/");
+  t.after(() => h.dispose());
+  assert.match(h.document.body.textContent, /00042/);
+  assert.equal(calls, 1);
+  await h.rerender(props(null));
+  assert.doesNotMatch(h.document.body.textContent, /00042/);
+  assert.match(h.document.body.textContent, /not authorized/);
+  assert.equal(calls, 1);
+});
