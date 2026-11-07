@@ -96,6 +96,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             .ReadBoundedAsync(siteId,discovery,instanceId,afterSequence,throughSequence,100,ct);
         if(rows.Count==0)
             throw new InvalidDataException("No accepted activity observations within the requested source cut.");
+        ValidateInterpretationPeriod(approved,rows);
         var cut=AcceptedActivityContinuityQualifier.Qualify(approved,rows);
         var proof=JsonSerializer.Serialize(rows.Select(row=>new {
             sequence=row.Sequence.ToString(CultureInfo.InvariantCulture),
@@ -157,22 +158,6 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                             accepted.InstallationId,identity.MachineId);
                     await machineGate.ExecuteNonQueryAsync(ct);
                 }
-                // Authorization must still hold at COMMIT time; the machine
-                // gate prevents activation/approval transition between this
-                // recheck and checkpoint publication.
-                var current=await new SqlApprovedActivityMappingResolver(
-                    connectionString,accepted.InstallationId)
-                    .ResolveAsync(accepted.SiteId,identity.MachineId,
-                        identity.MappingId,identity.StreamKey,ct);
-                if(current.SiteId!=accepted.Approved.SiteId||
-                   current.PackageRevisionId!=accepted.Approved.PackageRevisionId||
-                   current.AcknowledgementId!=accepted.Approved.AcknowledgementId||
-                   !string.Equals(current.PackageSha256,
-                       accepted.Approved.PackageSha256,StringComparison.Ordinal)||
-                   ActivityQualificationIdentity.From(
-                       current.Signal,identity.ContinuityIdentity)!=identity)
-                    throw new InvalidDataException(
-                        "Approved activity mapping changed before durable source binding.");
             }
             await using(var guard=new SqlCommand("""
                 DECLARE @r int;
@@ -185,7 +170,29 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                 await guard.ExecuteNonQueryAsync(ct);
             }
             if(accepted is not null)
+            {
+                // Re-resolve on the *writer connection and transaction*, after
+                // both potentially blocking gates. The SQL query obtains its
+                // eligibility clock after the waits, and its locks are held
+                // until the source proof and checkpoint/periods commit.
+                var current=await new SqlApprovedActivityMappingResolver(
+                    connectionString,accepted.InstallationId)
+                    .ResolveInTransactionAsync(c,t,accepted.SiteId,
+                        identity.MachineId,identity.MappingId,identity.StreamKey,ct);
+                if(current.SiteId!=accepted.Approved.SiteId||
+                   current.PackageRevisionId!=accepted.Approved.PackageRevisionId||
+                   current.AcknowledgementId!=accepted.Approved.AcknowledgementId||
+                   current.EffectiveFrom!=accepted.Approved.EffectiveFrom||
+                   current.EffectiveTo!=accepted.Approved.EffectiveTo||
+                   !string.Equals(current.PackageSha256,
+                       accepted.Approved.PackageSha256,StringComparison.Ordinal)||
+                   ActivityQualificationIdentity.From(
+                       current.Signal,identity.ContinuityIdentity)!=identity)
+                    throw new InvalidDataException(
+                        "Approved activity mapping changed before durable source binding.");
+                ValidateInterpretationPeriod(current,accepted.Rows);
                 await VerifyAcceptedSourceInTransactionAsync(c,t,identity,accepted,ct);
+            }
             // Load exact operation receipt before checking expected generation:
             // an identical retry returns the original committed result.
             await using(var lookup=new SqlCommand("""
@@ -468,6 +475,27 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         if(page.Next is not null)
             throw new InvalidOperationException("Use explicit activity period pagination.");
         return page.Rows.Select(row=>row.Period).ToArray();
+    }
+
+    private static void ValidateInterpretationPeriod(
+        ApprovedActivitySignal mapping,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> observations)
+    {
+        // Strict live-only rule for FC2-034: historical pre-activation
+        // interpretation requires a separately approved historical-revision
+        // eligibility contract. Neither the current head nor a later
+        // acknowledgement retroactively authorizes retained evidence.
+        if(observations.Count is <1 or >100 ||
+           mapping.EffectiveTo is { } to && to<=mapping.EffectiveFrom)
+            throw new InvalidDataException("Missing or invalid activity interpretation interval.");
+        foreach(var observation in observations)
+        {
+            if(observation.ObservedAt.Offset!=TimeSpan.Zero ||
+               observation.ObservedAt<mapping.EffectiveFrom ||
+               mapping.EffectiveTo is { } until && observation.ObservedAt>=until)
+                throw new InvalidDataException(
+                    "Accepted observation is outside the exact approved activity interpretation interval.");
+        }
     }
 
     private static async Task VerifyAcceptedSourceInTransactionAsync(
