@@ -70,6 +70,7 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
     http.Response.Headers.CacheControl = "no-store";
     if (!http.Request.IsHttps) return Results.Problem(statusCode: 403, title: "HTTPS required");
     if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
+        || !Guid.TryParse(config["Evidence:SiteId"], out var siteId)
         || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
         return NotReady();
     if (!http.Request.Headers.TryGetValue("Authorization", out var authorization)
@@ -84,7 +85,7 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
     try
     {
         var machines = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
-            .ReadOperatorEvidenceMachinesAsync(hash, ct);
+            .ReadOperatorEvidenceMachinesAsync(hash, siteId, ct);
         return Results.Ok(new { machines });
     }
     catch (SecurityDeniedException) { return Results.Unauthorized(); }
