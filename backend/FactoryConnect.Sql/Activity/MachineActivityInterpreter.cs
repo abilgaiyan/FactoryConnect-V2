@@ -70,8 +70,7 @@ public static class MachineActivityInterpreter
                 throw new InvalidDataException("Source evidence requires a UTC instant and explicit quality.");
             if(previous is not null)
             {
-                if(sample.InstanceId<previous.InstanceId ||
-                   sample.InstanceId==previous.InstanceId && sample.Sequence<=previous.Sequence)
+                if(sample.InstanceId==previous.InstanceId && sample.Sequence<=previous.Sequence)
                     throw new InvalidDataException("Out-of-order or repeated source identity.");
                 if(sample.ObservedAt<previous.ObservedAt)
                     throw new InvalidDataException("Source observation time moved backwards.");
