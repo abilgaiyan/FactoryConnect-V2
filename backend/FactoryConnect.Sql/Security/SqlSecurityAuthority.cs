@@ -191,6 +191,16 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
             Add(resource,("@site",scope.SiteId!.Value),("@machine",(object?)scope.MachineId??DBNull.Value));
             if(await resource.ExecuteScalarAsync(ct) is null)throw new SecurityDeniedException();
         }
+        var grants=await LoadAuthorizationGrants(c,t,actor,permission,ct,delegation,requiredGrant,excludedPrincipal);
+        if(TryAuthorizeLoadedGrants(grants,actor,permission,scope,now,delegation,requiredGrant,out var depth))
+            return depth;
+        throw new SecurityDeniedException();
+    }
+
+    private static async Task<Dictionary<Guid,Grant>> LoadAuthorizationGrants(
+        SqlConnection c,SqlTransaction t,Guid actor,string permission,CancellationToken ct,
+        bool delegation=false,Guid? requiredGrant=null,Guid? excludedPrincipal=null)
+    {
         var grants=new Dictionary<Guid,Grant>();
         await using(var q=Command(c,t,"""
             WITH ancestors AS (
@@ -219,6 +229,14 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
                     (bool)r["UseAllowed"],(bool)r["CanDelegate"],(DateTimeOffset)r["EffectiveFrom"],(DateTimeOffset)r["ExpiresAt"],(bool)r["IsRevoked"]));
             }
         }
+        return grants;
+    }
+
+    private static bool TryAuthorizeLoadedGrants(
+        IReadOnlyDictionary<Guid,Grant> grants,Guid actor,string permission,AuthorizationScope scope,
+        DateTimeOffset now,bool delegation,Guid? requiredGrant,out int depth)
+    {
+        depth=0;
         foreach(var candidate in grants.Values.Where(g=>g.Grantee==actor&&(delegation?g.Delegate:g.Use)&&g.Permission==permission&&(!requiredGrant.HasValue||g.Id==requiredGrant.Value)))
         {
             var current=candidate;var seen=new HashSet<Guid>();var eligible=true;
@@ -230,10 +248,12 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
                     !parent.Scope.Contains(current.Scope)||current.From<parent.From||current.To>parent.To) {eligible=false;break;}
                 current=parent;
             }
-            if(eligible)return seen.Count;
+            if(eligible){depth=seen.Count;return true;}
         }
-        throw new SecurityDeniedException();
+
+        return false;
     }
+
     private static async Task<AuthorizationScope> TargetScope(SqlConnection c,SqlTransaction t,Guid? grant,byte[]? session,CancellationToken ct)
     {
         await using var q=Command(c,t,grant.HasValue ? "SELECT ScopeKind,SiteId,MachineId FROM security.PermissionGrant WHERE GrantId=@target" :
