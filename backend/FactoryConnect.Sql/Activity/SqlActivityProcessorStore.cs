@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using FactoryConnect.Sql.Configuration;
 using Microsoft.Data.SqlClient;
 
 namespace FactoryConnect.Sql.ActivityProcessing;
@@ -57,10 +58,62 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         return checkpoint;
     }
 
-    public async Task<ActivityDurableResult> ApplyAsync(
+    // Existing typed-sample entry point remains for disposable durability
+    // fixtures. It is not an approved production worker entry point.
+    public Task<ActivityDurableResult> ApplyAsync(
         Guid operationId,QualifiedActivitySignal signal,ActivityQualificationIdentity identity,
         ulong expectedGeneration,IReadOnlyList<ActivityInputSample> samples,
         bool injectRollback=false,CancellationToken ct=default)
+        => ApplyCoreAsync(operationId,signal,identity,expectedGeneration,samples,
+            null,injectRollback,ct);
+
+    private sealed record AcceptedSourceBinding(
+        Guid SiteId,Guid InstallationId,ApprovedActivitySignal Approved,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> Rows,
+        ulong InstanceId,ulong AfterSequence,ulong ThroughSequence,string ProofJson);
+
+    /// <summary>
+    /// Evidence-bound write candidate. Rechecks the active approved mapping and
+    /// the *entire* selected accepted source cut under the checkpoint's serializable
+    /// transaction, before receipt/checkpoint/period insertion. Cross-batch and
+    /// restart continuity remain conservatively fenced until broader qualification.
+    /// </summary>
+    public async Task<ActivityDurableResult> ApplyAcceptedAsync(
+        Guid operationId,Guid installationId,Guid siteId,Guid machineId,
+        Guid mappingId,string streamKey,ulong instanceId,ulong afterSequence,
+        ulong throughSequence,ulong expectedGeneration,
+        bool injectRollback=false,CancellationToken ct=default)
+    {
+        if(installationId==Guid.Empty||siteId==Guid.Empty||machineId==Guid.Empty||
+           mappingId==Guid.Empty||operationId==Guid.Empty||
+           string.IsNullOrWhiteSpace(streamKey)||afterSequence>=throughSequence)
+            throw new ArgumentException("Exact accepted evidence operation and frontier required.");
+        var resolver=new SqlApprovedActivityMappingResolver(connectionString,installationId);
+        var approved=await resolver.ResolveAsync(siteId,machineId,mappingId,streamKey,ct);
+        var discovery=ActivityQualificationIdentity.From(
+            approved.Signal,"accepted-observation-discovery-only");
+        var rows=await new SqlAcceptedActivityEvidenceReader(connectionString)
+            .ReadBoundedAsync(siteId,discovery,instanceId,afterSequence,throughSequence,100,ct);
+        if(rows.Count==0)
+            throw new InvalidDataException("No accepted activity observations within the requested source cut.");
+        var cut=AcceptedActivityContinuityQualifier.Qualify(approved,rows);
+        var proof=JsonSerializer.Serialize(rows.Select(row=>new {
+            sequence=row.Sequence.ToString(CultureInfo.InvariantCulture),
+            batch=row.BatchId,ack=row.AcknowledgementId,
+            canonical=row.CanonicalSha256,document=row.DocumentSha256,
+            value=row.RawValue,quality=row.Quality,timestamp=row.SourceTimestamp,
+            observed=row.ObservedAt
+        }));
+        var binding=new AcceptedSourceBinding(siteId,installationId,approved,
+            rows,instanceId,afterSequence,throughSequence,proof);
+        return await ApplyCoreAsync(operationId,approved.Signal,cut.Qualification,
+            expectedGeneration,cut.Samples,binding,injectRollback,ct);
+    }
+
+    private async Task<ActivityDurableResult> ApplyCoreAsync(
+        Guid operationId,QualifiedActivitySignal signal,ActivityQualificationIdentity identity,
+        ulong expectedGeneration,IReadOnlyList<ActivityInputSample> samples,
+        AcceptedSourceBinding? accepted,bool injectRollback,CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(identity);
@@ -76,7 +129,8 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         var evaluatedPeriodRows=0;
         var savedSamples=samples.ToArray();
         var request=JsonSerializer.SerializeToUtf8Bytes(new {
-            version=1,operationId,identity,expectedGeneration,samples=savedSamples
+            version=1,operationId,identity,expectedGeneration,samples=savedSamples,
+            acceptedSourceProof=accepted?.ProofJson
         });
         var requestHash=SHA256.HashData(request);
         var resource=$"fc2:activity:{identity.MachineId:N}:{identity.MappingId:N}:{Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(identity.StreamKey)))}";
@@ -87,6 +141,39 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         await using var t=(SqlTransaction)await c.BeginTransactionAsync(IsolationLevel.Serializable,ct);
         try
         {
+            if(accepted is not null)
+            {
+                // Common lock order: configuration machine Shared, then
+                // activity processor Exclusive, then source/checkpoint rows.
+                await using(var machineGate=new SqlCommand("""
+                    DECLARE @r int;
+                    EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Shared',
+                        @LockOwner='Transaction',@LockTimeout=10000;
+                    IF @r<0 THROW 51077,'Activity source authority machine gate unavailable.',1;
+                    """,c,t))
+                {
+                    machineGate.Parameters.Add("@resource",SqlDbType.NVarChar,255).Value=
+                        ConfigurationLockResources.Machine(
+                            accepted.InstallationId,identity.MachineId);
+                    await machineGate.ExecuteNonQueryAsync(ct);
+                }
+                // Authorization must still hold at COMMIT time; the machine
+                // gate prevents activation/approval transition between this
+                // recheck and checkpoint publication.
+                var current=await new SqlApprovedActivityMappingResolver(
+                    connectionString,accepted.InstallationId)
+                    .ResolveAsync(accepted.SiteId,identity.MachineId,
+                        identity.MappingId,identity.StreamKey,ct);
+                if(current.SiteId!=accepted.Approved.SiteId||
+                   current.PackageRevisionId!=accepted.Approved.PackageRevisionId||
+                   current.AcknowledgementId!=accepted.Approved.AcknowledgementId||
+                   !string.Equals(current.PackageSha256,
+                       accepted.Approved.PackageSha256,StringComparison.Ordinal)||
+                   ActivityQualificationIdentity.From(
+                       current.Signal,identity.ContinuityIdentity)!=identity)
+                    throw new InvalidDataException(
+                        "Approved activity mapping changed before durable source binding.");
+            }
             await using(var guard=new SqlCommand("""
                 DECLARE @r int;
                 EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Exclusive',
@@ -97,6 +184,8 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                 guard.Parameters.Add("@resource",SqlDbType.NVarChar,255).Value=resource;
                 await guard.ExecuteNonQueryAsync(ct);
             }
+            if(accepted is not null)
+                await VerifyAcceptedSourceInTransactionAsync(c,t,identity,accepted,ct);
             // Load exact operation receipt before checking expected generation:
             // an identical retry returns the original committed result.
             await using(var lookup=new SqlCommand("""
