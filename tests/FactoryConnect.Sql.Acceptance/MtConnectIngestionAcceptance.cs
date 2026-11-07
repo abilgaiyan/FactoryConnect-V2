@@ -436,10 +436,19 @@ internal static class MtConnectIngestionAcceptance
         await service.AcknowledgeActivationAsync(pair.Channel,ack);
         var laterSignal=package.Machines[0].Signals.Single(
             x=>x.SemanticKey=="machine-activity");
-        var laterMapping=await mappingResolver.ResolveAsync(
-            site,machine,laterSignal.MappingId,Stream);
-        Check(laterMapping.EffectiveFrom>earlierSource &&
-            laterMapping.PackageRevisionId!=previousActivationRevision,
+        // The new activation becomes eligible only after its future
+        // effective start; do not force it active by modifying SQL clocks.
+        try
+        {
+            await mappingResolver.ResolveAsync(site,machine,laterSignal.MappingId,Stream);
+            throw new InvalidOperationException("Future activation resolved prematurely.");
+        }
+        catch(InvalidDataException)
+        {
+            Check(true,"future-dated activation remains ineligible at the current clock");
+        }
+        Check(activation.EffectiveFrom>earlierSource &&
+            package.RevisionId!=previousActivationRevision,
             "new approved activation has a strictly later interpretation start");
         try
         {
@@ -456,14 +465,14 @@ internal static class MtConnectIngestionAcceptance
         try
         {
             await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
-                site,machine,laterMapping.Signal.MappingId,Stream,
+                site,machine,laterSignal.MappingId,Stream,
                 bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
             throw new InvalidOperationException(
-                "Historical source was interpreted under a later activation.");
+                "Historical source was interpreted under a not-yet-effective activation.");
         }
         catch(InvalidDataException)
         {
-            Check(true,"pre-activation historical observations cannot use current approved state mapping");
+            Check(true,"pre-activation observations cannot use future approved mapping");
         }
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
