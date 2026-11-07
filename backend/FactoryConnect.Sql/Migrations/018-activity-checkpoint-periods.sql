@@ -63,6 +63,9 @@ CREATE TABLE activity.ClosedPeriod (
         AND DATEPART(TZOFFSET,StartedAt)=0 AND DATEPART(TZOFFSET,EndedAt)=0),
     CONSTRAINT UQ_ActivityPeriodEffect UNIQUE(MachineId,StreamKeyBytes,MappingId,InstanceId,StartSequence,EndSequence)
 );
+CREATE INDEX IX_ActivityClosedPeriod_Keyset
+ON activity.ClosedPeriod(MachineId,StreamKeyBytes,MappingId,StartedAt,InstanceId,StartSequence,EffectId)
+INCLUDE(QualificationHash);
 GO
 CREATE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation INSTEAD OF UPDATE,DELETE AS
 BEGIN THROW 51061,'Activity operation receipt is immutable.',1; END;
