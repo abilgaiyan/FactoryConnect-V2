@@ -36,3 +36,7 @@ A green test for one row does not close another row. G1 stays frozen; G2/G3 engi
 Trusted SQL roster reader: merged PR #29 at `56b340a`; CI 42345481289 PASS (829 combined checks, no skips; 463 dashboard tests). Complete 100-machine read used 9 TDS roundtrips; 128-sample p99 was 15.90 ms at concurrency one and 382.54 ms at eight. Logical-read attribution remains unqualified. HTTP composition remains pending.
 
 Commissioning discovery: backend implementation on `fc2/commissioning-discovery`, with separate site-scoped permission, pre-enable/pre-ack discovery, exact requested pins, blocked/incomplete states and bounded read-order/performance acceptance. Final SQL qualification is recorded in the PR; HTTP/dashboard composition and real sign-in/runtime hosting remain pending.
+
+## Delivery priority — 7 November 2026
+
+The user reaffirmed the goal: a working factory system, not only a security framework. Finish commissioning discovery, then prioritize selective V1 protocol reuse and the [first machine ingestion slice](../implementation/FC2-first-machine-ingestion-slice.md) before further roster/dashboard framework completion. The next demonstration must fetch one machine's protocol observations, commit raw evidence and its checkpoint atomically, then return the saved values through a bounded protected read. Restart/replay and measured ingestion cost are required. Existing configuration, assignment, acknowledgement and revocation checks remain preconditions; no additional broad security workstream is introduced.
