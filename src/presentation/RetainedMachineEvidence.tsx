@@ -1,0 +1,59 @@
+import { useEffect, useState } from "react";
+import { EvidenceReadFailure, readRetainedEvidence, type RetainedEvidencePage } from "../api/evidence/retained-evidence-client.ts";
+
+type State =
+  | { kind: "loading" }
+  | { kind: "ready"; page: RetainedEvidencePage }
+  | { kind: "denied" | "unavailable" | "failed" };
+
+export function RetainedMachineEvidence({
+  machineId, baseAddress, sessionBearer,
+}: {
+  machineId: string;
+  baseAddress: string;
+  sessionBearer: string | null;
+}) {
+  const [state, setState] = useState<State>({ kind: "loading" });
+  useEffect(() => {
+    const controller = new AbortController();
+    setState({ kind: "loading" });
+    if (!sessionBearer) {
+      setState({ kind: "denied" });
+      return () => controller.abort();
+    }
+    void readRetainedEvidence(baseAddress, machineId, sessionBearer, controller.signal)
+      .then(page => { if (!controller.signal.aborted) setState({ kind: "ready", page }); })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setState({ kind: error instanceof EvidenceReadFailure
+          ? error.status === 401 || error.status === 403 ? "denied"
+            : error.status === 503 ? "unavailable" : "failed"
+          : "failed" });
+      });
+    return () => controller.abort();
+  }, [machineId, baseAddress, sessionBearer]);
+
+  return <section aria-label="Retained machine evidence">
+    <h2>Accepted machine observations</h2>
+    <p>Historical retained source evidence. This does not establish current connectivity, machine state, quantity or OEE.</p>
+    {state.kind === "loading" && <p role="status">Loading accepted evidence…</p>}
+    {state.kind === "denied" && <p role="alert">Commissioning evidence access is not authorized.</p>}
+    {state.kind === "unavailable" && <p role="alert">Evidence authority is unavailable. No zero or healthy state is assumed.</p>}
+    {state.kind === "failed" && <p role="alert">Unable to read accepted evidence.</p>}
+    {state.kind === "ready" && (state.page.rows.length === 0
+      ? <p>No retained observations for this machine and stream.</p>
+      : <div className="activity-table-scroll" tabIndex={0} role="region" aria-label="Accepted observation table">
+          <table>
+            <thead><tr><th>Signal</th><th>Raw value</th><th>Quality</th><th>Source timestamp</th><th>Instance / sequence</th><th>Receipt</th></tr></thead>
+            <tbody>{state.page.rows.map(row => <tr key={`${row.instanceId}:${row.sequence}:${row.batchId}`}>
+              <td>{row.address}</td>
+              <td><code style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{row.rawValue}</code></td>
+              <td>{row.quality === "unavailable" ? "Unavailable" : "Source reported"}</td>
+              <td><time dateTime={row.observedAt}>{row.sourceTimestamp}</time></td>
+              <td>{row.instanceId} / {row.sequence}</td>
+              <td><small>{row.batchId}</small></td>
+            </tr>)}</tbody>
+          </table>
+        </div>)}
+  </section>;
+}
