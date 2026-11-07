@@ -152,7 +152,23 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                     DECLARE @selected TABLE(BatchId uniqueidentifier NOT NULL PRIMARY KEY);
                     INSERT @selected(BatchId)
                     SELECT DISTINCT BatchId
-                    FROM OPENJSON(@batchIds) WITH(BatchId uniqueidentifier '
+                    FROM OPENJSON(@batchIds) WITH(BatchId uniqueidentifier '$');
+                    IF (SELECT COUNT_BIG(*) FROM @selected)<>@expected
+                        THROW 51075,'Duplicate or missing requested source batch.',1;
+                    IF (SELECT COUNT_BIG(*) FROM acquisition.MtConnectBatch b
+                        JOIN @selected selected ON selected.BatchId=b.BatchId)<>@expected
+                        THROW 51075,'Missing source batch.',1;
+                    IF COALESCE((
+                        SELECT SUM(CONVERT(bigint,DATALENGTH(b.RawDocument))+512)
+                        FROM acquisition.MtConnectBatch b
+                        JOIN @selected selected ON selected.BatchId=b.BatchId
+                    ),0)>@remaining
+                        THROW 51074,'Accepted source batch document budget exceeded.',1;
+                    SELECT b.BatchId,b.SiteId,b.MachineId,b.StreamKeyBytes,
+                        b.AcknowledgementId,b.InstanceId,b.FromSequence,
+                        b.NextSequence,b.FirstAvailableSequence,b.RawDocument,b.DocumentHash
+                    FROM acquisition.MtConnectBatch b WITH(HOLDLOCK)
+                    JOIN @selected selected ON selected.BatchId=b.BatchId
                     """,connection,tx);
                 command.Parameters.Add("@batchIds",SqlDbType.NVarChar,-1).Value=idsJson;
                 command.Parameters.Add("@expected",SqlDbType.Int).Value=batchIds.Length;
@@ -233,146 +249,6 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                 activity.SetTag("accepted-source.sql.roundtrips",
                     connection.RetrieveStatistics()["ServerRoundtrips"]);
             }
-            return rows.AsReadOnly();
-        }
-        catch
-        {
-            try{await tx.RollbackAsync(CancellationToken.None);}
-            catch(Exception ex)when(ex is SqlException or InvalidOperationException){}
-            throw;
-        }
-    }
-    private sealed record ObservationProjection(
-        Guid SiteId,Guid MachineId,ulong InstanceId,ulong Sequence,Guid BatchId,
-        Guid MappingId,DateTimeOffset ObservedAt,string RawValue,string Quality,
-        string SourceTimestamp,byte[] CanonicalBytes,string CanonicalSha256);
-    private sealed record VerifiedBatch(Guid BatchId,Guid AcknowledgementId,
-        ulong Instance,ulong From,ulong Next,ulong First,
-        IReadOnlyDictionary<ulong,MtConnectSampleObservation> BySequence,
-        string DocumentSha256);
-
-    private static void ValidateCanonical(
-        byte[] canonical,ulong sequence,string address,string rawValue)
-    {
-        try
-        {
-            using var document=JsonDocument.Parse(canonical);
-            var root=document.RootElement;
-            if(root.ValueKind!=JsonValueKind.Object||
-               root.GetProperty("sequence").GetString()!=
-                   sequence.ToString(CultureInfo.InvariantCulture)||
-               !string.Equals(root.GetProperty("value").GetString(),rawValue,
-                   StringComparison.Ordinal))
-                throw new InvalidDataException("Canonical source sequence/value differs from projection.");
-            var attributes=root.GetProperty("attributes");
-            if(attributes.ValueKind!=JsonValueKind.Array||
-               attributes.EnumerateArray().Count(x=>x.GetProperty("name").GetString()=="dataItemId"&&
-                   string.Equals(x.GetProperty("Value").GetString(),address,
-                       StringComparison.Ordinal))!=1||
-               attributes.EnumerateArray().Count(x=>x.GetProperty("name").GetString()=="sequence"&&
-                   x.GetProperty("Value").GetString()==
-                       sequence.ToString(CultureInfo.InvariantCulture))!=1)
-                throw new InvalidDataException("Canonical attribute identity differs from projection.");
-        }
-        catch(Exception ex) when(ex is JsonException or KeyNotFoundException or
-            InvalidOperationException)
-        {
-            throw new InvalidDataException("Malformed canonical observation identity.",ex);
-        }
-    }
-
-    private static void DecimalParam(SqlCommand command,string name,ulong value)
-    {
-        var parameter=command.Parameters.Add(name,SqlDbType.Decimal);
-        parameter.Precision=20;
-        parameter.Scale=0;
-        parameter.Value=Convert.ToDecimal(value,CultureInfo.InvariantCulture);
-    }
-}
-);
-                    IF (SELECT COUNT_BIG(*) FROM @selected)<>@expected
-                        THROW 51075,'Duplicate or missing requested source batch.',1;
-                    IF (SELECT COUNT_BIG(*) FROM acquisition.MtConnectBatch b
-                        JOIN @selected selected ON selected.BatchId=b.BatchId)<>@expected
-                        THROW 51075,'Missing source batch.',1;
-                    IF COALESCE((
-                        SELECT SUM(CONVERT(bigint,DATALENGTH(b.RawDocument))+512)
-                        FROM acquisition.MtConnectBatch b
-                        JOIN @selected selected ON selected.BatchId=b.BatchId
-                    ),0)>@remaining
-                        THROW 51074,'Accepted source batch document budget exceeded.',1;
-                    SELECT b.BatchId,b.SiteId,b.MachineId,b.StreamKeyBytes,
-                        b.AcknowledgementId,b.InstanceId,b.FromSequence,
-                        b.NextSequence,b.FirstAvailableSequence,b.RawDocument,b.DocumentHash
-                    FROM acquisition.MtConnectBatch b WITH(HOLDLOCK)
-                    JOIN @selected selected ON selected.BatchId=b.BatchId
-                    """,connection,tx);
-                command.Parameters.Add("@batchIds",SqlDbType.NVarChar,-1).Value=idsJson;
-                await using var reader=await command.ExecuteReaderAsync(ct);
-                while(await reader.ReadAsync(ct))
-                {
-                    var batchId=reader.GetGuid(0);
-                    var site=reader.GetGuid(1);
-                    var machine=reader.GetGuid(2);
-                    var streamBytes=(byte[])reader[3];
-                    var acknowledgementId=reader.GetGuid(4);
-                    var instance=decimal.ToUInt64(reader.GetDecimal(5));
-                    var from=decimal.ToUInt64(reader.GetDecimal(6));
-                    var next=decimal.ToUInt64(reader.GetDecimal(7));
-                    var first=decimal.ToUInt64(reader.GetDecimal(8));
-                    var raw=(byte[])reader[9];
-                    var hash=(byte[])reader[10];
-                    Account(ref transferred,raw.Length+512);
-                    if(site!=siteId||machine!=identity.MachineId||
-                       !streamBytes.AsSpan().SequenceEqual(stream)||
-                       instance!=instanceId||from>next||first>from||
-                       !CryptographicOperations.FixedTimeEquals(SHA256.HashData(raw),hash))
-                        throw new InvalidDataException("Accepted batch scope, frontier or digest mismatch.");
-                    // The existing bounded MTConnect parser is the canonical
-                    // authority for source fields. Parse each distinct, verified
-                    // batch once, then reuse its indexed observations for this cut.
-                    const string prefix="mtconnect:uuid:";
-                    if(!identity.StreamKey.StartsWith(prefix,StringComparison.Ordinal))
-                        throw new InvalidDataException("Unsupported accepted source stream.");
-                    var device=identity.StreamKey[prefix.Length..];
-                    var parsed=MtConnectSampleParser.Parse(raw,device,from);
-                    if(parsed.InstanceId!=instance || parsed.FirstSequence!=first ||
-                       parsed.NextSequence!=next)
-                        throw new InvalidDataException("Retained batch headers disagree with verified document.");
-                    var bySequence=parsed.Observations.ToDictionary(x=>x.Sequence);
-                    if(!batches.TryAdd(batchId,new(batchId,acknowledgementId,instance,
-                        from,next,first,bySequence,Convert.ToHexString(hash))))
-                        throw new InvalidDataException("Duplicate accepted batch identity.");
-                }
-                if(batches.Count!=batchIds.Length)
-                    throw new InvalidDataException("Missing retained accepted batch.");
-            }
-            var rows=new List<AcceptedRow>(pending.Count);
-            foreach(var projected in pending)
-            {
-                if(!batches.TryGetValue(projected.BatchId,out var batch)||
-                   projected.Sequence<batch.From||projected.Sequence>=batch.Next||
-                   projected.InstanceId!=batch.Instance)
-                    throw new InvalidDataException("Accepted batch cannot authorize observation frontier.");
-                if(!batch.BySequence.TryGetValue(projected.Sequence,out var source) ||
-                   !string.Equals(source.DataItemId,identity.SourceAddress,StringComparison.Ordinal) ||
-                   !string.Equals(source.RawValue,projected.RawValue,StringComparison.Ordinal) ||
-                   !string.Equals(source.Quality,projected.Quality,StringComparison.Ordinal) ||
-                   !string.Equals(source.SourceTimestamp,projected.SourceTimestamp,StringComparison.Ordinal) ||
-                   source.Timestamp!=projected.ObservedAt ||
-                   !ExactUtf8.GetBytes(source.CanonicalJson).AsSpan()
-                       .SequenceEqual(projected.CanonicalBytes) ||
-                   !string.Equals(source.ContentHash,projected.CanonicalSha256,StringComparison.Ordinal))
-                    throw new InvalidDataException(
-                        "Accepted observation projection disagrees with authenticated source document.");
-                rows.Add(new(projected.SiteId,projected.MachineId,identity.StreamKey,
-                    projected.MappingId,identity.SourceAddress,projected.InstanceId,
-                    projected.Sequence,projected.BatchId,batch.AcknowledgementId,
-                    projected.ObservedAt,projected.RawValue,projected.Quality,
-                    projected.SourceTimestamp,projected.CanonicalSha256,
-                    batch.DocumentSha256));
-            }
-            await tx.CommitAsync(ct);
             return rows.AsReadOnly();
         }
         catch
