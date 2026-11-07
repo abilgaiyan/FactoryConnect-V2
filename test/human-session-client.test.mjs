@@ -17,7 +17,7 @@ test("passes opaque one-use assertion without using URL or persistent storage", 
   const fetchStub = async (url, options) => {
     request = { url: String(url), options };
     return Response.json({ bearer: Buffer.alloc(32, 7).toString("base64"),
-      principalId: "11111111-1111-1111-1111-111111111111", expiresAt: "2026-11-07T10:00:00Z" });
+      principalId: "11111111-1111-1111-1111-111111111111", expiresAt: "2099-11-07T10:00:00Z" });
   };
   const issued = await issueHumanSession("https://localhost/", "opaque-proof", undefined, fetchStub);
   assert.equal(request.url, "https://localhost/api/security/v2/human-sessions");
@@ -37,4 +37,27 @@ test("rejects malformed success responses", async () => {
     issueHumanSession("https://localhost/", "opaque-proof", undefined, async () => Response.json({ bearer: "not-a-token", principalId: "x", expiresAt: "x" })),
     error => error instanceof HumanSessionFailure && error.status === 502,
   );
+});
+
+test("rejects expired successful responses and does not return a bearer", async () => {
+  await assert.rejects(
+    issueHumanSession("https://localhost/", "opaque-proof", undefined,
+      async () => Response.json({ bearer: Buffer.alloc(32, 7).toString("base64"),
+        principalId: "11111111-1111-1111-1111-111111111111", expiresAt: "2020-01-01T00:00:00Z" })),
+    error => error instanceof HumanSessionFailure && error.status === 502,
+  );
+});
+test("rejects a cross-origin identity endpoint before transmitting the assertion", async () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { origin: "https://dashboard.example" } };
+  try {
+    await assert.rejects(
+      issueHumanSession("https://identity.example/", "opaque-proof", undefined,
+        () => { throw new Error("assertion leaked"); }),
+      /same-origin HTTPS/,
+    );
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
 });
