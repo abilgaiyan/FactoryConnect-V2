@@ -24,7 +24,7 @@ export function OperatorEvidencePage({
     return () => controller.abort();
   }, [baseAddress, sessionBearer]);
   const visible = state.kind === "ready" && state.bearer !== sessionBearer
-    ? { kind: "loading" as const } : state;
+    ? { kind: sessionBearer ? "loading" as const : "denied" as const } : state;
   const machine = visible.kind === "ready"
     ? visible.machines.find(m => m.machineId === selectedMachine) : undefined;
   return <section aria-label="Operator evidence">
