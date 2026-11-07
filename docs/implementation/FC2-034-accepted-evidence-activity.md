@@ -146,7 +146,7 @@ A separate expiring activation fixture begins with eligible accepted observation
 
 **Lock-order review correction:** standalone mapping resolution and the accepted-source writer now acquire the existing installation security gate Shared and verify the installation identity before the machine gate. All inspected authority mutations take that gate Exclusive before policy/machine gates. The activity path acquires no policy gate after a machine gate. Writer ordering is security Shared → machine Shared → processor Exclusive → fresh authority/source/checkpoint validation, with all gates retained through commit. The expiry fixture also verifies that the waiting processor owns the security Shared gate. This closes the implementation omission, pending the new head's SQL regression evidence; it does not establish the remaining source-cut or restart gates.
 
-## Predecessor and source-cut binding increment — SQL acceptance pending
+## Predecessor and source-cut binding increment — accepted at b81f30cd
 
 The accepted-source checkpoint now persists `ActivityAcceptedFrontier`: exact committed instance and inclusive through-sequence, package/acknowledgement/hash pins, and complete accepted-row provenance for the last consumed sample and open anchor. Both are bound to the existing qualification/checkpoint hash and operation result. A resumed accepted writer rejects missing legacy provenance, changed qualification, instance, acknowledgement, package, source frontier, predecessor values/identities or an anchor crossing an unqualified batch boundary. It rechecks retained predecessor/anchor rows and immutable batch hashes on the writer transaction before evaluation. There is no nearest-time lookup or historical prefix reconstruction.
 
@@ -156,7 +156,28 @@ Accepted-document discovery now enumerates the bounded intersecting batch metada
 
 Continuity is unchanged in assurance: the first sample of a new batch fences the old anchor. A split cut within the same verified batch may link only after its exact persisted predecessor has been revalidated. Adjacent sequence numbers, a reconstructed client and matching timestamps do not establish cross-batch or whole-process continuity.
 
-The disposable ingestion fixture adds independently ingested continuation documents, reconstructed SQL clients, split same-batch success, cross-batch fencing, exact receipt replay and negative cases for initial omission, skipped/overlapping cuts, unaccepted future frontiers, unrelated instances, checksum-consistent checkpoint/provenance/policy corruption, and partially/wholly missing projections. These cases are executable additions awaiting the new head's SQL CI result. They do not claim whole-child-process restart, source physical completeness, activity HTTP/browser delivery or production readiness. PR #34 remains draft.
+The disposable ingestion fixture adds independently ingested continuation documents, reconstructed SQL clients, split same-batch success, cross-batch fencing, exact receipt replay and negative cases for initial omission, skipped/overlapping cuts, unaccepted future frontiers, unrelated instances, checksum-consistent checkpoint/provenance/policy corruption, and partially/wholly missing projections. These cases are CI-qualified at `b81f30cdd6c139ddcaf8aa78cb4c3f51439634bd`; all three jobs in [CI #42397602730](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42397602730) passed, including the full SQL regression. They do not claim whole-child-process restart, source physical completeness, activity HTTP/browser delivery or production readiness. PR #34 remains draft.
 
 
 Checkpoint provenance also pins its producing operation ID. Continuation requires exact equality with that immutable operation's result at the applied generation before revalidating predecessor/anchor rows. A checksum-consistent fabricated checkpoint naming other genuine retained rows cannot manufacture progress or source ancestry. SQL negatives include that multi-field forgery and removal of the exact retained checkpoint predecessor independently of the newly selected source cut.
+
+
+## Whole-child-process restart acceptance — implementation, SQL qualification pending
+
+`ActivityProcessRestartAcceptance` runs an acceptance-only child mode of the SQL acceptance executable. Child dispatch precedes any bootstrap or fixture creation. The parent passes scoped connection/signal/cut configuration through redirected stdin, never process arguments or artifacts. Both parent and child require the generated `FactoryConnect_V2_Test_<guid>` database naming contract. No application worker, production crash hook, API, migration or deployment is added.
+
+The existing real HTTP/mTLS ingestion fixture independently accepts three original documents under the approved and acknowledged mapping: `ACTIVE → ACTIVE → READY` within one batch, a separate `ACTIVE → READY` batch, and a pending batch for negative restarts. Eight distinct OS child processes call the existing `ApplyAcceptedAsync`; they receive no in-memory checkpoint from the parent and reconstruct authority, predecessor and committed operation ancestry from SQL.
+
+| Process boundary | Required evidence |
+| --- | --- |
+| After open-checkpoint commit | Parent independently reads exact committed checkpoint; child is killed abruptly; SQL retains original anchor, later repeated-state sample and one receipt |
+| Before closing-period commit | Disposable `AFTER INSERT` period trigger waits on parent-held application lock after checkpoint/receipt/period writes; SQL DMV confirms child wait; live child is killed before release |
+| Fresh process after rollback | Checkpoint/period/receipt snapshot is unchanged; same operation ID safely executes once and emits the exact original-anchor-to-successor period |
+| After closed-period commit | Parent reads exact period/receipt/checkpoint, kills the live process, and confirms durability |
+| Cross-batch restart | New child emits only the next batch's internally proven period; no bridging interval is constructed |
+| Historical receipt replay | Another child retries the earlier committed operation after newer advancement; original receipt/result is returned and newer checkpoint/period counts remain unchanged |
+| Invalid durable provenance | Fresh children reject missing checkpoint provenance, altered ancestry and missing exact retained predecessor, with unchanged checkpoint/period/receipt snapshots |
+
+The parent waits for killed-child SQL sessions and rollback to drain before asserting durable state, drains child output and reaps children on failure. The temporary SQL trigger and intentional checksum-consistent/projection corruption exist only in the disposable database and are restored. `artifacts/ingestion/activity-process-restart.json` records checks, process IDs, kills, sanitized results and durable snapshots; the existing CI ingestion artifact upload includes it.
+
+**Disposition:** build/dispatch checks and executable fixture implementation are not SQL crash acceptance. Keep this section pending until the new head's disposable SQL run succeeds. Same-batch restart recovery and cross-batch *break preservation* are the intended qualification; continuous acquisition across batches and physical MTConnect completeness remain unproven. Receipt replay retains current authority/source revalidation and is not a new historical-receipt retrieval API. Larger-history SQL work, latency and memory, activity API/UI and FC2-034 merge readiness remain open. No production changes or merge.

@@ -1,6 +1,13 @@
 using FactoryConnect.Sql;
 using Microsoft.Data.SqlClient;
 
+// Child dispatch must precede fixture/bootstrap evaluation and SQL database creation.
+if(args is ["--activity-child"])
+{
+    Environment.ExitCode=await ActivityProcessRestartAcceptance.RunChildAsync();
+    return;
+}
+
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
 var activityPure=ActivityInterpreterAcceptance.PureChecks();

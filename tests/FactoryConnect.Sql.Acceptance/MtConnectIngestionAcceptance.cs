@@ -637,6 +637,24 @@ internal static class MtConnectIngestionAcceptance
             site,machine,currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId,
             continuationFrom+1,continuationFrom+3,2)).Replayed,
             "continued source cut replays its immutable receipt without duplicate effects");
+        // Seed original HTTP/mTLS-accepted source documents before child lifetimes.
+        async Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>> ProcessSource(
+            int seconds,bool repeated=false)
+        {
+            var sourceContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+            var sourceFrom=sourceContext.Cursor!.NextSequence;
+            agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+                activityStart:currentActivity.EffectiveFrom.AddSeconds(seconds),activityRepeats:repeated),null);
+            var sourceFrame=await client.AcquireAsync(agent.Endpoint,Device,sourceFrom,repeated?6:4);
+            await Transport(await Request(sourceFrame));
+            return await acceptedReader.ReadBoundedAsync(site,eligibleCut.Qualification,
+                sourceFrame.InstanceId,sourceFrom-1,sourceFrame.NextSequence-1,100);
+        }
+        var processOpening=await ProcessSource(20,repeated:true);
+        var processCrossBatch=await ProcessSource(30);
+        var processPending=await ProcessSource(40);
+        count+=await ActivityProcessRestartAcceptance.RunAsync(target,site,currentActivity,
+            eligibleCut.Qualification,processOpening,processCrossBatch,processPending);
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.
@@ -795,9 +813,9 @@ internal static class MtConnectIngestionAcceptance
         async Task<bool> Race(MtConnectIngestionRequest r){try{await writer.IngestMtConnectAsync(pair.Channel,r);return true;}catch(SecurityConflictException){return false;}}
         async Task Conflict(Func<Task> action,string name){try{await action();}catch(SecurityConflictException){Check(true,name);return;}throw new InvalidOperationException(name);}
         async Task<long> Count(string table)=>Convert.ToInt64(await Scalar("SELECT COUNT_BIG(*) FROM "+table));
-        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false,bool activity=false,DateTimeOffset? activityStart=null)
+        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false,bool activity=false,DateTimeOffset? activityStart=null,bool activityRepeats=false)
         {
-            var samples=Enumerable.Range(0,count).Where(i=>!activity||i is not (1 or 3))
+            var samples=Enumerable.Range(0,count).Where(i=>!activity || (i is not (1 or 3) && (!activityRepeats || i!=5)))
                 .Select(i=>{
                     var sequence=from+(ulong)i;
                     return new XElement("PartCount",
@@ -809,10 +827,10 @@ internal static class MtConnectIngestionAcceptance
             var component=new XElement("ComponentStream",new XElement("Samples",samples));
             if(activity)
             {
-                component.Add(new XElement("Events",new[]{1,3}.Where(i=>i<count).Select(i=>
+                component.Add(new XElement("Events",(activityRepeats?new[]{1,3,5}:new[]{1,3}).Where(i=>i<count).Select(i=>
                     new XElement("Execution",new XAttribute("dataItemId","execution"),
                         new XAttribute("timestamp",(activityStart?.AddSeconds(i-1)??now.AddSeconds(i)).ToString("O",CultureInfo.InvariantCulture)),
-                        new XAttribute("sequence",from+(ulong)i),i==1?"ACTIVE":"READY"))));
+                        new XAttribute("sequence",from+(ulong)i),(i==1 || (activityRepeats && i==3))?"ACTIVE":"READY"))));
             }
             var xml=new XElement("MTConnectStreams",
                 new XElement("Header",new XAttribute("instanceId",instance),

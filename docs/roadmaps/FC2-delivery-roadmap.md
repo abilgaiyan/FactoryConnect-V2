@@ -62,3 +62,8 @@ activity screen, followed by production quantities and incremental shift metrics
 Broader administration, supervisor operations, deployment rehearsal and production
 cutover remain open. Earlier table entries describe their historical slice scope;
 later merged milestones do not imply production commissioning.
+
+
+## FC2-034 evidence-processing qualification — draft PR #34
+
+Approved mapping authority, accepted source-cut binding and immutable checkpoint ancestry are CI-qualified at `b81f30cd` ([CI #42397602730](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42397602730), all three jobs passed). The next narrow implementation adds real child-process kill/restart acceptance around the existing accepted-evidence writer; its SQL qualification is pending. It preserves same-batch links and explicit cross-batch breaks, without adding a production worker, activity endpoint or display. After this gate, qualify larger retained histories and bounded SQL work before activity API/browser delivery. Cross-batch physical completeness, production commissioning and merge readiness remain open; PR #34 stays draft.
