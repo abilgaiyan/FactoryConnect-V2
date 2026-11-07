@@ -86,6 +86,51 @@ internal static class MtConnectIngestionAcceptance
             Check(permittedMachines.Count==1&&permittedMachines[0].SiteId==site
                 &&permittedMachines[0].MachineId==machine,
                 "verified human sees only currently authorized machine in bounded operator roster");
+            // A full 100-machine visible roster must stay query-bounded. Historical
+            // revoked grants must not consume the visible-machine limit.
+            var rosterMachines=Enumerable.Range(0,99).Select(_=>Guid.NewGuid()).ToArray();
+            await using(var bulk=new SqlCommand("",c))
+            {
+                var values=string.Join(",",rosterMachines.Select((_,i)=>$"(@id{i},@site,N'Roster fixture')"));
+                bulk.CommandText="INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES "+values;
+                bulk.Parameters.AddWithValue("@site",site);
+                for(var i=0;i<rosterMachines.Length;i++)bulk.Parameters.AddWithValue($"@id{i}",rosterMachines[i]);
+                await bulk.ExecuteNonQueryAsync();
+            }
+            var rootGrant=(Guid)(await Scalar(
+                "SELECT GrantId FROM security.PermissionGrant WHERE GranteeId=@admin AND Permission=N'commissioning.read'",
+                ("@admin",admin)))!;
+            // Set up a broad delegated grant so one SQL-authority verification
+            // covers the entire visible 100-machine inventory.
+            var rosterGrant=Guid.NewGuid();
+            await service.GrantPermissionAsync(rootToken,new(Guid.NewGuid(),rosterGrant,proposer,
+                rootGrant,"commissioning.read",AuthorizationScope.Site(site),
+                true,false,now,now.AddHours(1),await Epoch(),"site roster performance acceptance"));
+            var rosterReader=new SqlSecurityAuthority(target.ConnectionString,target.InstallationId);
+            var rosterActivities=new List<Activity>();
+            using(var rosterListener=new ActivityListener
+            {
+                ShouldListenTo=s=>s.Name=="FactoryConnect.V2.Security",
+                Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped=a=>{lock(rosterActivities)rosterActivities.Add(a);}
+            })
+            {
+                ActivitySource.AddActivityListener(rosterListener);
+                var clock=Stopwatch.StartNew();
+                var all=await rosterReader.ReadOperatorEvidenceMachinesAsync(issuedHash,site);
+                clock.Stop();
+                Check(all.Count==100&&all.Select(m=>m.MachineId).Distinct().Count()==100,
+                    "100 authorized machines enumerate without truncation");
+                Activity[] readings;
+                lock(rosterActivities)readings=rosterActivities.Where(a=>a.OperationName=="security.transaction").ToArray();
+                Check(readings.Length>0&&readings.Max(a=>Convert.ToInt64(a.GetTagItem("security.sql.roundtrips")))<=12,
+                    "100-machine discovery SQL roundtrips stay bounded independently of machine count");
+                Console.WriteLine($"MEASURE: operator visible machines=100 elapsedMs={clock.Elapsed.TotalMilliseconds:F2} maxRoundtrips={readings.Max(a=>Convert.ToInt64(a.GetTagItem("security.sql.roundtrips")))}");
+            }
+            // Revoke broad permission before exercising exact machine denial.
+            await service.RevokeGrantAsync(rootToken,Guid.NewGuid(),rosterGrant,await Epoch(),"restore exact-machine grant");
+            Check((await rosterReader.ReadOperatorEvidenceMachinesAsync(issuedHash,site)).Count==1,
+                "revoked broad grant cannot disclose another machine");
             Check((await writer.ReadOperatorEvidenceMachinesAsync(rootToken,site)).Count==0,
                 "administrator without commissioning grant has no implicit evidence machines");
             await Denied(()=>writer.ReadMtConnectEvidenceAsync(issuedHash,site,otherMachine,Stream),
