@@ -54,7 +54,7 @@ The same executable provides a simple authenticated read without starting acquis
 dotnet run --project tools/FactoryConnect.AcquisitionHost -- --config /protected/machine.json --read
 ```
 
-Send the existing 32-byte session bearer encoded as standard Base64 on stdin, not the command line or configuration. Only its SHA-256 is passed to the existing SQL authority. Current machine-scoped `commissioning.read` is required. Output is actual accepted SQL evidence with explicit historical/not-connectivity labels, raw value, quality, native timestamp, received time, source sequence and provenance. No activity, quantity or OEE processing is added. Real sign-in/provider integration and browser presentation remain separate; no fixture identity verifier is installed in this executable.
+Send the existing 32-byte session bearer encoded as standard Base64 through redirected stdin, not the command line or configuration; interactive echoed token entry is rejected. Only its SHA-256 is passed to the existing SQL authority. Current machine-scoped `commissioning.read` is required. Output is actual accepted SQL evidence with explicit historical/not-connectivity labels, raw value, quality, native timestamp, received time, source sequence and provenance. No activity, quantity or OEE processing is added. Real sign-in/provider integration and browser presentation remain separate; no fixture identity verifier is installed in this executable.
 
 ## Runnable controlled acceptance
 

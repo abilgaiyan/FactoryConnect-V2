@@ -14,7 +14,8 @@ try
     using var termination=OperatingSystem.IsWindows()?null:PosixSignalRegistration.Create(PosixSignal.SIGTERM,context=>{context.Cancel=true;stopping.Cancel();});
     if(readOnly)
     {
-        using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(30));var line=await Console.In.ReadLineAsync(timeout.Token);
+        if(!Console.IsInputRedirected)throw new ArgumentException("Supply the session bearer through redirected stdin.");
+        using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(30));var line=await Task.Run(()=>Console.In.ReadLine()).WaitAsync(timeout.Token);
         if(line is null||line.Length>128)throw new ArgumentException("Base64 session bearer required on stdin.");var bearer=Convert.FromBase64String(line);
         try{if(bearer.Length!=32)throw new ArgumentException("Exact session bearer required.");var token=SHA256.HashData(bearer);var rows=await new SqlSecurityAuthority(options.SqlConnectionString,options.InstallationId).ReadMtConnectEvidenceAsync(token,options.SiteId,options.MachineId,options.StreamKey,20,timeout.Token);Report(new{status="accepted-evidence",historical=true,notConnectivity=true,rows});}
         finally{CryptographicOperations.ZeroMemory(bearer);}
