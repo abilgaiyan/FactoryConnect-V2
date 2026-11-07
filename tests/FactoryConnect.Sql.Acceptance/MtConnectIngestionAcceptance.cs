@@ -387,6 +387,39 @@ internal static class MtConnectIngestionAcceptance
             interpretedCandidate.ClosedPeriods[0].State==ActivityState.Running &&
             interpretedCandidate.ClosedPeriods[0].DurationTicks==TimeSpan.FromSeconds(2).Ticks,
             "actual accepted activity signals receive conservative same-batch proof without checkpoint publication");
+        var atomicStore=new SqlActivityProcessorStore(target.ConnectionString);
+        var acceptedOperation=Guid.NewGuid();
+        try
+        {
+            await atomicStore.ApplyAcceptedAsync(acceptedOperation,target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                bulkFrame.InstanceId,firstBulk,firstBulk+3,0,injectRollback:true);
+            throw new InvalidOperationException("Expected accepted-source atomic rollback.");
+        }
+        catch(InvalidOperationException error) when(
+            error.Message=="Controlled atomic activity rollback fixture.")
+        {
+            Check((await atomicStore.ReadCheckpointAsync(trustedCandidate.Qualification))
+                .NextGeneration==0,
+                "accepted-source proof and generated intervals roll back with checkpoint transaction");
+        }
+        var acceptedCommit=await atomicStore.ApplyAcceptedAsync(
+            acceptedOperation,target.InstallationId,site,machine,
+            currentActivity.Signal.MappingId,Stream,
+            bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
+        Check(acceptedCommit.NewPeriods.Count==1 &&
+            acceptedCommit.NewPeriods[0]==interpretedCandidate.ClosedPeriods[0] &&
+            acceptedCommit.Checkpoint.NextGeneration==1 &&
+            (await atomicStore.ReadPeriodPageAsync(trustedCandidate.Qualification))
+                .Rows.Single().Period==acceptedCommit.NewPeriods[0],
+            "verified accepted MTConnect cut commits its exact immutable period and checkpoint atomically");
+        var acceptedReplay=await atomicStore.ApplyAcceptedAsync(
+            acceptedOperation,target.InstallationId,site,machine,
+            currentActivity.Signal.MappingId,Stream,
+            bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
+        Check(acceptedReplay.Replayed &&
+            acceptedReplay.NewPeriods.SequenceEqual(acceptedCommit.NewPeriods),
+            "verified accepted-source operation replays without a second activity period");
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.
