@@ -147,12 +147,12 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
                 JOIN configuration.PackageMachineAssignment assignment
                     ON assignment.PackageRevisionId=p.PackageRevisionId
                     AND assignment.MachineId=a.MachineId AND assignment.SiteId=a.SiteId
-                JOIN configuration.MachineOperationalState operational
+                JOIN configuration.MachineOperationalState operational WITH(HOLDLOCK)
                     ON operational.SiteId=a.SiteId AND operational.MachineId=a.MachineId
                     AND operational.Generation=a.OperationalGeneration
                 JOIN configuration.MachineOperationalTransition state
                     ON state.StateId=operational.StateId AND state.Status='enabled'
-                JOIN configuration.RuntimeAssignmentState currentAssignment
+                JOIN configuration.RuntimeAssignmentState currentAssignment WITH(HOLDLOCK)
                     ON currentAssignment.SiteId=a.SiteId
                     AND currentAssignment.MachineId=a.MachineId
                     AND currentAssignment.AssignmentId=a.AssignmentId
