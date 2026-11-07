@@ -410,6 +410,53 @@ internal static class MtConnectIngestionAcceptance
         // transaction. Lock-wait expiry needs a *currently eligible* retained
         // cut and an independently advanced authoritative eligibility end;
         // do not treat this pre-activation case as that concurrency proof.
+        // Generate eligible timestamps at the source, before acquisition and ingestion.
+        // Retain the historical rejection above as an independent negative case.
+        context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+        var eligibleFrom=context.Cursor!.NextSequence;
+        agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+            activityStart:currentActivity.EffectiveFrom),null);
+        var eligibleFrame=await client.AcquireAsync(agent.Endpoint,Device,eligibleFrom,4);
+        var eligibleRequest=await Request(eligibleFrame);
+        await Transport(eligibleRequest);
+        var eligibleRows=await acceptedReader.ReadBoundedAsync(site,
+            ActivityQualificationIdentity.From(currentActivity.Signal,"eligible-discovery"),
+            eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,100);
+        var eligibleCut=AcceptedActivityContinuityQualifier.Qualify(currentActivity,eligibleRows);
+        Check(eligibleRows.Count==2 && eligibleRows[0].ObservedAt==currentActivity.EffectiveFrom &&
+            eligibleRows.All(x=>x.BatchId==eligibleRequest.OperationId &&
+                x.AcknowledgementId==currentActivity.AcknowledgementId),
+            "positive source fixture includes the acknowledged interpretation from-boundary");
+        var positiveOperation=Guid.NewGuid();
+        try
+        {
+            await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,0,injectRollback:true);
+            throw new InvalidDataException("Injected activity rollback did not execute.");
+        }
+        catch(InvalidOperationException error)when(error.Message=="Controlled atomic activity rollback fixture.")
+        {
+            Check(true,"eligible accepted-source publication reaches injected atomic rollback");
+        }
+        Check((await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)).NextGeneration==0 &&
+            await Count("activity.ClosedPeriod")==0 && await Count("activity.ProcessorOperation")==0,
+            "eligible rollback leaves checkpoint periods and receipts unchanged");
+        var committed=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,
+            eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,0);
+        var replay=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,
+            eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,0);
+        var persisted=await atomicStore.ReadPeriodPageAsync(eligibleCut.Qualification);
+        Check(!committed.Replayed && replay.Replayed && committed.NewPeriods.Count==1 &&
+            JsonSerializer.Serialize(committed.Checkpoint)==JsonSerializer.Serialize(replay.Checkpoint) &&
+            JsonSerializer.Serialize(committed.Checkpoint)==JsonSerializer.Serialize(
+                await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)) &&
+            persisted.Rows.Count==1 && persisted.Rows[0].Qualification==eligibleCut.Qualification &&
+            JsonSerializer.Serialize(persisted.Rows[0].Period)==JsonSerializer.Serialize(committed.NewPeriods[0]) &&
+            await Count("activity.ProcessorOperation")==1,
+            "eligible ingestion commits exact qualified period checkpoint and replay receipt once");
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.
@@ -465,6 +512,91 @@ internal static class MtConnectIngestionAcceptance
             await Denied(()=>expiring,"ingestion rechecks activation and acknowledgement expiry after machine lock wait");
         }
         activation=await Intent();ack=Ack(activation,3);await service.AcknowledgeActivationAsync(pair.Channel,ack);await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+        // Separate activity race: preflight must succeed, then wait on the processor
+        // gate while the acknowledged activation expires. No source bytes are edited.
+        var activityDeadline=(DateTimeOffset)(await Scalar(
+            "SELECT TODATETIMEOFFSET(DATEADD(second,8,SYSUTCDATETIME()),'+00:00')"))!;
+        activation=await Intent(until:activityDeadline);ack=Ack(activation,3);
+        await service.AcknowledgeActivationAsync(pair.Channel,ack);
+        var expiringMapping=await mappingResolver.ResolveAsync(site,machine,
+            currentActivity.Signal.MappingId,Stream);
+        context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+        var raceFrom=context.Cursor!.NextSequence;
+        agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+            activityStart:expiringMapping.EffectiveFrom),null);
+        var raceFrame=await client.AcquireAsync(agent.Endpoint,Device,raceFrom,4);
+        await Transport(await Request(raceFrame));
+        var raceRows=await acceptedReader.ReadBoundedAsync(site,
+            ActivityQualificationIdentity.From(expiringMapping.Signal,"expiry-discovery"),
+            raceFrame.InstanceId,raceFrom,raceFrom+3,100);
+        AcceptedActivityContinuityQualifier.Qualify(expiringMapping,raceRows);
+        Check(raceRows.Count==2 && raceRows.All(x=>x.ObservedAt>=expiringMapping.EffectiveFrom &&
+            x.ObservedAt<expiringMapping.EffectiveTo),"activity expiry race starts with eligible accepted source");
+        foreach(var boundary in new[]{
+            (Time:expiringMapping.EffectiveFrom.AddTicks(-1),Label:"before from"),
+            (Time:activityDeadline,Label:"exclusive to"),
+            (Time:activityDeadline.AddTicks(1),Label:"after to")})
+        {
+            var boundaryContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+            var boundaryFrom=boundaryContext.Cursor!.NextSequence;
+            agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+                activityStart:boundary.Time),null);
+            var boundaryFrame=await client.AcquireAsync(agent.Endpoint,Device,boundaryFrom,4);
+            await Transport(await Request(boundaryFrame));
+            try
+            {
+                await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+                    site,machine,currentActivity.Signal.MappingId,Stream,
+                    boundaryFrame.InstanceId,boundaryFrom,boundaryFrom+3,1);
+                throw new InvalidOperationException("Outside-window source was published.");
+            }
+            catch(InvalidDataException error)when(error.Message==
+                "Accepted observation is outside the exact approved activity interpretation interval.")
+            {
+                Check(true,"accepted source rejects interpretation boundary "+boundary.Label);
+            }
+        }
+        var raceOperation=Guid.NewGuid();
+        var beforeCheckpoint=await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+            ("@machine",machine),("@mapping",currentActivity.Signal.MappingId));
+        var beforePeriods=await Count("activity.ClosedPeriod");
+        var beforeReceipts=await Count("activity.ProcessorOperation");
+        var racingStore=new SqlActivityProcessorStore(new SqlConnectionStringBuilder(target.ConnectionString)
+            {ApplicationName="fc2activity-expiry"}.ConnectionString);
+        var processorResource=$"fc2:activity:{machine:N}:{currentActivity.Signal.MappingId:N}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Stream)))}";
+        await using(var barrier=new SqlConnection(target.ConnectionString))
+        {
+            await barrier.OpenAsync();
+            await using var tx=(SqlTransaction)await barrier.BeginTransactionAsync();
+            await Hold(barrier,tx,processorResource);
+            var expiring=racingStore.ApplyAcceptedAsync(raceOperation,target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                raceFrame.InstanceId,raceFrom,raceFrom+3,1);
+            try
+            {
+                await WaitForLock("fc2activity-expiry","X");
+                Check(!expiring.IsCompleted,"eligible activity passed preflight and waits on held processor gate");
+                while((DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!<activityDeadline)
+                    await Task.Delay(20);
+            }
+            finally { await tx.CommitAsync(); }
+            try
+            {
+                await expiring;
+                throw new InvalidOperationException("Expired activity authority published effects.");
+            }
+            catch(InvalidDataException error)when(error.Message=="Approved active activity mapping does not exist.")
+            {
+                Check(true,"activity rechecks authority expiry after the observed processor lock wait");
+            }
+        }
+        Check(Equals(beforeCheckpoint,await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@machine",machine),("@mapping",currentActivity.Signal.MappingId))) &&
+            await Count("activity.ClosedPeriod")==beforePeriods &&
+            await Count("activity.ProcessorOperation")==beforeReceipts,
+            "post-wait expiry preserves exact checkpoint periods and operation receipts");
+        activation=await Intent();ack=Ack(activation,3);
+        await service.AcknowledgeActivationAsync(pair.Channel,ack);
         var policy=await Proposal("schedule");await service.ProposePolicyRevocationAsync(token,policy);await Approve(policy);await Denied(()=>writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream),"effective policy revocation stops acquisition context without erasing evidence");
         Directory.CreateDirectory("artifacts/ingestion");await File.WriteAllTextAsync("artifacts/ingestion/first-machine.json",JsonSerializer.Serialize(new{schemaVersion=1,fixture=true,scope="Controlled real HTTP source and mutual TLS delivery, disposable V2 SQL; not Gajra production",source="abilgaiyan/FactoryConnect@088bf524",savedExample=example,finalCursor=new{instance="7",next=saved.Cursor.NextSequence.ToString(CultureInfo.InvariantCulture),baseline="100",completeness="retained-window-only"},batch1000=new{elapsedMs=timer.Elapsed.TotalMilliseconds,roundtrips=trips},checks=count},new JsonSerializerOptions{WriteIndented=true}));Console.WriteLine("DEMO: actual saved source values: "+JsonSerializer.Serialize(example.Select(x=>new{x.Sequence,x.Address,x.RawValue,x.Quality})));return count;
 
@@ -472,7 +604,7 @@ internal static class MtConnectIngestionAcceptance
         async Task<bool> Race(MtConnectIngestionRequest r){try{await writer.IngestMtConnectAsync(pair.Channel,r);return true;}catch(SecurityConflictException){return false;}}
         async Task Conflict(Func<Task> action,string name){try{await action();}catch(SecurityConflictException){Check(true,name);return;}throw new InvalidOperationException(name);}
         async Task<long> Count(string table)=>Convert.ToInt64(await Scalar("SELECT COUNT_BIG(*) FROM "+table));
-        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false,bool activity=false)
+        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false,bool activity=false,DateTimeOffset? activityStart=null)
         {
             var samples=Enumerable.Range(0,count).Where(i=>!activity||i is not (1 or 3))
                 .Select(i=>{
@@ -488,7 +620,7 @@ internal static class MtConnectIngestionAcceptance
             {
                 component.Add(new XElement("Events",new[]{1,3}.Where(i=>i<count).Select(i=>
                     new XElement("Execution",new XAttribute("dataItemId","execution"),
-                        new XAttribute("timestamp",now.AddSeconds(i).ToString("O",CultureInfo.InvariantCulture)),
+                        new XAttribute("timestamp",(activityStart?.AddSeconds(i-1)??now.AddSeconds(i)).ToString("O",CultureInfo.InvariantCulture)),
                         new XAttribute("sequence",from+(ulong)i),i==1?"ACTIVE":"READY"))));
             }
             var xml=new XElement("MTConnectStreams",
