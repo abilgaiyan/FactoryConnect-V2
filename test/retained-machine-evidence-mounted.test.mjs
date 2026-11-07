@@ -24,7 +24,7 @@ test("mounted evidence shows literal saved value and decimal sequence without cl
     assert.equal(request.headers.Authorization, "Bearer fixture-session");
     return Response.json(page);
   };
-  const h = await mountInDom(React.createElement(RetainedMachineEvidence, { machineId, baseAddress: "https://localhost/", sessionBearer: "fixture-session" }));
+  const h = await mountInDom(React.createElement(RetainedMachineEvidence, { machineId, baseAddress: "https://localhost/", sessionBearer: "fixture-session" }), "https://localhost/");
   t.after(() => h.dispose());
   assert.match(h.document.body.textContent, /18446744073709551615/);
   assert.equal(h.document.querySelector("tbody code").textContent, " 00042 ");
@@ -34,7 +34,7 @@ test("no session is denied without issuing a request", async t => {
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
   globalThis.fetch = () => { throw new Error("must not fetch"); };
-  const h = await mountInDom(React.createElement(RetainedMachineEvidence, { machineId, baseAddress: "https://localhost/", sessionBearer: null }));
+  const h = await mountInDom(React.createElement(RetainedMachineEvidence, { machineId, baseAddress: "https://localhost/", sessionBearer: null }), "https://localhost/");
   t.after(() => h.dispose());
   assert.match(h.document.querySelector("[role=alert]").textContent, /not authorized/);
 });
