@@ -1,9 +1,23 @@
 using FactoryConnect.Sql;
 using Microsoft.Data.SqlClient;
 
+// Child dispatch must precede fixture/bootstrap evaluation and SQL database creation.
+if(args is ["--activity-child"])
+{
+    Environment.ExitCode=await ActivityProcessRestartAcceptance.RunChildAsync();
+    return;
+}
+
+if(args is ["--activity-memory-child"])
+{
+    Environment.ExitCode=await ActivityWorkerMemoryAcceptance.RunChildAsync();
+    return;
+}
+
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
-var bootstrapPure=args is ["--ingestion-only"] or ["--host-only"]?0:await RuntimeMtlsTransportAcceptance.Run()+RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks();
+var activityPure=ActivityInterpreterAcceptance.PureChecks();
+var bootstrapPure=activityPure+(args is ["--ingestion-only"] or ["--host-only"] or ["--activity-history-only"] ? 0 : await RuntimeMtlsTransportAcceptance.Run()+RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks());
 if(args is ["--pure-only"]) { Console.WriteLine($"PASS: {canonicalPassed+bootstrapPure} pure acceptance checks."); return; }
 var admin = Environment.GetEnvironmentVariable("FC2_TEST_SQL")
     ?? throw new InvalidOperationException("FC2_TEST_SQL is required; SQL acceptance cannot be skipped.");
@@ -16,10 +30,10 @@ var databases = new List<string>();
 var passed = canonicalPassed+bootstrapPure;
 try
 {
-    if(args is ["--ingestion-only"] or ["--host-only"])
+    if(args is ["--ingestion-only"] or ["--host-only"] or ["--activity-history-only"])
     {
         var demoDb=await NewDatabase();var demoTarget=new InstallationTarget(demoDb.ConnectionString,demoDb.InitialCatalog,server,Guid.NewGuid(),true);await new SqlInstaller().ApplyAsync(demoTarget);
-        var demoChecks=args is ["--host-only"]?await AcquisitionHostAcceptance.Run(demoTarget with{InitializeEmpty=false}):await MtConnectIngestionAcceptance.Run(demoTarget with{InitializeEmpty=false});Console.WriteLine(args is ["--host-only"]?$"PASS: {demoChecks} whole-process acquisition host checks; controlled HTTP/mTLS and disposable SQL.":$"PASS: {demoChecks} first-machine ingestion checks; real HTTP/mTLS and disposable SQL.");return;
+        var demoChecks=args is ["--host-only"]?await AcquisitionHostAcceptance.Run(demoTarget with{InitializeEmpty=false}):await MtConnectIngestionAcceptance.Run(demoTarget with{InitializeEmpty=false},measureActivityHistory:args is ["--activity-history-only"]);Console.WriteLine(args is ["--activity-history-only"]?$"PASS: {demoChecks} activity history checks; measured disposable SQL fixture, no production SLO claim.":args is ["--host-only"]?$"PASS: {demoChecks} whole-process acquisition host checks; controlled HTTP/mTLS and disposable SQL.":$"PASS: {demoChecks} first-machine ingestion checks; real HTTP/mTLS and disposable SQL.");return;
     }
     var main = await NewDatabase();
     var installer = new SqlInstaller();
@@ -146,6 +160,10 @@ try
     var ingestionTarget=target with {ConnectionString=ingestionDb.ConnectionString,Database=ingestionDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(ingestionTarget);
     passed += await MtConnectIngestionAcceptance.Run(ingestionTarget with{InitializeEmpty=false});
+    var activityDb=await NewDatabase();
+    var activityTarget=target with {ConnectionString=activityDb.ConnectionString,Database=activityDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(activityTarget);
+    passed += await ActivitySqlDurabilityAcceptance.Run(activityTarget with {InitializeEmpty=false});
     var hostDb=await NewDatabase();
     var hostTarget=target with {ConnectionString=hostDb.ConnectionString,Database=hostDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(hostTarget);

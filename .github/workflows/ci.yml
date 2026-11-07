@@ -92,6 +92,8 @@ jobs:
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
       - name: Run first-machine HTTP TLS SQL demonstration
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
+      - name: Activity larger-history measurement and regression
+        run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --activity-history-only
       - name: Whole-process single-machine acquisition host
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --host-only
       - name: Real SQL acceptance (missing SQL is a failure)

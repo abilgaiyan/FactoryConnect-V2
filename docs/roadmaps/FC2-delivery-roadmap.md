@@ -62,3 +62,23 @@ activity screen, followed by production quantities and incremental shift metrics
 Broader administration, supervisor operations, deployment rehearsal and production
 cutover remain open. Earlier table entries describe their historical slice scope;
 later merged milestones do not imply production commissioning.
+
+
+## FC2-034 evidence-processing qualification — draft PR #34
+
+Approved mapping authority, accepted source-cut binding and immutable checkpoint ancestry are CI-qualified at `b81f30cd` ([CI #42397602730](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42397602730), all three jobs passed). The next narrow implementation adds real child-process kill/restart acceptance around the existing accepted-evidence writer; its SQL qualification is pending. It preserves same-batch links and explicit cross-batch breaks, without adding a production worker, activity endpoint or display. After this gate, qualify larger retained histories and bounded SQL work before activity API/browser delivery. Cross-batch physical completeness, production commissioning and merge readiness remain open; PR #34 stays draft.
+
+FC2-034 restart harness `03ac8cc5` is fully CI-qualified ([CI #42399116377](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42399116377)). The next measurement-first increment uses up to 1,024 retained 100-observation batches, equivalent serial tail cuts, separate normal/profiled trials, actual SQL access counters, exact-output digests and deep-history negatives. SQL measurements and review of actual logical-read/latency/memory envelopes remain pending. No processing optimization, activity API/UI, merge or production enablement is implied.
+
+The measurement increment is CI accepted at `0a12d431` ([CI #42401790013](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42401790013)): 178 dedicated history checks and a separate 1,126-check SQL regression with no skips. Equivalent serial tail cuts through 104,032 retained observations used constant 21 command / 95 statement completions, four reader and 15 apply roundtrips, and 212 observation rows read. Exact output/receipts and deep-history negatives passed. **The performance gate remains open:** batch metadata plans scanned all 34/146 retained batches at smaller depths and used seeks at 1,042; process working set also rose and remains unattributed. Next work is metadata plan stability and isolated worker-memory attribution, not premature API/UI delivery or production enablement. The implementation contract records actual profiles, timings and limitations.
+
+## FC2-034 completion scope — 8 November 2026
+
+Finish the evidence-processing PR before developer-machine setup. The remaining increment stabilizes bounded batch-ID seek plans across cached/refreshed statistics and isolates 128 warmup + 512 steady cuts in a fresh SQL worker process. After measured acceptance and final CI/review, close and squash merge this slice. Activity HTTPS/API, authenticated display, production worker hosting and commissioning remain separate product increments; they do not silently become completed by this merge. No local setup or new UI work is introduced here.
+
+
+## FC2-034 final evidence-processing qualification
+
+`5a7fa67a` passed [CI #42404994189](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42404994189): all three jobs, 188 dedicated performance-run checks, 1,126 full SQL checks without skips, and unchanged crash/corruption/replay coverage. Six cached/refreshed plans at 35/147/1,043 retained batches used seeks and 12 batch rows read, with 212 observation rows read per tail cut. The updated 1,031-period oracle matched. An isolated 640-cut worker plateaued near 1.55 MiB live managed memory and 123 MiB working set after warmup, without ingestion/profiler retention. The two scoped performance gates are accepted; detailed data and limitations are in the implementation contract.
+
+This evidence-processing slice is qualified for final-head CI/review and squash merge through PR #34. Developer-machine setup follows completion of that PR. Activity API/authenticated UI, production worker hosting, stronger cross-batch acquisition assurance and production commissioning remain separate roadmap increments; none is enabled by this merge.

@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using FactoryConnect.Sql;
 using FactoryConnect.Sql.Configuration;
+using FactoryConnect.Sql.ActivityProcessing;
 using FactoryConnect.Sql.Security;
 using Microsoft.Data.SqlClient;
 
@@ -22,7 +23,7 @@ internal static class MtConnectIngestionAcceptance
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
             => assertion=="sql-evidence-proof" ? Task.FromResult(identity) : throw new SecurityDeniedException();
     }
-    internal static async Task<int> Run(InstallationTarget target)
+    internal static async Task<int> Run(InstallationTarget target,bool measureActivityHistory=false)
     {
         var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
         var now=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!;
@@ -61,6 +62,41 @@ internal static class MtConnectIngestionAcceptance
         var enable=new MachineEnableProposalRequest(Guid.NewGuid(),Guid.NewGuid(),site,machine,null,0,await Epoch(),now.AddMinutes(10),"enable ingestion fixture");await service.ProposeMachineEnableAsync(token,enable);await service.ApproveMachineEnableAsync(reviewToken,Guid.NewGuid(),enable.ProposalId,Guid.NewGuid(),site,machine,await Epoch(),"independent enable");
         var activation=await Intent();await Denied(()=>writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream),"pending activation without acknowledgement cannot ingest");
         var ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);
+        var approvedActivityMapping=package.Machines[0].Signals.Single(
+            x=>x.SemanticKey=="machine-activity");
+        var mappingResolver=new SqlApprovedActivityMappingResolver(
+            target.ConnectionString,target.InstallationId);
+        var resolved=await mappingResolver.ResolveAsync(
+            site,machine,approvedActivityMapping.MappingId,Stream);
+        Check(resolved.PackageRevisionId==package.RevisionId &&
+            resolved.AcknowledgementId==ack.AcknowledgementId &&
+            resolved.PackageSha256==Convert.ToHexString(PackageCanonicalizer.Hash(package)) &&
+            resolved.Signal.SourceAddress=="execution" &&
+            resolved.Signal.ExactValues.Count==2 &&
+            resolved.Signal.ExactValues["ACTIVE"]==ActivityState.Running &&
+            resolved.Signal.ExactValues["READY"]==ActivityState.Idle,
+            "approved activity state mapping resolves exact acknowledged package values");
+        try
+        {
+            await mappingResolver.ResolveAsync(site,machine,
+                package.Machines[0].Signals.Single(x=>x.SemanticKey=="counter-upper")
+                    .MappingId,Stream);
+            throw new InvalidOperationException("Counter mapping was interpreted as activity.");
+        }
+        catch(InvalidDataException)
+        {
+            Check(true,"approved counter normalization cannot be interpreted as machine activity");
+        }
+        try
+        {
+            await mappingResolver.ResolveAsync(site,machine,
+                approvedActivityMapping.MappingId,Stream.ToUpperInvariant());
+            throw new InvalidOperationException("Folded mapping stream accepted.");
+        }
+        catch(InvalidDataException)
+        {
+            Check(true,"mapping resolution rejects case-folded source stream");
+        }
         await using var agent=new MtConnectAgentFixture();using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(5)};var client=new MtConnectSampleClient(http);
         var stamp=now.ToString("O",CultureInfo.InvariantCulture);agent.Reply=(from,count)=>(200,Frame(from,Math.Min(count,2)),null);
         var context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);Check(context.Cursor is null&&context.AcknowledgementId==ack.AcknowledgementId,"fresh acknowledged stream has explicit retained-window bootstrap context");
@@ -68,6 +104,95 @@ internal static class MtConnectIngestionAcceptance
         var request=await Request(fetched);var epoch=await Epoch();await Transport(request);Check(await Epoch()==epoch,"ordinary ingestion commits without advancing security epoch");
         var first=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream);Check(first.Count==2&&first.Single(x=>x.Address=="Counter").RawValue==" 00042 "&&first.Select(x=>x.MappingId).Distinct().Count()==2,"protected read returns actual saved values with case-distinct mapping identities");
         Check(first.All(x=>x.BatchId==request.OperationId&&x.AcknowledgementId==ack.AcknowledgementId&&x.DocumentHash==Convert.ToHexString(SHA256.HashData(fetched.RawDocument)).ToLowerInvariant()),"saved values retain exact batch acknowledgement and raw-document provenance");
+        // The source reader must reject a projection mutated independently of
+        // immutable canonical/source document bytes. This intentional corruption
+        // is confined to the disposable SQL acceptance database and restored
+        // before the remaining ingestion authority tests.
+        var counterEvidence=first.Single(x=>x.Address=="Counter");
+        var counterSignal=new QualifiedActivitySignal(machine,Stream,
+            counterEvidence.MappingId,"Counter",
+            new Dictionary<string,ActivityState>(StringComparer.Ordinal)
+            {[" 00042 "]=ActivityState.Running});
+        var counterIdentity=ActivityQualificationIdentity.From(
+            counterSignal,"accepted-reader-test-only");
+        var acceptedReader=new SqlAcceptedActivityEvidenceReader(target.ConnectionString);
+        var verifiedCounter=await acceptedReader.ReadBoundedAsync(
+            site,counterIdentity,7,99,100);
+        Check(verifiedCounter.Count==1 &&
+            verifiedCounter[0].RawValue==counterEvidence.RawValue &&
+            verifiedCounter[0].BatchId==request.OperationId &&
+            verifiedCounter[0].AcknowledgementId==ack.AcknowledgementId,
+            "reader binds exact accepted projection to verified canonical source and owning batch");
+
+        async Task RejectTampered(string label,
+            ActivityQualificationIdentity? readIdentity=null)
+        {
+            try
+            {
+                await acceptedReader.ReadBoundedAsync(site,
+                    readIdentity??counterIdentity,7,99,100);
+            }
+            catch(InvalidDataException)
+            {
+                Check(true,label);
+                return;
+            }
+            throw new InvalidOperationException("Projection inconsistency was accepted: "+label);
+        }
+        const string sourceWhere="""
+            WHERE MachineId=@machine AND InstanceId=7 AND Sequence=100
+            """;
+        await Exec("DISABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+        try
+        {
+            await Exec("UPDATE acquisition.MtConnectObservation SET RawValue=N'FORGED' "+
+                sourceWhere,("@machine",machine));
+            await RejectTampered("modified raw value rejected against verified canonical source");
+            await Exec("UPDATE acquisition.MtConnectObservation SET RawValue=@value,Quality='unavailable' "+
+                sourceWhere,("@machine",machine),("@value",counterEvidence.RawValue));
+            await RejectTampered("modified quality rejected against verified source observation");
+            await Exec("UPDATE acquisition.MtConnectObservation SET Quality='source-reported',"+
+                "SourceTimestamp=N'2020-01-01T00:00:00Z' "+sourceWhere,("@machine",machine));
+            await RejectTampered("modified source timestamp rejected against verified source observation");
+            await Exec("UPDATE acquisition.MtConnectObservation SET SourceTimestamp=@stamp,"+
+                "ObservedAt=DATEADD(second,1,ObservedAt) "+sourceWhere,
+                ("@machine",machine),("@stamp",counterEvidence.SourceTimestamp));
+            await RejectTampered("modified observed instant rejected against verified source observation");
+            await Exec("UPDATE acquisition.MtConnectObservation SET ObservedAt=@observed,"+
+                "AddressBytes=0x636F756E746572 "+sourceWhere,
+                ("@machine",machine),("@observed",counterEvidence.ObservedAt));
+            await RejectTampered("changed projected address rejected against canonical identity",
+                counterIdentity with{SourceAddress="counter"});
+            // SQL must reject an oversized aggregate *before* fetching the
+            // tampered LOB over the network. This is disposable SQL only.
+            await Exec("UPDATE acquisition.MtConnectObservation SET "+
+                "AddressBytes=0x436F756E746572,"+
+                "RawValue=REPLICATE(CONVERT(nvarchar(max),N'X'),5000000) "+
+                sourceWhere,("@machine",machine));
+            try
+            {
+                await acceptedReader.ReadBoundedAsync(site,counterIdentity,7,99,100);
+                throw new InvalidOperationException("Oversized accepted source projection transferred.");
+            }
+            catch(SqlException error) when(error.Number==51074)
+            {
+                Check(true,"SQL aggregate byte budget rejects oversized LOB before transfer");
+            }
+        }
+        finally
+        {
+            await Exec("UPDATE acquisition.MtConnectObservation SET RawValue=@value,"+
+                "Quality=@quality,SourceTimestamp=@stamp,ObservedAt=@observed,"+
+                "AddressBytes=0x436F756E746572 "+sourceWhere,
+                ("@machine",machine),("@value",counterEvidence.RawValue),
+                ("@quality",counterEvidence.Quality),
+                ("@stamp",counterEvidence.SourceTimestamp),
+                ("@observed",counterEvidence.ObservedAt));
+            await Exec("ENABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+        }
+        Check((await acceptedReader.ReadBoundedAsync(site,counterIdentity,7,99,100))
+            .Single().RawValue==counterEvidence.RawValue,
+            "disposable projection corruption fixture fully restored accepted evidence");
         // End-to-end SQL authority: a freshly verified human proof issues a one-use
         // bearer, and that session reads only the machine explicitly granted to it.
         var loginIdentity=new VerifiedHumanIdentity(Issuer,"certificate-manager",Guid.NewGuid().ToString("N"),
@@ -236,8 +361,364 @@ internal static class MtConnectIngestionAcceptance
             await Exec("DROP TRIGGER security.Fixture_IngestBarrier");
         }
         (package,review)=await Package();activation=await Intent();ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
-        agent.Reply=(from,count)=>(200,Frame(from,count),null);var timer=Stopwatch.StartNew();var bulkFrame=await client.AcquireAsync(agent.Endpoint,Device,context.Cursor!.NextSequence,1000);var bulk=new MtConnectIngestionRequest(Guid.NewGuid(),site,machine,context.AcknowledgementId,Stream,context.Cursor.BatchId,context.Cursor.InstanceId,context.Cursor.NextSequence,bulkFrame.RawDocument);await Transport(bulk);timer.Stop();var trace=activities.Last(x=>x.GetTagItem("security.acquisition.ingest") is true&&x.GetTagItem("security.result")?.ToString()=="completed");var trips=Convert.ToInt64(trace.GetTagItem("security.sql.roundtrips"));Check(trips<=30&&timer.Elapsed<TimeSpan.FromSeconds(5),"1000-observation HTTP/TLS/SQL slice uses bounded full-transaction roundtrips and latency");Console.WriteLine($"MEASURE: MTConnect ingestion observations=1000 elapsedMs={timer.Elapsed.TotalMilliseconds:F2} roundtrips={trips}");
+        agent.Reply=(from,count)=>(200,Frame(from,count,activity:true),null);var timer=Stopwatch.StartNew();var bulkFrame=await client.AcquireAsync(agent.Endpoint,Device,context.Cursor!.NextSequence,1000);var bulk=new MtConnectIngestionRequest(Guid.NewGuid(),site,machine,context.AcknowledgementId,Stream,context.Cursor.BatchId,context.Cursor.InstanceId,context.Cursor.NextSequence,bulkFrame.RawDocument);await Transport(bulk);timer.Stop();var trace=activities.Last(x=>x.GetTagItem("security.acquisition.ingest") is true&&x.GetTagItem("security.result")?.ToString()=="completed");var trips=Convert.ToInt64(trace.GetTagItem("security.sql.roundtrips"));Check(trips<=30&&timer.Elapsed<TimeSpan.FromSeconds(5),"1000-observation HTTP/TLS/SQL slice uses bounded full-transaction roundtrips and latency");Console.WriteLine($"MEASURE: MTConnect ingestion observations=1000 elapsedMs={timer.Elapsed.TotalMilliseconds:F2} roundtrips={trips}");
+        var currentActivity=await mappingResolver.ResolveAsync(site,machine,
+            package.Machines[0].Signals.Single(x=>x.SemanticKey=="machine-activity").MappingId,
+            Stream);
+        var firstBulk=bulkFrame.Observations[0].Sequence;
+        var activityObserved=await acceptedReader.ReadBoundedAsync(site,
+            ActivityQualificationIdentity.From(currentActivity.Signal,"discovery-not-continuity"),
+            bulkFrame.InstanceId,firstBulk,firstBulk+3,100);
+        Check(activityObserved.Count==2 &&
+            activityObserved[0].RawValue=="ACTIVE" &&
+            activityObserved[1].RawValue=="READY" &&
+            activityObserved.All(x=>x.BatchId==bulk.OperationId),
+            "approved execution-state signal resolves two actual immutable accepted observations");
+        Check(currentActivity.EffectiveFrom>activityObserved[0].ObservedAt,
+            "retained observation predates current approved interpretation interval");
+        var trustedCandidate=AcceptedActivityContinuityQualifier.Qualify(
+            currentActivity,activityObserved);
+        var interpretedCandidate=ActivityCheckpointEvaluator.Advance(
+            currentActivity.Signal,trustedCandidate.Qualification,
+            ActivityCheckpointEvaluator.Initial(trustedCandidate.Qualification),
+            trustedCandidate.Samples);
+        Check(trustedCandidate.ProvenInternalLinks==1 &&
+            interpretedCandidate.ClosedPeriods.Count==1 &&
+            interpretedCandidate.ClosedPeriods[0].State==ActivityState.Running &&
+            interpretedCandidate.ClosedPeriods[0].DurationTicks==TimeSpan.FromSeconds(2).Ticks,
+            "retained accepted signals remain interpretable as candidates without publishing history");
+        var atomicStore=new SqlActivityProcessorStore(target.ConnectionString);
+        try
+        {
+            await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
+            throw new InvalidOperationException("Pre-activation evidence was published.");
+        }
+        catch(InvalidDataException)
+        {
+            Check(true,"pre-activation observations fail closed without writing a checkpoint or period");
+        }
+        Check((await atomicStore.ReadCheckpointAsync(trustedCandidate.Qualification))
+            .NextGeneration==0 &&
+            Convert.ToInt32(await Scalar("""
+                SELECT COUNT(*) FROM activity.ClosedPeriod
+                WHERE MachineId=@machine AND MappingId=@mapping
+                """,("@machine",machine),("@mapping",currentActivity.Signal.MappingId)))==0,
+            "rejected historical interpretation leaves no activity checkpoint or effects");
+        // The rejected historical source cut fails before entering the writer
+        // transaction. Lock-wait expiry needs a *currently eligible* retained
+        // cut and an independently advanced authoritative eligibility end;
+        // do not treat this pre-activation case as that concurrency proof.
+        // A fresh acknowledged epoch supplies an explicit initial retained boundary.
+        activation=await Intent();ack=Ack(activation,1);
+        await service.AcknowledgeActivationAsync(pair.Channel,ack);
+        currentActivity=await mappingResolver.ResolveAsync(site,machine,
+            currentActivity.Signal.MappingId,Stream);
+        // Generate eligible timestamps at the source, before acquisition and ingestion.
+        // Retain the historical rejection above as an independent negative case.
+        context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+        var eligibleFrom=context.Cursor!.NextSequence;
+        agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+            activityStart:currentActivity.EffectiveFrom),null);
+        var eligibleFrame=await client.AcquireAsync(agent.Endpoint,Device,eligibleFrom,4);
+        var eligibleRequest=await Request(eligibleFrame);
+        await Transport(eligibleRequest);
+        var eligibleRows=await acceptedReader.ReadBoundedAsync(site,
+            ActivityQualificationIdentity.From(currentActivity.Signal,"eligible-discovery"),
+            eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,100);
+        var eligibleCut=AcceptedActivityContinuityQualifier.Qualify(currentActivity,eligibleRows);
+        Check(eligibleRows.Count==2 && eligibleRows[0].ObservedAt==currentActivity.EffectiveFrom &&
+            eligibleRows.All(x=>x.BatchId==eligibleRequest.OperationId &&
+                x.AcknowledgementId==currentActivity.AcknowledgementId),
+            "positive source fixture includes the acknowledged interpretation from-boundary");
+        try
+        {
+            await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                eligibleFrame.InstanceId,eligibleFrom+1,eligibleFrom+3,0);
+            throw new InvalidOperationException("Initial activity skipped a retained transition.");
+        }
+        catch(InvalidDataException error)when(error.Message.Contains("acknowledged retained batch boundary",StringComparison.Ordinal))
+        {
+            Check((await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)).NextGeneration==0 &&
+                await Count("activity.ClosedPeriod")==0 && await Count("activity.ProcessorOperation")==0,
+                "initial source cut cannot skip the acknowledged epoch's first retained transition");
+        }
+        var positiveOperation=Guid.NewGuid();
+        try
+        {
+            await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0,injectRollback:true);
+            throw new InvalidDataException("Injected activity rollback did not execute.");
+        }
+        catch(InvalidOperationException error)when(error.Message=="Controlled atomic activity rollback fixture.")
+        {
+            Check(true,"eligible accepted-source publication reaches injected atomic rollback");
+        }
+        Check((await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)).NextGeneration==0 &&
+            await Count("activity.ClosedPeriod")==0 && await Count("activity.ProcessorOperation")==0,
+            "eligible rollback leaves checkpoint periods and receipts unchanged");
+        var committed=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,
+            eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
+        var replay=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,
+            eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
+        var persisted=await atomicStore.ReadPeriodPageAsync(eligibleCut.Qualification);
+        var expectedPeriod=new ClosedActivityPeriod(machine,Stream,currentActivity.Signal.MappingId,
+            ActivityState.Running,eligibleRows[0].ObservedAt,eligibleRows[1].ObservedAt,
+            TimeSpan.FromSeconds(2).Ticks,eligibleFrame.InstanceId,
+            eligibleRows[0].Sequence,eligibleRows[1].Sequence,"ACTIVE","READY");
+        Check(!committed.Replayed && replay.Replayed && committed.NewPeriods.Count==1 &&
+            committed.NewPeriods[0]==expectedPeriod &&
+            committed.Checkpoint.LastConsumedSample==eligibleCut.Samples[1] &&
+            JsonSerializer.Serialize(committed.Checkpoint)==JsonSerializer.Serialize(replay.Checkpoint) &&
+            JsonSerializer.Serialize(committed.Checkpoint)==JsonSerializer.Serialize(
+                await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)) &&
+            persisted.Rows.Count==1 && persisted.Rows[0].Qualification==eligibleCut.Qualification &&
+            JsonSerializer.Serialize(persisted.Rows[0].Period)==JsonSerializer.Serialize(committed.NewPeriods[0]) &&
+            await Count("activity.ProcessorOperation")==1,
+            "eligible ingestion commits exact qualified period checkpoint and replay receipt once");
+        // A new accepted batch is processed in two cuts by reconstructed stores.
+        // Its first sample must not bridge the prior batch; its second cut may
+        // link to the verified predecessor in that same immutable document.
+        context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+        var continuationFrom=context.Cursor!.NextSequence;
+        agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+            activityStart:currentActivity.EffectiveFrom.AddSeconds(10)),null);
+        var continuationFrame=await client.AcquireAsync(agent.Endpoint,Device,continuationFrom,4);
+        await Transport(await Request(continuationFrame));
+        var baselineCheckpoint=await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification);
+        var baselineJson=(string)(await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+            ("@machine",machine),("@mapping",currentActivity.Signal.MappingId)))!;
+        var baselinePeriods=await Count("activity.ClosedPeriod");
+        var baselineReceipts=await Count("activity.ProcessorOperation");
+        async Task RejectBinding(Func<Task> action,string expected,string label)
+        {
+            try { await action(); }
+            catch(Exception error)when(error is InvalidDataException or InvalidOperationException or SqlException)
+            {
+                Check(error.Message.Contains(expected,StringComparison.Ordinal),label+" rejects exact invariant");
+                Check(Equals(baselineJson,await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                        ("@machine",machine),("@mapping",currentActivity.Signal.MappingId))) &&
+                    await Count("activity.ClosedPeriod")==baselinePeriods &&
+                    await Count("activity.ProcessorOperation")==baselineReceipts,
+                    label+" leaves checkpoint periods and receipts unchanged");
+                return;
+            }
+            throw new InvalidOperationException("Expected activity binding rejection: "+label);
+        }
+        Task<ActivityDurableResult> Continue(ulong after,ulong through,Guid? operation=null)
+            =>new SqlActivityProcessorStore(target.ConnectionString).ApplyAcceptedAsync(
+                operation??Guid.NewGuid(),target.InstallationId,site,machine,
+                currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId,after,through,1);
+        await RejectBinding(()=>Continue(continuationFrom+1,continuationFrom+3),
+            "exact checkpoint frontier","caller cannot omit an intervening accepted transition");
+        await RejectBinding(()=>Continue(eligibleFrom+2,eligibleFrom+3),
+            "exact checkpoint frontier","caller cannot overlap or rewind the committed source cut");
+        await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+5),
+            "not durably accepted","source cut cannot run beyond the durable acquisition frontier");
+        await RejectBinding(()=>atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId+1,
+            eligibleFrom+3,continuationFrom+3,1),"No accepted activity observations",
+            "unrelated source instance cannot resume the checkpoint");
+        // Identical rows with a different cut end are different immutable requests.
+        await RejectBinding(()=>atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,eligibleFrame.InstanceId,
+            eligibleFrom-1,eligibleFrom+4,0),"different request bytes","operation replay pins exact source frontier");
+        async Task SetCheckpoint(ActivityProcessorCheckpoint value)
+        {
+            var json=JsonSerializer.Serialize(value);
+            await Exec("UPDATE activity.ProcessorCheckpoint SET CheckpointJson=@json,CheckpointHash=HASHBYTES('SHA2_256',CONVERT(varbinary(max),@json)) WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@json",json),("@machine",machine),("@mapping",currentActivity.Signal.MappingId));
+        }
+        // Checksum-consistent corruption is confined to this disposable database.
+        foreach(var damaged in new[]{
+            baselineCheckpoint with { LastConsumedSample=baselineCheckpoint.LastConsumedSample! with { RawValue="FORGED" } },
+            baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with {
+                LastObservation=baselineCheckpoint.AcceptedSource.LastObservation with { BatchId=Guid.NewGuid() } } },
+            baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with { AcknowledgementId=Guid.NewGuid() } },
+            baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with { InstanceId=8 } },
+            baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with {
+                OpenAnchorObservation=baselineCheckpoint.AcceptedSource.OpenAnchorObservation! with { MappingId=Guid.NewGuid() } } },
+            baselineCheckpoint with { Qualification=baselineCheckpoint.Qualification with { ContinuityIdentity="unrelated-policy" } },
+            baselineCheckpoint with { AcceptedSource=null } })
+        {
+            await SetCheckpoint(damaged);
+            var damagedJson=(string)(await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@machine",machine),("@mapping",currentActivity.Signal.MappingId)))!;
+            try
+            {
+                try { await Continue(eligibleFrom+3,continuationFrom+1);throw new ArgumentException("Forged predecessor accepted."); }
+                catch(Exception error)when(error is InvalidDataException or SqlException)
+                {
+                    Check(Equals(damagedJson,await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                            ("@machine",machine),("@mapping",currentActivity.Signal.MappingId))) &&
+                        await Count("activity.ClosedPeriod")==baselinePeriods &&
+                        await Count("activity.ProcessorOperation")==baselineReceipts,
+                        "checksum-consistent predecessor or policy mismatch fails closed without effects");
+                }
+            }
+            finally { await SetCheckpoint(baselineCheckpoint); }
+        }
+        var nextRows=await acceptedReader.ReadBoundedAsync(site,eligibleCut.Qualification,
+            continuationFrame.InstanceId,eligibleFrom+3,continuationFrom+3,100);
+        var nextSample=new ActivityInputSample(machine,Stream,currentActivity.Signal.MappingId,"execution",
+            nextRows[0].InstanceId,nextRows[0].Sequence,nextRows[0].ObservedAt,"ACTIVE","source-reported",false);
+        var forgedAdvance=baselineCheckpoint with {
+            LastConsumedSample=nextSample,OpenAnchor=nextSample,OpenState=ActivityState.Running,
+            AcceptedSource=baselineCheckpoint.AcceptedSource! with {
+                ThroughSequence=continuationFrom+1,LastObservation=nextRows[0],OpenAnchorObservation=nextRows[0] } };
+        await SetCheckpoint(forgedAdvance);
+        try
+        {
+            try { await Continue(continuationFrom+1,continuationFrom+3);throw new ArgumentException("Uncommitted real-row checkpoint accepted."); }
+            catch(InvalidDataException error)when(error.Message.Contains("immutable operation receipt",StringComparison.Ordinal))
+            {
+                Check(await Count("activity.ClosedPeriod")==baselinePeriods &&
+                    await Count("activity.ProcessorOperation")==baselineReceipts,
+                    "real retained rows cannot manufacture a checkpoint advance absent its immutable receipt");
+            }
+        }
+        finally { await SetCheckpoint(baselineCheckpoint); }
+        await Exec("DISABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+        try
+        {
+            var counterMapping=package.Machines[0].Signals.Single(x=>x.SemanticKey=="counter-upper").MappingId;
+            await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@other WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
+                ("@other",counterMapping),("@machine",machine),("@sequence",(decimal)(eligibleFrom+3)));
+            try
+            {
+                await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+3),
+                    "Source cut changed","missing retained checkpoint predecessor blocks continuation");
+            }
+            finally
+            {
+                await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@mapping WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
+                    ("@mapping",currentActivity.Signal.MappingId),("@machine",machine),("@sequence",(decimal)(eligibleFrom+3)));
+            }
+            await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@other WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
+                ("@other",counterMapping),("@machine",machine),("@sequence",(decimal)(continuationFrom+1)));
+            await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+3),
+                "omits or duplicates","missing projected transition cannot disappear from the source cut");
+            await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@other WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
+                ("@other",counterMapping),("@machine",machine),("@sequence",(decimal)(continuationFrom+3)));
+            await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+3),
+                "omits or duplicates","wholly omitted signal batch is found independently of projected rows");
+        }
+        finally
+        {
+            await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@mapping WHERE MachineId=@machine AND InstanceId=7 AND Sequence IN (@first,@last)",
+                ("@mapping",currentActivity.Signal.MappingId),("@machine",machine),
+                ("@first",(decimal)(continuationFrom+1)),("@last",(decimal)(continuationFrom+3)));
+            await Exec("ENABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+        }
+        var continued=await Continue(eligibleFrom+3,continuationFrom+1);
+        Check(continued.NewPeriods.Count==0 && continued.Checkpoint.NextGeneration==2 &&
+            continued.Checkpoint.OpenAnchor?.Sequence==continuationFrom+1 &&
+            continued.Checkpoint.LastConsumedSample?.ContinuityFromPrevious==false &&
+            continued.Checkpoint.AcceptedSource?.ThroughSequence==continuationFrom+1,
+            "reconstructed writer continues exact frontier while fencing the cross-batch anchor");
+        var splitOperation=Guid.NewGuid();
+        var splitStore=new SqlActivityProcessorStore(target.ConnectionString);
+        var split=await splitStore.ApplyAcceptedAsync(splitOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId,
+            continuationFrom+1,continuationFrom+3,2);
+        Check(split.NewPeriods.Count==1 && split.NewPeriods[0].StartSequence==continuationFrom+1 &&
+            split.NewPeriods[0].EndSequence==continuationFrom+3 &&
+            split.NewPeriods[0].StartRawValue=="ACTIVE" && split.NewPeriods[0].EndRawValue=="READY" &&
+            split.Checkpoint.NextGeneration==3 && split.Checkpoint.LastConsumedSample?.ContinuityFromPrevious==true &&
+            split.Checkpoint.AcceptedSource?.LastObservation.Sequence==continuationFrom+3 &&
+            (await splitStore.ReadPeriodPageAsync(eligibleCut.Qualification)).Rows.Count==2,
+            "split same-batch continuation revalidates exact retained predecessor and publishes one period");
+        Check((await splitStore.ApplyAcceptedAsync(splitOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId,
+            continuationFrom+1,continuationFrom+3,2)).Replayed,
+            "continued source cut replays its immutable receipt without duplicate effects");
+        // Seed original HTTP/mTLS-accepted source documents before child lifetimes.
+        async Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>> ProcessSource(
+            int seconds,bool repeated=false)
+        {
+            var sourceContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+            var sourceFrom=sourceContext.Cursor!.NextSequence;
+            agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+                activityStart:currentActivity.EffectiveFrom.AddSeconds(seconds),activityRepeats:repeated),null);
+            var sourceFrame=await client.AcquireAsync(agent.Endpoint,Device,sourceFrom,repeated?6:4);
+            await Transport(await Request(sourceFrame));
+            return await acceptedReader.ReadBoundedAsync(site,eligibleCut.Qualification,
+                sourceFrame.InstanceId,sourceFrom-1,sourceFrame.NextSequence-1,100);
+        }
+        var processOpening=await ProcessSource(20,repeated:true);
+        var processCrossBatch=await ProcessSource(30);
+        var processPending=await ProcessSource(40);
+        count+=await ActivityProcessRestartAcceptance.RunAsync(target,site,currentActivity,
+            eligibleCut.Qualification,processOpening,processCrossBatch,processPending);
+        if(measureActivityHistory)
+        {
+            // Supply a bounded source-document factory; history setup still uses
+            // the real HTTP/mTLS ingestion path and original accepted bytes.
+            var historyBatch=0;
+            async Task<ActivityHistoryMeasurementAcceptance.Input> HistorySource()
+            {
+                var sourceContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+                var sourceFrom=sourceContext.Cursor!.NextSequence;
+                var sourceStart=currentActivity.EffectiveFrom.AddSeconds(60).AddMilliseconds(4L*historyBatch++);
+                agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+                    activityStart:sourceStart,activityStep:TimeSpan.FromMilliseconds(1)),null);
+                var frame=await client.AcquireAsync(agent.Endpoint,Device,sourceFrom,100);
+                await Transport(await Request(frame));
+                // Do not retain setup-only security Activity objects per historical batch.
+                lock(activities)activities.Clear();
+                var rows=await acceptedReader.ReadBoundedAsync(site,eligibleCut.Qualification,
+                    frame.InstanceId,sourceFrom-1,frame.NextSequence-1,100);
+                return new(rows,frame.NextSequence-1,frame.Observations.Count);
+            }
+            count+=await ActivityHistoryMeasurementAcceptance.RunAsync(target,site,currentActivity,
+                eligibleCut.Qualification,processPending,HistorySource);
+            count+=await ActivityWorkerMemoryAcceptance.RunAsync(target,site,eligibleCut.Qualification,HistorySource);
+        }
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
+        // An accepted 100-observation read sharing one acquisition batch
+        // transfers and hashes its source document only once, not 100 times.
+        var bulkCounter=latest.First(x=>x.Address=="Counter");
+        var bulkValue=bulkFrame.Observations.First(x=>x.DataItemId=="Counter").RawValue;
+        var bulkSignal=new QualifiedActivitySignal(machine,Stream,bulkCounter.MappingId,
+            "Counter",new Dictionary<string,ActivityState>(StringComparer.Ordinal)
+            {[bulkValue]=ActivityState.Running});
+        var bulkIdentity=ActivityQualificationIdentity.From(
+            bulkSignal,"accepted-reader-bulk-fixture");
+        var acceptedTraces=new List<Activity>();
+        using(var acceptedListener=new ActivityListener
+        {
+            ShouldListenTo=source=>source.Name=="FactoryConnect.V2.Activity.AcceptedEvidence",
+            Sample=(ref ActivityCreationOptions<ActivityContext> _)=>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped=a=>{lock(acceptedTraces)acceptedTraces.Add(a);}
+        })
+        {
+            ActivitySource.AddActivityListener(acceptedListener);
+            var firstBulkSequence=bulkFrame.Observations[0].Sequence;
+            var qualifiedRows=await acceptedReader.ReadBoundedAsync(site,bulkIdentity,
+                bulkFrame.InstanceId,firstBulkSequence-1,firstBulkSequence+199,100);
+            Check(qualifiedRows.Count==100 &&
+                qualifiedRows.All(x=>x.BatchId==bulk.OperationId &&
+                    x.CanonicalSha256.Length==64 && x.DocumentSha256.Length==64),
+                "100 retained observations are verified against the exact accepted acquisition batch");
+            Activity? sourceTrace;
+            lock(acceptedTraces)sourceTrace=acceptedTraces
+                .SingleOrDefault(x=>x.OperationName=="activity.accepted-source.read");
+            Check(sourceTrace is not null &&
+                Convert.ToInt32(sourceTrace.GetTagItem("accepted-source.observations"))==100 &&
+                Convert.ToInt32(sourceTrace.GetTagItem("accepted-source.distinct-batches"))==1 &&
+                Convert.ToInt32(sourceTrace.GetTagItem("accepted-source.batch-hash-verifications"))==1 &&
+                Convert.ToInt32(sourceTrace.GetTagItem("accepted-source.batch-parses"))==1,
+                "100-observation page verifies and parses the one source batch exactly once");
+            Console.WriteLine("MEASURE: activity accepted observations=100 distinctBatchDocuments=1 "+
+                $"aggregateBytes={sourceTrace?.GetTagItem("accepted-source.aggregate-bytes")} "+
+                $"sqlRoundtrips={sourceTrace?.GetTagItem("accepted-source.sql.roundtrips")}");
+        }
         for(var i=0;i<5;i++){var largeContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);var large=XDocument.Parse(Encoding.UTF8.GetString(Frame(largeContext.Cursor!.NextSequence,1)));large.Descendants("PartCount").Single().Value=new string('7',900000);var largeBytes=Encoding.UTF8.GetBytes(large.ToString(SaveOptions.DisableFormatting));await writer.IngestMtConnectAsync(pair.Channel,new(Guid.NewGuid(),site,machine,largeContext.AcknowledgementId,Stream,largeContext.Cursor.BatchId,largeContext.Cursor.InstanceId,largeContext.Cursor.NextSequence,largeBytes));}
         try{await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);throw new InvalidOperationException("unbounded evidence bytes");}catch(SqlException error)when(error.Number==51044){Check(true,"evidence read rejects an oversized byte page instead of transferring all requested LOB values");}
         Check((await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,1)).Single().RawValue.Length==900000,"bounded smaller page returns a legitimately retained large source value");
@@ -253,6 +734,102 @@ internal static class MtConnectIngestionAcceptance
             await Denied(()=>expiring,"ingestion rechecks activation and acknowledgement expiry after machine lock wait");
         }
         activation=await Intent();ack=Ack(activation,3);await service.AcknowledgeActivationAsync(pair.Channel,ack);await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+        // Separate activity race: preflight must succeed, then wait on the processor
+        // gate while the acknowledged activation expires. No source bytes are edited.
+        var activityDeadline=(DateTimeOffset)(await Scalar(
+            "SELECT TODATETIMEOFFSET(DATEADD(second,8,SYSUTCDATETIME()),'+00:00')"))!;
+        activation=await Intent(until:activityDeadline);ack=Ack(activation,3);
+        await service.AcknowledgeActivationAsync(pair.Channel,ack);
+        var expiringMapping=await mappingResolver.ResolveAsync(site,machine,
+            currentActivity.Signal.MappingId,Stream);
+        context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+        var raceFrom=context.Cursor!.NextSequence;
+        agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+            activityStart:expiringMapping.EffectiveFrom),null);
+        var raceFrame=await client.AcquireAsync(agent.Endpoint,Device,raceFrom,4);
+        await Transport(await Request(raceFrame));
+        var raceRows=await acceptedReader.ReadBoundedAsync(site,
+            ActivityQualificationIdentity.From(expiringMapping.Signal,"expiry-discovery"),
+            raceFrame.InstanceId,raceFrom,raceFrom+3,100);
+        AcceptedActivityContinuityQualifier.Qualify(expiringMapping,raceRows);
+        Check(raceRows.Count==2 && raceRows.All(x=>x.ObservedAt>=expiringMapping.EffectiveFrom &&
+            x.ObservedAt<expiringMapping.EffectiveTo),"activity expiry race starts with eligible accepted source");
+        var beforeCheckpoint=await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+            ("@machine",machine),("@mapping",currentActivity.Signal.MappingId));
+        var beforePeriods=await Count("activity.ClosedPeriod");
+        var beforeReceipts=await Count("activity.ProcessorOperation");
+        foreach(var boundary in new[]{
+            (Time:expiringMapping.EffectiveFrom.AddTicks(-1),Label:"before from"),
+            (Time:activityDeadline,Label:"exclusive to"),
+            (Time:activityDeadline.AddTicks(1),Label:"after to")})
+        {
+            var boundaryContext=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+            var boundaryFrom=boundaryContext.Cursor!.NextSequence;
+            agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+                activityStart:boundary.Time),null);
+            var boundaryFrame=await client.AcquireAsync(agent.Endpoint,Device,boundaryFrom,4);
+            await Transport(await Request(boundaryFrame));
+            try
+            {
+                await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+                    site,machine,currentActivity.Signal.MappingId,Stream,
+                    boundaryFrame.InstanceId,boundaryFrom,boundaryFrom+3,1);
+                throw new InvalidOperationException("Outside-window source was published.");
+            }
+            catch(InvalidDataException error)when(error.Message==
+                "Accepted observation is outside the exact approved activity interpretation interval.")
+            {
+                Check(Equals(beforeCheckpoint,await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                        ("@machine",machine),("@mapping",currentActivity.Signal.MappingId))) &&
+                    await Count("activity.ClosedPeriod")==beforePeriods &&
+                    await Count("activity.ProcessorOperation")==beforeReceipts,
+                    "accepted source rejects interpretation boundary without effects "+boundary.Label);
+            }
+        }
+        var raceOperation=Guid.NewGuid();
+        var racingStore=new SqlActivityProcessorStore(new SqlConnectionStringBuilder(target.ConnectionString)
+            {ApplicationName="fc2activity-expiry"}.ConnectionString);
+        var processorResource=$"fc2:activity:{machine:N}:{currentActivity.Signal.MappingId:N}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Stream)))}";
+        await using(var barrier=new SqlConnection(target.ConnectionString))
+        {
+            await barrier.OpenAsync();
+            await using var tx=(SqlTransaction)await barrier.BeginTransactionAsync();
+            await Hold(barrier,tx,processorResource);
+            var expiring=racingStore.ApplyAcceptedAsync(raceOperation,target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                raceFrame.InstanceId,raceFrom,raceFrom+3,1);
+            try
+            {
+                await WaitForLock("fc2activity-expiry","X");
+                Check(!expiring.IsCompleted,"eligible activity passed preflight and waits on held processor gate");
+                Check(Convert.ToInt32(await Scalar("""
+                    SELECT COUNT(*) FROM sys.dm_tran_locks l
+                    JOIN sys.dm_exec_sessions s ON s.session_id=l.request_session_id
+                    WHERE s.program_name='fc2activity-expiry' AND l.resource_type='APPLICATION'
+                        AND l.request_status='GRANT' AND l.request_mode='S'
+                        AND l.resource_description LIKE '%fc2:security:%'
+                    """))==1,"waiting activity writer retains the shared global security authority gate");
+                while((DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!<activityDeadline)
+                    await Task.Delay(20);
+            }
+            finally { await tx.CommitAsync(); }
+            try
+            {
+                await expiring;
+                throw new InvalidOperationException("Expired activity authority published effects.");
+            }
+            catch(InvalidDataException error)when(error.Message=="Approved active activity mapping does not exist.")
+            {
+                Check(true,"activity rechecks authority expiry after the observed processor lock wait");
+            }
+        }
+        Check(Equals(beforeCheckpoint,await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@machine",machine),("@mapping",currentActivity.Signal.MappingId))) &&
+            await Count("activity.ClosedPeriod")==beforePeriods &&
+            await Count("activity.ProcessorOperation")==beforeReceipts,
+            "post-wait expiry preserves exact checkpoint periods and operation receipts");
+        activation=await Intent();ack=Ack(activation,3);
+        await service.AcknowledgeActivationAsync(pair.Channel,ack);
         var policy=await Proposal("schedule");await service.ProposePolicyRevocationAsync(token,policy);await Approve(policy);await Denied(()=>writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream),"effective policy revocation stops acquisition context without erasing evidence");
         Directory.CreateDirectory("artifacts/ingestion");await File.WriteAllTextAsync("artifacts/ingestion/first-machine.json",JsonSerializer.Serialize(new{schemaVersion=1,fixture=true,scope="Controlled real HTTP source and mutual TLS delivery, disposable V2 SQL; not Gajra production",source="abilgaiyan/FactoryConnect@088bf524",savedExample=example,finalCursor=new{instance="7",next=saved.Cursor.NextSequence.ToString(CultureInfo.InvariantCulture),baseline="100",completeness="retained-window-only"},batch1000=new{elapsedMs=timer.Elapsed.TotalMilliseconds,roundtrips=trips},checks=count},new JsonSerializerOptions{WriteIndented=true}));Console.WriteLine("DEMO: actual saved source values: "+JsonSerializer.Serialize(example.Select(x=>new{x.Sequence,x.Address,x.RawValue,x.Quality})));return count;
 
@@ -260,9 +837,33 @@ internal static class MtConnectIngestionAcceptance
         async Task<bool> Race(MtConnectIngestionRequest r){try{await writer.IngestMtConnectAsync(pair.Channel,r);return true;}catch(SecurityConflictException){return false;}}
         async Task Conflict(Func<Task> action,string name){try{await action();}catch(SecurityConflictException){Check(true,name);return;}throw new InvalidOperationException(name);}
         async Task<long> Count(string table)=>Convert.ToInt64(await Scalar("SELECT COUNT_BIG(*) FROM "+table));
-        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false)
+        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false,bool activity=false,DateTimeOffset? activityStart=null,bool activityRepeats=false,TimeSpan? activityStep=null)
         {
-            var xml=new XElement("MTConnectStreams",new XElement("Header",new XAttribute("instanceId",instance),new XAttribute("firstSequence",first),new XAttribute("lastSequence",from+(ulong)count-1),new XAttribute("nextSequence",from+(ulong)count)),new XElement("Streams",new XElement("DeviceStream",new XAttribute("uuid",device),new XElement("ComponentStream",new XElement("Samples",Enumerable.Range(0,count).Select(i=>{var sequence=from+(ulong)i;return new XElement("PartCount",new XAttribute("dataItemId",sequence%2==0?"Counter":"counter"),new XAttribute("timestamp",stamp),new XAttribute("sequence",sequence),changed&&sequence==100?"999":sequence==100?" 00042 ":sequence==102?"UNAVAILABLE":sequence.ToString(CultureInfo.InvariantCulture));}))))));return Encoding.UTF8.GetBytes(xml.ToString(SaveOptions.DisableFormatting));
+            var samples=Enumerable.Range(0,count).Where(i=>!activity || (i is not (1 or 3) && (!activityRepeats || i!=5)))
+                .Select(i=>{
+                    var sequence=from+(ulong)i;
+                    return new XElement("PartCount",
+                        new XAttribute("dataItemId",sequence%2==0?"Counter":"counter"),
+                        new XAttribute("timestamp",stamp),new XAttribute("sequence",sequence),
+                        changed&&sequence==100?"999":sequence==100?" 00042 ":
+                        sequence==102?"UNAVAILABLE":sequence.ToString(CultureInfo.InvariantCulture));
+                });
+            var component=new XElement("ComponentStream",new XElement("Samples",samples));
+            if(activity)
+            {
+                component.Add(new XElement("Events",(activityRepeats?new[]{1,3,5}:new[]{1,3}).Where(i=>i<count).Select(i=>
+                    new XElement("Execution",new XAttribute("dataItemId","execution"),
+                        new XAttribute("timestamp",(activityStart?.AddTicks((activityStep??TimeSpan.FromSeconds(1)).Ticks*(i-1))??now.AddSeconds(i)).ToString("O",CultureInfo.InvariantCulture)),
+                        new XAttribute("sequence",from+(ulong)i),(i==1 || (activityRepeats && i==3))?"ACTIVE":"READY"))));
+            }
+            var xml=new XElement("MTConnectStreams",
+                new XElement("Header",new XAttribute("instanceId",instance),
+                    new XAttribute("firstSequence",first),
+                    new XAttribute("lastSequence",from+(ulong)count-1),
+                    new XAttribute("nextSequence",from+(ulong)count)),
+                new XElement("Streams",new XElement("DeviceStream",
+                    new XAttribute("uuid",device),component)));
+            return Encoding.UTF8.GetBytes(xml.ToString(SaveOptions.DisableFormatting));
         }
         async Task<MtConnectIngestionRequest> Request(MtConnectSampleFrame frame){var current=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);var from=frame.Observations.Count>0?frame.Observations[0].Sequence:current.Cursor?.NextSequence??frame.FirstSequence;return new(Guid.NewGuid(),site,machine,current.AcknowledgementId,Stream,current.Cursor?.BatchId,current.Cursor?.InstanceId,from,frame.RawDocument);}
         async Task<byte[]> Transport(MtConnectIngestionRequest request)
@@ -281,7 +882,7 @@ internal static class MtConnectIngestionAcceptance
             var timezone=Guid.NewGuid();var schedule=Guid.NewGuid();var breaks=Guid.NewGuid();var bytes=Encoding.UTF8.GetBytes("{}");var hash=SHA256.HashData(bytes);
             await Exec("INSERT configuration.SiteTimezoneRevision(TimezoneRevisionId,SiteId,IanaZoneId,TzdbRelease,ResolverVersion,GapPolicy,FoldPolicy,RulesBytes,RulesSha256,CanonicalBytes,ContentHash) VALUES(@timezone,@site,N'Etc/UTC','fixture','fixture','reject','reject',@bytes,@hash,@bytes,@hash); INSERT configuration.SharedScheduleRevision VALUES(@schedule,@site,@bytes,@hash); INSERT configuration.SharedBreakPolicyRevision VALUES(@break,@site,@bytes,@hash);",("@timezone",timezone),("@schedule",schedule),("@break",breaks),("@site",site),("@bytes",bytes),("@hash",hash));
             var machines=new List<MachineConfiguration>();
-            for(var i=0;i<size;i++){var id=i==0?machine:Guid.NewGuid();if(i>0)await Exec("INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(@machine,@site,N'Batch fixture')",("@machine",id),("@site",site));machines.Add(new(id,line,now.AddMinutes(-5),null,new(schedule,hash),new(breaks,hash),[new(Guid.NewGuid(),"counter-upper","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("Counter"),"identity-v1"),new(Guid.NewGuid(),"counter-lower","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("counter"),"identity-v1")],["counter-reading"]));}
+            for(var i=0;i<size;i++){var id=i==0?machine:Guid.NewGuid();if(i>0)await Exec("INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(@machine,@site,N'Batch fixture')",("@machine",id),("@site",site));machines.Add(new(id,line,now.AddMinutes(-5),null,new(schedule,hash),new(breaks,hash),[new(Guid.NewGuid(),"counter-upper","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("Counter"),"identity-v1"),new(Guid.NewGuid(),"counter-lower","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("counter"),"identity-v1"),new(Guid.NewGuid(),"machine-activity","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("execution"),"activity-state-v1|ACTIVE=Running|READY=Idle")],["counter-reading"]));}
             var package=new PackageDefinition(Guid.NewGuid(),Guid.NewGuid(),1,site,new(timezone,hash),machines);
             await service.SubmitConfigurationAsync(token,Guid.NewGuid(),package,await Epoch(),"operational fixture package");var review=Guid.NewGuid();await service.ReviewConfigurationAsync(reviewToken,new(Guid.NewGuid(),review,site,package.RevisionId,PackageCanonicalizer.Hash(package),true,await Epoch(),"independent package review"));return(package,review);
         }

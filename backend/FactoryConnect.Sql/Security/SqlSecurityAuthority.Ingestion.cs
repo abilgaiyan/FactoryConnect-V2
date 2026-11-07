@@ -1,3 +1,4 @@
+using FactoryConnect.Sql.ActivityProcessing;
 using System.Data;
 using System.Buffers.Binary;
 using System.Diagnostics;
@@ -136,7 +137,21 @@ public sealed partial class SqlSecurityAuthority
     {
         var matches=root.GetProperty("machines").EnumerateArray().Where(x=>x.GetProperty("machineId").GetGuid()==machineId).ToArray();if(matches.Length!=1)throw new SecurityDeniedException();
         var signals=matches[0].GetProperty("signals").EnumerateArray().Where(x=>x.GetProperty("protocol").GetString()=="mtconnect"&&x.GetProperty("streamKey").GetString()==stream).ToArray();
-        if(signals.Length==0||signals.Any(x=>x.GetProperty("addressEncoding").GetString()!="utf-8"||x.GetProperty("normalization").GetString()!="identity-v1"||x.GetProperty("addressBytes").GetBytesFromBase64().Length is <1 or >512)||signals.Select(x=>Convert.ToHexString(x.GetProperty("addressBytes").GetBytesFromBase64())).Distinct(StringComparer.Ordinal).Count()!=signals.Length)throw new SecurityDeniedException();return matches[0];
+        if(signals.Length==0||signals.Any(x=>x.GetProperty("addressEncoding").GetString()!="utf-8"||!LosslessIngestionProfile(x)||x.GetProperty("addressBytes").GetBytesFromBase64().Length is <1 or >512)||signals.Select(x=>Convert.ToHexString(x.GetProperty("addressBytes").GetBytesFromBase64())).Distinct(StringComparer.Ordinal).Count()!=signals.Length)throw new SecurityDeniedException();return matches[0];
+    }
+    private static bool LosslessIngestionProfile(JsonElement signal)
+    {
+        var normalization=signal.GetProperty("normalization").GetString();
+        if(normalization=="identity-v1")return true;
+        if(signal.GetProperty("semanticKey").GetString()!="machine-activity")return false;
+        try
+        {
+            // This parser validates the exact approved profile; ingestion still
+            // persists original bytes without normalizing or interpreting them.
+            _=ApprovedActivityValueMap.Parse(normalization!);
+            return true;
+        }
+        catch(InvalidDataException){return false;}
     }
     private static async Task<IngestionAuthority> LoadIngestionAuthority(SqlConnection c,SqlTransaction t,Guid site,Guid machine,Guid? expected,RuntimeMachineAuthority runtime,DateTimeOffset now,CancellationToken ct)
     {
