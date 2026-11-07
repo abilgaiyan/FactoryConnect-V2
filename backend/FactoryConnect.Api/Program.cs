@@ -14,11 +14,51 @@ app.MapGet("/dashboard/config", () => Results.Ok(new
     sources = Array.Empty<object>()
 }));
 
+// A real identity verifier must be supplied by the trusted host integration.
+// No development verifier, password bypass, or bearer minted from client claims is registered.
+app.MapPost("/api/security/v2/human-sessions", async (
+    HttpContext http, IConfiguration config, CancellationToken ct) =>
+{
+    http.Response.Headers.CacheControl = "no-store";
+    if (!http.Request.IsHttps) return Results.Problem(statusCode: 403, title: "HTTPS required");
+    var verifier = http.RequestServices.GetService<IHumanIdentityVerifier>();
+    if (verifier is null
+        || !Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
+        || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
+        return NotReady();
+    if (http.Request.ContentLength is > 65536)
+        return Results.Problem(statusCode: 413, title: "Authentication assertion too large");
+    string? assertion;
+    try
+    {
+        using var reader = new StreamReader(http.Request.Body);
+        assertion = await reader.ReadToEndAsync(ct);
+    }
+    catch (IOException) { return Results.BadRequest(); }
+    if (string.IsNullOrWhiteSpace(assertion) || assertion.Length > 65536)
+        return Results.BadRequest();
+    try
+    {
+        var issued = await new SqlHumanSessionAuthority(
+            config.GetConnectionString("Evidence")!, installationId, verifier).IssueAsync(assertion, ct);
+        try
+        {
+            return Results.Ok(new { bearer = Convert.ToBase64String(issued.Token),
+                principalId = issued.PrincipalId, expiresAt = issued.ExpiresAt });
+        }
+        finally { CryptographicOperations.ZeroMemory(issued.Token); }
+    }
+    catch (SecurityDeniedException) { return Results.Unauthorized(); }
+    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+    catch (Exception) { return Results.Problem(statusCode: 503, title: "Session authority unavailable"); }
+});
+
 // This route is deliberately opt-in. It uses an existing, independently issued human
 // session and SQL's current commissioning.read authorization; it never issues sessions.
 app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/evidence", async (
     Guid machineId, HttpContext http, IConfiguration config, CancellationToken ct) =>
 {
+    http.Response.Headers.CacheControl = "no-store";
     if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
         || !Guid.TryParse(config["Evidence:SiteId"], out var siteId)
         || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
