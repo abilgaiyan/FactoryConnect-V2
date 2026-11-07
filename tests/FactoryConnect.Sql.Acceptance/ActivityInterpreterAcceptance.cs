@@ -1,4 +1,4 @@
-using FactoryConnect.Sql.Activity;
+using FactoryConnect.Sql.ActivityProcessing;
 
 internal static class ActivityInterpreterAcceptance
 {
