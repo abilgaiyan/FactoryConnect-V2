@@ -229,6 +229,21 @@ internal static class ActivitySqlDurabilityAcceptance
             "120 committed periods read via bounded 100+20 keyset pages");
         await Reject(async()=>{await loadStore.ReadPeriodsAsync(loadIdentity);},
             "compatibility period read refuses unbounded 120-row history");
+        // A source reader never fabricates activity from a machine that has
+        // no accepted acquisition observations, regardless of checkpoint state.
+        var acceptedReader=new SqlAcceptedActivityEvidenceReader(target.ConnectionString);
+        var absent=await acceptedReader.ReadBoundedAsync(site,identity,1,0,10);
+        Check(absent.Count==0,
+            "source-bound reader returns no synthetic samples without accepted ingestion evidence");
+        try
+        {
+            await acceptedReader.ReadBoundedAsync(site,identity,1,0,10,take:101);
+            throw new InvalidOperationException("Unbounded accepted evidence page was allowed.");
+        }
+        catch(ArgumentException)
+        {
+            Check(true,"source-bound accepted evidence page has a hard 100-row limit");
+        }
         return passed;
     }
 }
