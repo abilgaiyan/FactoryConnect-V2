@@ -33,6 +33,42 @@ Define and version the state vocabulary and source mapping explicitly, including
 - Tests: `ACTIVE→READY→STOPPED` mapping only when approved, same-state repetition, unknown/unavailable, source-instance reset, retained-prefix boundary, timestamp order/precision, identical retry.
 - Counter-only fixture (the existing first-machine ingestion sample) must remain **activity-unavailable**; it must not generate synthetic working time.
 
+## Mandatory checkpoint state for Slice B
+
+The deterministic processor's current executable contract is `ActivityQualificationIdentity`,
+`ActivityProcessorCheckpoint`, `ActivityCheckpointEvaluator.Advance` and
+`ActivityProcessorBatch`. No activity SQL migration/writer is present in Slice A.
+
+The **durable database row must persist all of these together** rather than merely
+storing the last source sequence:
+
+| Persisted authority | Contents |
+| --- | --- |
+| Qualification | Stable `MachineId`, exact case-sensitive `StreamKey` and `SourceAddress`, immutable `MappingId`, canonical SHA-256 of exact value→state map, independently established `ContinuityIdentity` |
+| Last consumed sample | Source instance + UInt64 sequence, exact source time and raw value, quality, trusted continuity decision and exact signal identity |
+| Open anchor | The original source instance + sequence/time/raw value from which the unclosed state period began; nullable only with nullable open state |
+| Interpreted open state | Exact enum state, nullable when no qualified open anchor remains |
+| Commit identity | Processor generation (expected prior generation + 1 for a nonempty accepted batch), exact bounded input frontier and idempotent operation/effect identity |
+| Closed periods | Each exact anchor→successor transition, mapping/qualification identity, source positions, original timestamps/values, positive duration, immutable unique effect identity |
+
+**Atomicity invariant:** a single SQL transaction must verify the expected generation
+and exact input cut, validate retained-source identity and qualification, append any
+new immutable closed periods, and advance all checkpoint fields together. A failure
+must roll back **both** the periods and checkpoint; replay must return the prior
+effect without duplicating periods. A different mapping digest or continuity
+qualification cannot silently resume the old anchor. A revoked permission prevents
+operator reads regardless of whether periods were historically committed.
+
+**Bounded work invariant:** the resume operation reads exactly one checkpoint
+and a bounded newly eligible source cut with its proven predecessor. An open
+duration must survive batch boundaries without rereading the historical prefix.
+The current pure tests exercise JSON roundtrip of the whole checkpoint and prove
+single-batch, two-batch and reconstructed-worker equivalence, including conflict
+detection across the checkpoint boundary. **They do not yet prove SQL durability,
+transaction isolation or whole-process SQL restart.** Those are mandatory Slice B
+acceptance gates. No API is allowed to present these candidate intervals as
+persisted activity before those gates pass.
+
 ### Slice B — SQL processor and durable projection
 
 - New independent V2 activity tables and versioned migrations, per-machine/stream processor cursor, exact source identities and immutable closed periods.
