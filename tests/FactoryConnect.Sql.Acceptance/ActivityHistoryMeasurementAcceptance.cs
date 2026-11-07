@@ -15,7 +15,7 @@ internal static class ActivityHistoryMeasurementAcceptance
         long WorkingSetBefore,long WorkingSetAfter,long ManagedBefore,long ManagedAfter,
         IReadOnlyList<Span> Spans);
     private sealed record Level(int AddedBatches,long RetainedObservations,long RetainedBatches,
-        IReadOnlyList<Trial> Trials,ActivityHistorySqlProfile.Profile Profile);
+        IReadOnlyList<Trial> Trials,ActivityHistorySqlProfile.Profile Profile,ActivityHistorySqlProfile.Profile RefreshedProfile);
     private sealed record Snapshot(string Checkpoint,long Periods,long Receipts);
 
     internal static async Task<int> RunAsync(InstallationTarget target,Guid site,
@@ -69,9 +69,24 @@ internal static class ActivityHistoryMeasurementAcceptance
                 var trial=await Measure(profileConnection,profileRows,depth,5,profiled:true);
                 trials.Add(trial);return trial.Spans;
             },$"artifacts/performance/activity-history-profile-{depth}.json");
+            // Requalify after statistics invalidates/recompiles cached choices.
+            await Exec("UPDATE STATISTICS acquisition.MtConnectBatch WITH FULLSCAN");
+            var refreshedRows=await ingest();added++;
+            var refreshed=await ActivityHistorySqlProfile.CaptureAsync(c,profileApplication,async()=> {
+                var trial=await Measure(profileConnection,refreshedRows,depth,6,profiled:true);
+                trials.Add(trial);return trial.Spans;
+            },$"artifacts/performance/activity-history-profile-{depth}-refreshed.json");
+            foreach(var plan in new[]{profile,refreshed})
+            {
+                var batchAccess=plan.Accesses.Where(x=>x.Table=="MtConnectBatch").ToArray();
+                Check(batchAccess.Length>0 && batchAccess.All(x=>x.ActualRowsRead.HasValue &&
+                        x.PhysicalOperator.Contains("Seek",StringComparison.Ordinal)) &&
+                    batchAccess.Sum(x=>x.ActualRowsRead!.Value)==12,
+                    "depth "+depth+" uses exactly bounded batch seeks in cached and refreshed-statistics plans");
+            }
             var retained=await Count("acquisition.MtConnectObservation");
             var batches=await Count("acquisition.MtConnectBatch");
-            levels.Add(new(depth,retained,batches,trials,profile));
+            levels.Add(new(depth,retained,batches,trials,profile,refreshed));
             Check(profile.DroppedEvents==0 && !profile.Truncated && profile.PlanEvents>0,
                 "depth "+depth+" captures complete SQL logical reads and actual access plans");
             Check(lastResult is not null && (await store.ReadCheckpointAsync(identity))==checkpoint,
@@ -90,9 +105,9 @@ internal static class ActivityHistoryMeasurementAcceptance
         }
         var ordinaryTrials=levels.SelectMany(x=>x.Trials).Where(x=>!x.Profiled).ToArray();
         long Trips(Trial trial,string operation,string tag)=>Convert.ToInt64(trial.Spans.Single(x=>x.Name==operation).Tags[tag]);
-        Check(levels.Select(x=>x.Profile.Commands.Count).Distinct().Count()==1,
+        Check(levels.SelectMany(x=>new[]{x.Profile,x.RefreshedProfile}).Select(x=>x.Commands.Count).Distinct().Count()==1,
             "profiled SQL command count stays constant across increasing retained depths");
-        Check(levels.Select(x=>x.Profile.Statements.Count).Distinct().Count()==1,
+        Check(levels.SelectMany(x=>new[]{x.Profile,x.RefreshedProfile}).Select(x=>x.Statements.Count).Distinct().Count()==1,
             "profiled SQL statement count stays constant across increasing retained depths");
         Check(ordinaryTrials.Select(x=>Trips(x,"activity.sql.apply","activity.sql.roundtrips")).Distinct().Count()==1 &&
             ordinaryTrials.Select(x=>Trips(x,"activity.accepted-source.read","accepted-source.sql.roundtrips")).Distinct().Count()==1,

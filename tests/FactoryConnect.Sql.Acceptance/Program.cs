@@ -8,6 +8,12 @@ if(args is ["--activity-child"])
     return;
 }
 
+if(args is ["--activity-memory-child"])
+{
+    Environment.ExitCode=await ActivityWorkerMemoryAcceptance.RunChildAsync();
+    return;
+}
+
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
 var activityPure=ActivityInterpreterAcceptance.PureChecks();

@@ -149,26 +149,29 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                 await using var command=new SqlCommand("""
                     DECLARE @selected TABLE(BatchId uniqueidentifier NOT NULL PRIMARY KEY);
                     INSERT @selected(BatchId)
-                    SELECT TOP (101) BatchId FROM acquisition.MtConnectBatch WITH(HOLDLOCK)
+                    SELECT TOP (101) BatchId FROM acquisition.MtConnectBatch WITH(HOLDLOCK,INDEX(IX_MtConnectBatch_ActivityWindow),FORCESEEK)
                     WHERE SiteId=@site AND MachineId=@machine AND StreamKeyBytes=@stream
                         AND InstanceId=@instance AND FromSequence<=@through AND NextSequence>@after+1
                     ORDER BY FromSequence,BatchId;
                     IF (SELECT COUNT_BIG(*) FROM @selected)>100
                         THROW 51075,'Accepted source cut exceeds batch bound.',1;
-                    IF (SELECT COUNT_BIG(*) FROM acquisition.MtConnectBatch b
-                        JOIN @selected selected ON selected.BatchId=b.BatchId)<>(SELECT COUNT_BIG(*) FROM @selected)
+                    IF (SELECT COUNT_BIG(*) FROM @selected selected
+                        INNER LOOP JOIN acquisition.MtConnectBatch b WITH(HOLDLOCK,FORCESEEK)
+                            ON b.BatchId=selected.BatchId)<>(SELECT COUNT_BIG(*) FROM @selected)
                         THROW 51075,'Missing source batch.',1;
                     IF COALESCE((
                         SELECT SUM(CONVERT(bigint,DATALENGTH(b.RawDocument))+512)
-                        FROM acquisition.MtConnectBatch b
-                        JOIN @selected selected ON selected.BatchId=b.BatchId
+                        FROM @selected selected
+                        INNER LOOP JOIN acquisition.MtConnectBatch b WITH(HOLDLOCK,FORCESEEK)
+                            ON b.BatchId=selected.BatchId
                     ),0)>@remaining
                         THROW 51074,'Accepted source batch document budget exceeded.',1;
                     SELECT b.BatchId,b.SiteId,b.MachineId,b.StreamKeyBytes,
                         b.AcknowledgementId,b.InstanceId,b.FromSequence,
                         b.NextSequence,b.FirstAvailableSequence,b.RawDocument,b.DocumentHash
-                    FROM acquisition.MtConnectBatch b WITH(HOLDLOCK)
-                    JOIN @selected selected ON selected.BatchId=b.BatchId
+                    FROM @selected selected
+                    INNER LOOP JOIN acquisition.MtConnectBatch b WITH(HOLDLOCK,FORCESEEK)
+                        ON b.BatchId=selected.BatchId
                     """,connection,tx);
                 command.Parameters.AddWithValue("@site",siteId);
                 command.Parameters.AddWithValue("@machine",identity.MachineId);

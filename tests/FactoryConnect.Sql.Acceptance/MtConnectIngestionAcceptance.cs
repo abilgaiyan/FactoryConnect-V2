@@ -677,6 +677,7 @@ internal static class MtConnectIngestionAcceptance
             }
             count+=await ActivityHistoryMeasurementAcceptance.RunAsync(target,site,currentActivity,
                 eligibleCut.Qualification,processPending,HistorySource);
+            count+=await ActivityWorkerMemoryAcceptance.RunAsync(target,site,eligibleCut.Qualification,HistorySource);
         }
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
