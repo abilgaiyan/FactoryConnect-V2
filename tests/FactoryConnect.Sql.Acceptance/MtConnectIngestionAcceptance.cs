@@ -188,6 +188,9 @@ internal static class MtConnectIngestionAcceptance
             CryptographicOperations.ZeroMemory(issued.Token);
             CryptographicOperations.ZeroMemory(issuedHash);
         }
+        if(Environment.GetEnvironmentVariable("FC2_BROWSER_ACCEPTANCE")=="1")
+            count += await OperatorBrowserAcceptance.Run(target.ConnectionString,target.InstallationId,
+                site,machine,rootToken,Epoch);
         count += await OperatorEvidenceHttpAcceptance.Run(target.ConnectionString,
             target.InstallationId,site,machine,otherMachine,rootToken,Epoch);
         await Denied(()=>writer.ReadMtConnectEvidenceAsync(rootToken,site,machine,Stream),"administrator has no implicit raw-evidence read authority");await Denied(()=>writer.ReadMtConnectEvidenceAsync(token,site,otherMachine,Stream),"raw evidence read respects exact machine grant");

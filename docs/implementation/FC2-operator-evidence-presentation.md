@@ -48,3 +48,39 @@ The following integration gates remain **OPEN**. This pull request stays draft a
 - **P2 provenance:** each observation can expand mapping ID, batch ID, acknowledgement ID, source document SHA-256, receipt time and observation time. The original raw value and UInt64 decimal identifiers remain visible unchanged.
 
 No V1 production changes, production credential bootstrap or release/deployment is authorized by these slices.
+
+## Trusted browser delivery
+
+The API now composes the platform OIDC middleware: authorization code with S256
+PKCE, HTTPS metadata, configured exact issuer/client audience, signed/lifetime
+validated ID tokens, correlation/state and nonce checks. Only after the validated
+ticket event does a server-owned `IHumanIdentityVerifier` proof issue a durable SQL
+session for the exact enrolled issuer/subject. Provider roles never grant access.
+The manual assertion input is removed. The login link redirects to the provider;
+no provider password or provider token is entered into/stored by FactoryConnect.
+
+Installation inputs (none have shipped defaults): `Identity:Authority` (exact HTTPS
+issuer), `Identity:ClientId`, `Identity:ClientSecret` from a protected secret source,
+and the existing `ConnectionStrings:Evidence`, `Evidence:InstallationId`,
+`Evidence:SiteId`, `Evidence:StreamKey`. Register the exact HTTPS
+`/signin-oidc` callback with the provider. Missing provider configuration fails
+closed. This increment does not provision a customer tenant or client.
+
+Host the built `dist` assets in the API's configured web root on the same HTTPS
+origin. The browser discovers its session through a no-store endpoint, retains
+only the opaque SQL bearer in memory and loads the separately authorized machine
+list. The secure HttpOnly `__Host-` cookie contains a Data Protection encrypted
+authentication ticket; no OIDC access/refresh tokens are saved. Provision protected
+persistent Data Protection keys for the installation, with access limited to the
+service account. Session expiry and SQL revocation are checked independently.
+The same-origin POST logout atomically revokes the caller's SQL session and audit
+before clearing the ticket; it grants no administrator permissions.
+
+CI `FC2_BROWSER_ACCEPTANCE=1 ... --ingestion-only` launches an isolated signed-token
+OIDC provider and actual HTTPS Kestrel API with disposable SQL plus built React in
+Chromium. It verifies audience/nonce/expiry rejection, code/PKCE flow, saved literal
+values/provenance, and session and grant revocation. Fixture CA trust is temporary;
+Chromium trusts only the exact fixture leaf SPKI, not arbitrary certificates. No
+fixture verifier/provider is registered in the product. Existing TestServer tests
+remain narrower handler tests. Customer IdP/PKI and production commissioning are
+separate deployment qualification, not claimed by CI.

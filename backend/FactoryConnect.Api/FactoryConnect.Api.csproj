@@ -6,4 +6,5 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../FactoryConnect.Sql/FactoryConnect.Sql.csproj" /></ItemGroup>
+  <ItemGroup><PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.0" /></ItemGroup>
 </Project>
