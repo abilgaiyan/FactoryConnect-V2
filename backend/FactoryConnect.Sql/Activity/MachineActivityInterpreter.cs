@@ -74,6 +74,14 @@ public static class MachineActivityInterpreter
                     throw new InvalidDataException("Out-of-order or repeated source identity.");
                 if(sample.ObservedAt<previous.ObservedAt)
                     throw new InvalidDataException("Source observation time moved backwards.");
+                // Two distinct source-reported states cannot occupy the same exact
+                // instant, even when a repeated state left the original anchor earlier.
+                if(sample.ObservedAt==previous.ObservedAt &&
+                   sample.Quality=="source-reported" && previous.Quality=="source-reported" &&
+                   exactValues.TryGetValue(sample.RawValue,out var incoming) &&
+                   exactValues.TryGetValue(previous.RawValue,out var prior) &&
+                   incoming!=prior)
+                    throw new InvalidDataException("Contradictory qualified states share a timestamp.");
                 if(sample.InstanceId!=previous.InstanceId || !sample.ContinuityFromPrevious)
                 {
                     anchor=null;
