@@ -47,6 +47,9 @@ internal static class OperatorEvidenceHttpAcceptance
 
         using var factory = new WebApplicationFactory<HostAssemblyMarker>().WithWebHostBuilder(host =>
         {
+            // The repo uses .slnx and the API project lives under backend/,
+            // not the conventional root-level FactoryConnect.Api directory.
+            host.UseContentRoot(Directory.GetCurrentDirectory());
             host.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
