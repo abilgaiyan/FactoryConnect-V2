@@ -120,8 +120,12 @@ internal static class ActivitySqlDurabilityAcceptance
             await q.ExecuteNonQueryAsync();
         },"SQL trigger prevents modifying committed activity history");
 
-        Check((await restored.ReadPeriodsAsync(identity)).Count==2,
-            "fresh process store still reads identical committed closed periods");
+        var finalPeriods=await restored.ReadPeriodsAsync(identity);
+        var winningEffects=contenders.Single(x=>x.Success).Result!.NewPeriods;
+        Check(finalPeriods.Count==stored.Count+winningEffects.Count &&
+            finalPeriods.Take(stored.Count).SequenceEqual(stored) &&
+            finalPeriods.Skip(stored.Count).SequenceEqual(winningEffects),
+            "reconstructed store reads the original immutable periods plus the winning concurrent effect");
         return passed;
     }
 }
