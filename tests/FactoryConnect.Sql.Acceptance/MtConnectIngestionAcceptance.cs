@@ -89,13 +89,13 @@ internal static class MtConnectIngestionAcceptance
             // A full 100-machine visible roster must stay query-bounded. Historical
             // revoked grants must not consume the visible-machine limit.
             var rosterMachines=Enumerable.Range(0,99).Select(_=>Guid.NewGuid()).ToArray();
-            await using(var bulk=new SqlCommand("",c))
+            await using(var rosterInsert=new SqlCommand("",c))
             {
-                var values=string.Join(",",rosterMachines.Select((_,i)=>$"(@id{i},@site,N'Roster fixture')"));
-                bulk.CommandText="INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES "+values;
-                bulk.Parameters.AddWithValue("@site",site);
+                var rosterValues=string.Join(",",rosterMachines.Select((_,i)=>$"(@id{i},@site,N'Roster fixture')"));
+                rosterInsert.CommandText="INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES "+rosterValues;
+                rosterInsert.Parameters.AddWithValue("@site",site);
                 for(var i=0;i<rosterMachines.Length;i++)bulk.Parameters.AddWithValue($"@id{i}",rosterMachines[i]);
-                await bulk.ExecuteNonQueryAsync();
+                await rosterInsert.ExecuteNonQueryAsync();
             }
             var rootGrant=(Guid)(await Scalar(
                 "SELECT GrantId FROM security.PermissionGrant WHERE GranteeId=@admin AND Permission=N'commissioning.read'",
