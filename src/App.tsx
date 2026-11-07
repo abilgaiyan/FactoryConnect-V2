@@ -13,6 +13,7 @@ import {
   type MouseEvent,
   type PropsWithChildren,
   useState,
+  useEffect,
 } from "react";
 
 import type { DashboardApplicationRuntime } from "./application/application-runtime.ts";
@@ -45,6 +46,8 @@ export interface AppProps {
 
 export function App({ runtime }: AppProps) {
   const { route, navigate } = useApplicationRouter();
+  const [evidenceSession, setEvidenceSession] = useState(runtime.evidenceSession ?? null);
+  useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); }, [runtime.evidenceSession]);
   const returnToOverview = overviewReturn(window.location.search, runtime.configuration.sources);
 
   return (
@@ -57,6 +60,7 @@ export function App({ runtime }: AppProps) {
             `${source.groupName ?? 'Group not configured'} · ${source.siteId}`,
           ))].map(label => <span key={label}>{label}</span>)}
         </div>
+        {evidenceSession && <button type="button" onClick={() => setEvidenceSession(null)}>End evidence session</button>}
         <nav aria-label="Dashboard">
           {SupervisorWorkspace && <ApplicationLink href="/supervisor-preview" navigate={navigate} current={route.kind === "supervisorPreview"}>Supervisor desk preview</ApplicationLink>}
           <ApplicationLink href="/commissioning" navigate={navigate} current={route.kind === "commissioning"}>Commissioning</ApplicationLink>{" "}
@@ -70,7 +74,7 @@ export function App({ runtime }: AppProps) {
       </header>
       <main id="main-content">
         {returnToOverview && <ApplicationLink href={returnToOverview} navigate={navigate}>Back to selected overview</ApplicationLink>}
-        <RouteView route={route} navigate={navigate} runtime={runtime} />
+        <RouteView route={route} navigate={navigate} runtime={{ ...runtime, ...(evidenceSession ? { evidenceSession } : { evidenceSession: undefined }) }} />
       </main>
     </div>
   );
