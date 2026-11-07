@@ -1,4 +1,5 @@
 using System.Data;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -17,6 +18,7 @@ namespace FactoryConnect.Sql.ActivityProcessing;
 public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
 {
     private static readonly UTF8Encoding ExactUtf8=new(false,true);
+    private static readonly ActivitySource Diagnostics=new("FactoryConnect.V2.Activity.AcceptedEvidence");
     public sealed record AcceptedRow(
         Guid SiteId,Guid MachineId,string StreamKey,Guid MappingId,string Address,
         ulong InstanceId,ulong Sequence,Guid BatchId,Guid AcknowledgementId,
@@ -38,8 +40,11 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
         var address=ExactUtf8.GetBytes(identity.SourceAddress);
         if(stream.Length>512||address.Length>512)
             throw new ArgumentException("Source identity exceeds SQL profile.");
+        using var activity=Diagnostics.StartActivity("activity.accepted-source.read",ActivityKind.Internal);
         await using var connection=new SqlConnection(connectionString);
+        if(activity is not null)connection.StatisticsEnabled=true;
         await connection.OpenAsync(ct);
+        if(activity is not null)connection.ResetStatistics();
         await using var tx=(SqlTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,ct);
         try
@@ -218,6 +223,16 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                     batch.DocumentSha256));
             }
             await tx.CommitAsync(ct);
+            if(activity is not null)
+            {
+                activity.SetTag("accepted-source.observations",rows.Count);
+                activity.SetTag("accepted-source.distinct-batches",batches.Count);
+                activity.SetTag("accepted-source.batch-hash-verifications",batches.Count);
+                activity.SetTag("accepted-source.batch-parses",batches.Count);
+                activity.SetTag("accepted-source.aggregate-bytes",transferred);
+                activity.SetTag("accepted-source.sql.roundtrips",
+                    connection.RetrieveStatistics()["ServerRoundtrips"]);
+            }
             return rows.AsReadOnly();
         }
         catch
