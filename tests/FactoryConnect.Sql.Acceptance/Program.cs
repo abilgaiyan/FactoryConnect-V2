@@ -133,6 +133,10 @@ try
     var rosterTarget=target with {ConnectionString=rosterDb.ConnectionString,Database=rosterDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(rosterTarget);
     passed += await TrustedRosterAcceptance.Run(rosterTarget with{InitializeEmpty=false});
+    var discoveryDb=await NewDatabase();
+    var discoveryTarget=target with {ConnectionString=discoveryDb.ConnectionString,Database=discoveryDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(discoveryTarget);
+    passed += await CommissioningDiscoveryAcceptance.Run(discoveryTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);
