@@ -40,81 +40,13 @@ public static class MachineActivityInterpreter
     {
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(samples);
-        if(signal.MachineId==Guid.Empty || string.IsNullOrWhiteSpace(signal.StreamKey) ||
-           signal.MappingId==Guid.Empty || string.IsNullOrWhiteSpace(signal.SourceAddress)
-           || signal.ExactValues is null || signal.ExactValues.Count==0
-           || samples.Count>1000)
-            throw new ArgumentException("Exact qualified signal and bounded samples are required.");
-        if(signal.ExactValues.Keys.Any(string.IsNullOrEmpty))
-            throw new ArgumentException("State-value mappings may not be empty.");
-
-        // Do not depend on a caller-supplied case-insensitive comparer.
-        var exactValues=new Dictionary<string,ActivityState>(signal.ExactValues,StringComparer.Ordinal);
-        if(exactValues.Count!=signal.ExactValues.Count || exactValues.Values.Any(v=>!Enum.IsDefined(v)))
-            throw new ArgumentException("Qualified state mapping must be unambiguous.");
-        var periods=new List<ClosedActivityPeriod>();
-        ActivityInputSample? previous=null;
-        ActivityInputSample? anchor=null;
-        ActivityState? activeState=null;
-        var breaks=0;
-        var unqualified=0;
-        foreach(var sample in samples)
-        {
-            if(sample.MachineId!=signal.MachineId ||
-               !string.Equals(sample.StreamKey,signal.StreamKey,StringComparison.Ordinal) ||
-               sample.MappingId!=signal.MappingId ||
-               !string.Equals(sample.SourceAddress,signal.SourceAddress,StringComparison.Ordinal))
-                throw new InvalidDataException("Observation is not from the qualified exact signal.");
-            if(sample.ObservedAt.Offset!=TimeSpan.Zero ||
-               sample.Quality is not ("source-reported" or "unavailable"))
-                throw new InvalidDataException("Source evidence requires a UTC instant and explicit quality.");
-            if(previous is not null)
-            {
-                if(sample.InstanceId==previous.InstanceId && sample.Sequence<=previous.Sequence)
-                    throw new InvalidDataException("Out-of-order or repeated source identity.");
-                if(sample.ObservedAt<previous.ObservedAt)
-                    throw new InvalidDataException("Source observation time moved backwards.");
-                // Two distinct source-reported states cannot occupy the same exact
-                // instant, even when a repeated state left the original anchor earlier.
-                if(sample.ObservedAt==previous.ObservedAt &&
-                   sample.Quality=="source-reported" && previous.Quality=="source-reported" &&
-                   exactValues.TryGetValue(sample.RawValue,out var incoming) &&
-                   exactValues.TryGetValue(previous.RawValue,out var prior) &&
-                   incoming!=prior)
-                    throw new InvalidDataException("Contradictory qualified states share a timestamp.");
-                if(sample.InstanceId!=previous.InstanceId || !sample.ContinuityFromPrevious)
-                {
-                    anchor=null;
-                    activeState=null;
-                    breaks++;
-                }
-            }
-            if(sample.Quality=="unavailable" ||
-               !exactValues.TryGetValue(sample.RawValue,out var interpreted))
-            {
-                unqualified++;
-                anchor=null;
-                activeState=null;
-            }
-            else if(anchor is null)
-            {
-                anchor=sample;
-                activeState=interpreted;
-            }
-            else if(activeState!=interpreted)
-            {
-                var elapsed=sample.ObservedAt.UtcTicks-anchor.ObservedAt.UtcTicks;
-                if(elapsed<=0)
-                    throw new InvalidDataException("A closed period requires positive elapsed source time.");
-                periods.Add(new(signal.MachineId,signal.StreamKey,signal.MappingId,activeState!.Value,
-                    anchor.ObservedAt,sample.ObservedAt,elapsed,sample.InstanceId,
-                    anchor.Sequence,sample.Sequence,anchor.RawValue,sample.RawValue));
-                anchor=sample;
-                activeState=interpreted;
-            }
-            previous=sample;
-        }
-        return new(periods.AsReadOnly(),unqualified,breaks,
+        // The single-cut API and the durable checkpoint candidate intentionally
+        // share one transition/contradiction evaluator. An adapter must provide
+        // externally qualified continuity before invoking either path.
+        var identity=ActivityQualificationIdentity.From(signal,"explicit-single-cut");
+        var result=ActivityCheckpointEvaluator.Advance(signal,identity,
+            ActivityCheckpointEvaluator.Initial(identity),samples);
+        return new(result.ClosedPeriods,result.UnqualifiedSamples,result.ContinuityBreaks,
             "retained-source-interpretation-not-physical-completeness");
     }
 }
