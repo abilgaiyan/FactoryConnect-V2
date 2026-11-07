@@ -47,7 +47,7 @@ public sealed partial class SqlSecurityAuthority
     {
         if(new[]{request.OperationId,request.SiteId,request.MachineId,request.AcknowledgementId}.Any(x=>x==Guid.Empty)||request.ExpectedBatchId==Guid.Empty||(request.ExpectedBatchId is null)!=(request.ExpectedInstanceId is null))throw new ArgumentException("Exact ingestion operation, scope, acknowledgement and cursor identities required.");
         var(stream,device)=MtConnectStream(request.StreamKey);var raw=request.RawDocument.ToArray();var frame=MtConnectSampleParser.Parse(raw,device,request.FromSequence);var evidence=channel.Revalidate(ct);
-        var bytes=JsonSerializer.SerializeToUtf8Bytes(new{version=1,action="ingest-mtconnect",request.SiteId,request.MachineId,request.AcknowledgementId,request.StreamKey,request.ExpectedBatchId,expectedInstance=request.ExpectedInstanceId?.ToString(CultureInfo.InvariantCulture),from=request.FromSequence.ToString(CultureInfo.InvariantCulture),raw=Convert.ToBase64String(raw)});
+        var bytes=JsonSerializer.SerializeToUtf8Bytes(new{version=1,action="ingest-mtconnect",request.SiteId,request.MachineId,request.AcknowledgementId,request.StreamKey,request.ExpectedBatchId,expectedInstance=request.ExpectedInstanceId?.ToString(CultureInfo.InvariantCulture),from=request.FromSequence.ToString(CultureInfo.InvariantCulture),documentHash=Convert.ToHexString(SHA256.HashData(raw))});
         return Transaction(request.OperationId,false,async(c,t)=>
         {
             Activity.Current?.SetTag("security.acquisition.ingest",true);
@@ -59,7 +59,12 @@ public sealed partial class SqlSecurityAuthority
             await VerifyIngestionAuthority(c,t,pin,runtime,root,machine,final.Now,ct);
             // Current authority must still permit the exact acknowledged configuration even for saved-result retrieval.
             var done=await FindOperation(c,t,request.OperationId,ct);
-            if(done is not null){if(done.Actor!=runtime.RuntimeIdentityId||!done.Request.AsSpan().SequenceEqual(bytes))throw new SecurityConflictException();return done.Result;}
+            if(done is not null)
+            {
+                if(done.Actor!=runtime.RuntimeIdentityId||done.Scope!=AuthorizationScope.Machine(request.SiteId,request.MachineId)||!done.Request.AsSpan().SequenceEqual(bytes))throw new SecurityConflictException();
+                await using var retained=Command(c,t,"SELECT RawDocument FROM acquisition.MtConnectBatch WHERE BatchId=@op AND RuntimeIdentityId=@runtime AND SiteId=@site AND MachineId=@machine");Add(retained,("@op",request.OperationId),("@runtime",runtime.RuntimeIdentityId),("@site",request.SiteId),("@machine",request.MachineId));
+                if(await retained.ExecuteScalarAsync(ct) is not byte[] original||!original.AsSpan().SequenceEqual(raw))throw new SecurityConflictException();return done.Result;
+            }
             var cursor=await LoadMtConnectCursor(c,t,request.SiteId,request.MachineId,stream,ct);
             if(cursor is null)
             {if(request.ExpectedBatchId is not null||request.ExpectedInstanceId is not null||request.FromSequence!=frame.FirstSequence)throw new SecurityConflictException();}
