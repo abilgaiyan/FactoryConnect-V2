@@ -38,10 +38,13 @@ export async function readRetainedEvidence(
   signal?: AbortSignal,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<RetainedEvidencePage> {
+  const endpoint = new URL(`api/commissioning/v2/machines/${encodeURIComponent(machineId)}/evidence`, baseAddress);
+  if (endpoint.protocol !== "https:" || (typeof window !== "undefined" && endpoint.origin !== window.location.origin))
+    throw new EvidenceReadFailure(403);
   const response = await fetchImplementation(
-    new URL(`api/commissioning/v2/machines/${encodeURIComponent(machineId)}/evidence`, baseAddress),
+    endpoint,
     { method: "GET", headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
-      ...(signal ? { signal } : {}), cache: "no-store" },
+      ...(signal ? { signal } : {}), cache: "no-store", redirect: "error" },
   );
   if (!response.ok) throw new EvidenceReadFailure(response.status);
   const body: unknown = await response.json();
