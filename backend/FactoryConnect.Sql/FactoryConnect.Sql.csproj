@@ -8,6 +8,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
     <EmbeddedResource Include="Migrations/*.sql" />
+    <ProjectReference Include="../FactoryConnect.Protocols.MTConnect/FactoryConnect.Protocols.MTConnect.csproj" />
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
   </ItemGroup>
 </Project>

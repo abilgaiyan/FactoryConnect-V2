@@ -77,6 +77,8 @@ jobs:
             sleep 2
           done
           echo 'SQL did not become ready'; exit 1
+      - name: Run first-machine HTTP TLS SQL demonstration
+        run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
       - name: Real SQL acceptance (missing SQL is a failure)
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release
       - name: Upload synthetic SQL performance evidence
@@ -85,6 +87,13 @@ jobs:
         with:
           name: inventory-performance
           path: artifacts/performance/*.json
+          if-no-files-found: warn
+      - name: Upload first-machine ingestion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-machine-ingestion
+          path: artifacts/ingestion/*.json
           if-no-files-found: warn
       - name: Remove disposable SQL container
         if: always()

@@ -3,7 +3,7 @@ using Microsoft.Data.SqlClient;
 
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
-var bootstrapPure=await RuntimeMtlsTransportAcceptance.Run()+RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks();
+var bootstrapPure=args is ["--ingestion-only"]?0:await RuntimeMtlsTransportAcceptance.Run()+RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks();
 if(args is ["--pure-only"]) { Console.WriteLine($"PASS: {canonicalPassed+bootstrapPure} pure acceptance checks."); return; }
 var admin = Environment.GetEnvironmentVariable("FC2_TEST_SQL")
     ?? throw new InvalidOperationException("FC2_TEST_SQL is required; SQL acceptance cannot be skipped.");
@@ -16,6 +16,11 @@ var databases = new List<string>();
 var passed = canonicalPassed+bootstrapPure;
 try
 {
+    if(args is ["--ingestion-only"])
+    {
+        var demoDb=await NewDatabase();var demoTarget=new InstallationTarget(demoDb.ConnectionString,demoDb.InitialCatalog,server,Guid.NewGuid(),true);await new SqlInstaller().ApplyAsync(demoTarget);
+        var demoChecks=await MtConnectIngestionAcceptance.Run(demoTarget with{InitializeEmpty=false});Console.WriteLine($"PASS: {demoChecks} first-machine ingestion checks; real HTTP/mTLS and disposable SQL.");return;
+    }
     var main = await NewDatabase();
     var installer = new SqlInstaller();
     var target = new InstallationTarget(main.ConnectionString, main.InitialCatalog, server, Guid.NewGuid(), true);
@@ -137,6 +142,10 @@ try
     var discoveryTarget=target with {ConnectionString=discoveryDb.ConnectionString,Database=discoveryDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(discoveryTarget);
     passed += await CommissioningDiscoveryAcceptance.Run(discoveryTarget with{InitializeEmpty=false});
+    var ingestionDb=await NewDatabase();
+    var ingestionTarget=target with {ConnectionString=ingestionDb.ConnectionString,Database=ingestionDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(ingestionTarget);
+    passed += await MtConnectIngestionAcceptance.Run(ingestionTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);
