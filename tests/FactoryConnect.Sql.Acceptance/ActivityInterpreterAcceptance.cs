@@ -89,6 +89,12 @@ internal static class ActivityInterpreterAcceptance
             [Sample(100,0,"ACTIVE"),Sample(101,0,"READY")]),
             "zero-duration transition rejected");
         Reject(()=>MachineActivityInterpreter.Evaluate(configured,
+            [Sample(100,0,"ACTIVE"),Sample(101,10,"ACTIVE"),Sample(102,10,"READY")]),
+            "repeated ACTIVE then conflicting READY at identical timestamp rejected");
+        Reject(()=>MachineActivityInterpreter.Evaluate(configured,
+            [Sample(100,0,"ACTIVE"),Sample(101,10,"ACTIVE"),Sample(102,10,"READY"),Sample(103,15,"STOPPED")]),
+            "conflicting timestamp cannot yield a misleading earlier running period");
+        Reject(()=>MachineActivityInterpreter.Evaluate(configured,
             [Sample(100,0,"ACTIVE",map:Guid.NewGuid())]),
             "unapproved mapping identity rejected");
         Reject(()=>MachineActivityInterpreter.Evaluate(configured,
