@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import React from "react";
+import React, { act } from "react";
 import { createServer } from "vite";
 import { mountInDom } from "./dom-test-harness.mjs";
 
@@ -46,4 +46,26 @@ test("authority failure does not display cached values", async t => {
   t.after(() => h.dispose());
   assert.match(h.document.querySelector("[role=alert]").textContent, /unavailable/);
   assert.equal(h.document.querySelector("tbody"), null);
+});
+
+test("switching machines hides prior evidence before the new request resolves", async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const nextMachine = "33333333-3333-3333-3333-333333333333";
+  let resolveSecond;
+  globalThis.fetch = async url => {
+    if (String(url).includes(nextMachine))
+      return new Promise(resolve => { resolveSecond = resolve; });
+    return Response.json(page);
+  };
+  const props = id => React.createElement(RetainedMachineEvidence,
+    { machineId: id, baseAddress: "https://localhost/", sessionBearer: "fixture-session" });
+  const h = await mountInDom(props(machineId), "https://localhost/");
+  t.after(() => h.dispose());
+  assert.match(h.document.body.textContent, /00042/);
+  await h.rerender(props(nextMachine));
+  assert.doesNotMatch(h.document.body.textContent, /00042/);
+  assert.match(h.document.body.textContent, /Loading accepted evidence/);
+  await act(async () => resolveSecond(Response.json({ ...page, machineId: nextMachine, rows: [] })));
+  assert.match(h.document.body.textContent, /No retained observations/);
 });
