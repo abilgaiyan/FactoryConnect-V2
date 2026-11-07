@@ -7,17 +7,19 @@ namespace FactoryConnect.Sql.ActivityProcessing;
 public enum ActivityState { Running, Idle, Stopped, Fault, Unknown }
 
 public sealed record QualifiedActivitySignal(
-    Guid MappingId, string SourceAddress, IReadOnlyDictionary<string,ActivityState> ExactValues);
+    Guid MachineId, string StreamKey, Guid MappingId, string SourceAddress,
+    IReadOnlyDictionary<string,ActivityState> ExactValues);
 
 /// <summary>ContinuityFromPrevious must be independently established by a durable
 /// source-cut/retention qualifier. It is never inferred from neighbouring sequences.</summary>
 public sealed record ActivityInputSample(
-    Guid MappingId, string SourceAddress, ulong InstanceId, ulong Sequence,
+    Guid MachineId, string StreamKey, Guid MappingId, string SourceAddress,
+    ulong InstanceId, ulong Sequence,
     DateTimeOffset ObservedAt, string RawValue, string Quality,
     bool ContinuityFromPrevious);
 
 public sealed record ClosedActivityPeriod(
-    Guid MappingId, ActivityState State, DateTimeOffset StartedAt,
+    Guid MachineId, string StreamKey, Guid MappingId, ActivityState State, DateTimeOffset StartedAt,
     DateTimeOffset EndedAt, long DurationTicks, ulong InstanceId,
     ulong StartSequence, ulong EndSequence, string StartRawValue,
     string EndRawValue);
@@ -38,13 +40,18 @@ public static class MachineActivityInterpreter
     {
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(samples);
-        if(signal.MappingId==Guid.Empty || string.IsNullOrWhiteSpace(signal.SourceAddress)
+        if(signal.MachineId==Guid.Empty || string.IsNullOrWhiteSpace(signal.StreamKey) ||
+           signal.MappingId==Guid.Empty || string.IsNullOrWhiteSpace(signal.SourceAddress)
            || signal.ExactValues is null || signal.ExactValues.Count==0
            || samples.Count>1000)
             throw new ArgumentException("Exact qualified signal and bounded samples are required.");
         if(signal.ExactValues.Keys.Any(string.IsNullOrEmpty))
             throw new ArgumentException("State-value mappings may not be empty.");
 
+        // Do not depend on a caller-supplied case-insensitive comparer.
+        var exactValues=new Dictionary<string,ActivityState>(signal.ExactValues,StringComparer.Ordinal);
+        if(exactValues.Count!=signal.ExactValues.Count || exactValues.Values.Any(v=>!Enum.IsDefined(v)))
+            throw new ArgumentException("Qualified state mapping must be unambiguous.");
         var periods=new List<ClosedActivityPeriod>();
         ActivityInputSample? previous=null;
         ActivityInputSample? anchor=null;
@@ -53,7 +60,9 @@ public static class MachineActivityInterpreter
         var unqualified=0;
         foreach(var sample in samples)
         {
-            if(sample.MappingId!=signal.MappingId ||
+            if(sample.MachineId!=signal.MachineId ||
+               !string.Equals(sample.StreamKey,signal.StreamKey,StringComparison.Ordinal) ||
+               sample.MappingId!=signal.MappingId ||
                !string.Equals(sample.SourceAddress,signal.SourceAddress,StringComparison.Ordinal))
                 throw new InvalidDataException("Observation is not from the qualified exact signal.");
             if(sample.ObservedAt.Offset!=TimeSpan.Zero ||
@@ -74,7 +83,7 @@ public static class MachineActivityInterpreter
                 }
             }
             if(sample.Quality=="unavailable" ||
-               !signal.ExactValues.TryGetValue(sample.RawValue,out var interpreted))
+               !exactValues.TryGetValue(sample.RawValue,out var interpreted))
             {
                 unqualified++;
                 anchor=null;
@@ -90,7 +99,7 @@ public static class MachineActivityInterpreter
                 var elapsed=sample.ObservedAt.UtcTicks-anchor.ObservedAt.UtcTicks;
                 if(elapsed<=0)
                     throw new InvalidDataException("A closed period requires positive elapsed source time.");
-                periods.Add(new(signal.MappingId,activeState!.Value,
+                periods.Add(new(signal.MachineId,signal.StreamKey,signal.MappingId,activeState!.Value,
                     anchor.ObservedAt,sample.ObservedAt,elapsed,sample.InstanceId,
                     anchor.Sequence,sample.Sequence,anchor.RawValue,sample.RawValue));
                 anchor=sample;
