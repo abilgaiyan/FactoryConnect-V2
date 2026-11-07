@@ -60,7 +60,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
 
     // Existing typed-sample entry point remains for disposable durability
     // fixtures. It is not an approved production worker entry point.
-    public Task<ActivityDurableResult> ApplyAsync(
+    internal Task<ActivityDurableResult> ApplyAsync(
         Guid operationId,QualifiedActivitySignal signal,ActivityQualificationIdentity identity,
         ulong expectedGeneration,IReadOnlyList<ActivityInputSample> samples,
         bool injectRollback=false,CancellationToken ct=default)
