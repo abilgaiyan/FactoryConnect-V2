@@ -24,7 +24,8 @@ DECLARE @constraint sysname;
 IF (SELECT COUNT(*) FROM sys.key_constraints WHERE parent_object_id=OBJECT_ID('configuration.PolicySafetyRevocation') AND type='UQ')<>1
     THROW 51041,'Unexpected policy revocation uniqueness baseline.',1;
 SELECT @constraint=name FROM sys.key_constraints WHERE parent_object_id=OBJECT_ID('configuration.PolicySafetyRevocation') AND type='UQ';
-EXEC(N'ALTER TABLE configuration.PolicySafetyRevocation DROP CONSTRAINT '+QUOTENAME(@constraint));
+DECLARE @dropConstraint nvarchar(max)=N'ALTER TABLE configuration.PolicySafetyRevocation DROP CONSTRAINT '+QUOTENAME(@constraint);
+EXEC sys.sp_executesql @dropConstraint;
 ALTER TABLE configuration.PolicySafetyRevocation ADD CONSTRAINT UQ_PolicyRevocation_Operation UNIQUE(RevocationId,OperationId);
 CREATE INDEX IX_PolicySafety_Timezone ON configuration.PolicySafetyRevocation(SiteId,PolicyKind,TimezoneRevisionId,EffectiveFrom) INCLUDE(ContentHash) WHERE TimezoneRevisionId IS NOT NULL;
 CREATE INDEX IX_PolicySafety_Schedule ON configuration.PolicySafetyRevocation(SiteId,PolicyKind,ScheduleRevisionId,EffectiveFrom) INCLUDE(ContentHash) WHERE ScheduleRevisionId IS NOT NULL;

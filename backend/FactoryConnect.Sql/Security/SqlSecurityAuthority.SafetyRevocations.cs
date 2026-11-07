@@ -1,3 +1,4 @@
+using System.Data;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -67,7 +68,7 @@ public sealed partial class SqlSecurityAuthority
             var (_,column)=PolicySource(proposal.Kind);
             await using(var q=Command(c,t,$"SELECT MIN(EffectiveFrom) FROM configuration.PolicySafetyRevocation WHERE SiteId=@site AND PolicyKind=@kind AND {column}=@revision AND ContentHash=@hash"))
             {
-                Add(q,("@site",siteId),("@kind",proposal.Kind),("@revision",proposal.Revision),("@hash",proposal.Hash));var earliest=await q.ExecuteScalarAsync(ct);
+                Add(q,("@site",siteId),("@revision",proposal.Revision));q.Parameters.Add("@kind",SqlDbType.VarChar,16).Value=proposal.Kind;q.Parameters.Add("@hash",SqlDbType.Binary,32).Value=proposal.Hash;var earliest=await q.ExecuteScalarAsync(ct);
                 if(earliest is DateTimeOffset prior&&prior<=effective)throw new SecurityConflictException();
             }
             await using(var q=Command(c,t,"SELECT 1 FROM configuration.PolicyRevocationAuthority WHERE ProposalId=@proposal"))
@@ -159,7 +160,7 @@ public sealed partial class SqlSecurityAuthority
     private static async Task ValidatePolicyRevision(SqlConnection c,SqlTransaction t,Guid site,string kind,Guid revision,byte[] hash,CancellationToken ct)
     {
         var (table,column)=PolicySource(kind);await using var q=Command(c,t,$"SELECT CanonicalBytes FROM configuration.{table} WHERE SiteId=@site AND {column}=@revision AND ContentHash=@hash");
-        Add(q,("@site",site),("@revision",revision),("@hash",hash));var bytes=(byte[]?)(await q.ExecuteScalarAsync(ct))??throw new SecurityDeniedException();
+        Add(q,("@site",site),("@revision",revision));q.Parameters.Add("@hash",SqlDbType.Binary,32).Value=hash;var bytes=(byte[]?)(await q.ExecuteScalarAsync(ct))??throw new SecurityDeniedException();
         if(!CryptographicOperations.FixedTimeEquals(hash,SHA256.HashData(bytes)))throw new SecurityDeniedException();
     }
     private static async Task SiteAuthorityOperation(SqlConnection c,SqlTransaction t,Guid operationId,Guid actor,Guid site,byte[] bytes,byte[] result,CancellationToken ct)

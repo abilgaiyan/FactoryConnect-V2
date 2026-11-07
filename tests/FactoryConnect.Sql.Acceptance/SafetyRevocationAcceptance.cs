@@ -142,6 +142,21 @@ internal static class SafetyRevocationAcceptance
             }
             await Exec("DROP TRIGGER security.Fixture_SafetyBarrier");
         }
+        foreach(var ackFirst in new[]{false,true})
+        {
+            (package,review)=await Package();var pendingIntent=await Intent();var ack=Ack(pendingIntent,1);var race=await Proposal("schedule");await service.ProposePolicyRevocationAsync(token,race);var epoch=await Epoch();
+            await Exec("CREATE TRIGGER security.Fixture_SafetyBarrier ON security.SecurityAudit AFTER INSERT AS BEGIN DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='fc2:safety:audit-barrier',@LockMode='Shared',@LockOwner='Transaction',@LockTimeout=10000; IF @r<0 THROW 51020,'fixture barrier failed',1; END;");
+            await using(var barrier=new SqlConnection(target.ConnectionString))
+            {
+                await barrier.OpenAsync();await using var tx=(SqlTransaction)await barrier.BeginTransactionAsync();await Hold(barrier,tx,"fc2:safety:audit-barrier");
+                var first=ackFirst?acknowledging.AcknowledgeActivationAsync(pair.Channel,ack):enabling.ApprovePolicyRevocationAsync(reviewToken,Guid.NewGuid(),race.ProposalId,Guid.NewGuid(),site,epoch,"policy race");Task<byte[]>? second=null;
+                try{await WaitForLock(ackFirst?"fc2safety-ack":"fc2safety-writer","S");second=ackFirst?enabling.ApprovePolicyRevocationAsync(reviewToken,Guid.NewGuid(),race.ProposalId,Guid.NewGuid(),site,epoch+1,"policy race"):acknowledging.AcknowledgeActivationAsync(pair.Channel,ack);await WaitForLock(ackFirst?"fc2safety-writer":"fc2safety-ack","X");Check(!second.IsCompleted,"policy and acknowledgement share deterministic commit ordering");}
+                finally{await tx.CommitAsync();}
+                await first;if(ackFirst){await second!;Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM configuration.RuntimeActivationAcknowledgement WHERE AcknowledgementId=@id",("@id",ack.AcknowledgementId)))==1,"acknowledgement-first policy revocation preserves historical acknowledgement");}
+                else await Denied(()=>second!,"policy-first ordering denies queued runtime acknowledgement");
+            }
+            await Exec("DROP TRIGGER security.Fixture_SafetyBarrier");
+        }
         // Scheduled cut becomes effective without a timer job or fact rewrite.
         (package,review)=await Package();var cut=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(DATEADD(second,3,SYSUTCDATETIME()),'+00:00')"))!;var timed=await Proposal("timezone",cut);
         await service.ProposePolicyRevocationAsync(token,timed);await Approve(timed);var timedIntent=await Intent();
@@ -160,7 +175,7 @@ internal static class SafetyRevocationAcceptance
         return count;
 
         async Task<PolicyRevocationProposalRequest> Proposal(string kind,DateTimeOffset? scheduled=null)
-        {var root=JsonDocument.Parse(PackageCanonicalizer.Serialize(package)).RootElement;var policy=kind=="timezone"?root.GetProperty("timezone"):root.GetProperty("machines")[0].GetProperty(kind=="schedule"?"schedule":"breakPolicy");return new(Guid.NewGuid(),Guid.NewGuid(),site,kind,policy.GetProperty("revisionId").GetGuid(),Convert.FromHexString(policy.GetProperty("contentHash").GetString()!),"safety-critical",scheduled,now.AddMinutes(10),await Epoch(),"explicit shared policy safety hold");}
+        {using var document=JsonDocument.Parse(PackageCanonicalizer.Serialize(package));var root=document.RootElement;var policy=kind=="timezone"?root.GetProperty("timezone"):root.GetProperty("machines")[0].GetProperty(kind=="schedule"?"schedule":"breakPolicy");return new(Guid.NewGuid(),Guid.NewGuid(),site,kind,policy.GetProperty("revisionId").GetGuid(),Convert.FromHexString(policy.GetProperty("contentHash").GetString()!),"safety-critical",scheduled,now.AddMinutes(10),await Epoch(),"explicit shared policy safety hold");}
         async Task<byte[]> Approve(PolicyRevocationProposalRequest proposal)=>await service.ApprovePolicyRevocationAsync(reviewToken,Guid.NewGuid(),proposal.ProposalId,Guid.NewGuid(),site,await Epoch(),"independent policy safety approval");
         async Task<ApprovalWithdrawalRequest> Withdrawal()=>new(Guid.NewGuid(),site,package.RevisionId,PackageCanonicalizer.Hash(package),review,await Epoch(),"withdraw exact approved package");
         async Task Grant(Guid person,string permission,AuthorizationScope scope)
