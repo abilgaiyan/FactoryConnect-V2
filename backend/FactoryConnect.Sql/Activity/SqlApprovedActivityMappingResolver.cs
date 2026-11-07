@@ -14,7 +14,8 @@ namespace FactoryConnect.Sql.ActivityProcessing;
 /// </summary>
 public sealed record ApprovedActivitySignal(
     Guid SiteId, Guid PackageRevisionId, Guid AcknowledgementId,
-    string PackageSha256, QualifiedActivitySignal Signal);
+    string PackageSha256, QualifiedActivitySignal Signal,
+    DateTimeOffset EffectiveFrom,DateTimeOffset? EffectiveTo);
 
 /// <summary>
 /// A narrow, versioned normalization profile held in the immutable,
@@ -89,8 +90,26 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
                     ConfigurationLockResources.Machine(installationId,machineId);
                 await gate.ExecuteNonQueryAsync(ct);
             }
+            var resolved=await ResolveInTransactionAsync(connection,tx,siteId,machineId,mappingId,streamKey,ct);
+            await tx.CommitAsync(ct);
+            return resolved;
+        }
+        catch
+        {
+            try{await tx.RollbackAsync(CancellationToken.None);}
+            catch(Exception error)when(error is SqlException or InvalidOperationException){}
+            throw;
+        }
+    }
+
+    internal async Task<ApprovedActivitySignal> ResolveInTransactionAsync(
+        SqlConnection connection,SqlTransaction tx,Guid siteId,Guid machineId,
+        Guid mappingId,string streamKey,CancellationToken ct=default)
+    {
             Guid revision;
             Guid acknowledgement;
+            DateTimeOffset appliedFrom,activationFrom,assignmentFrom,packageFrom;
+            DateTimeOffset? appliedTo,activationTo,assignmentTo,packageTo;
             byte[] packageHash;
             byte[] canonical;
             string semantic;
@@ -103,7 +122,10 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
                 DECLARE @now datetimeoffset(7)=TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00');
                 SELECT a.AcknowledgementId,a.PackageRevisionId,p.ContentHash,
                     p.CanonicalBytes,m.SemanticKey,m.Protocol,m.StreamKey,
-                    m.AddressEncoding,m.Normalization,m.AddressBytes
+                    m.AddressEncoding,m.Normalization,m.AddressBytes,
+                    a.AppliedFrom,a.EffectiveTo,activation.EffectiveFrom,activation.EffectiveTo,
+                    assignment.EffectiveFrom,assignment.EffectiveTo,
+                    assignment.EffectiveFrom,assignment.EffectiveTo
                 FROM configuration.MachineAcknowledgementHead h WITH(HOLDLOCK)
                 JOIN configuration.RuntimeActivationAcknowledgement a WITH(HOLDLOCK)
                     ON a.SiteId=h.SiteId AND a.MachineId=h.MachineId
@@ -178,6 +200,14 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
                 encoding=reader.GetString(7);
                 normalization=reader.GetString(8);
                 address=(byte[])reader[9];
+                appliedFrom=reader.GetDateTimeOffset(10);
+                appliedTo=reader.IsDBNull(11)?null:reader.GetDateTimeOffset(11);
+                activationFrom=reader.GetDateTimeOffset(12);
+                activationTo=reader.IsDBNull(13)?null:reader.GetDateTimeOffset(13);
+                assignmentFrom=reader.GetDateTimeOffset(14);
+                assignmentTo=reader.IsDBNull(15)?null:reader.GetDateTimeOffset(15);
+                packageFrom=reader.GetDateTimeOffset(16);
+                packageTo=reader.IsDBNull(17)?null:reader.GetDateTimeOffset(17);
                 if(await reader.ReadAsync(ct))
                     throw new InvalidDataException("Ambiguous active mapping identity.");
             }
@@ -214,15 +244,14 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
                     throw new InvalidDataException("Approved package signal differs from SQL mapping projection.");
             }
             var map=ApprovedActivityValueMap.Parse(normalization);
-            await tx.CommitAsync(ct);
+            var from=new[]{appliedFrom,activationFrom,assignmentFrom,packageFrom}.Max();
+            var ends=new DateTimeOffset?[]{appliedTo,activationTo,assignmentTo,packageTo};
+            var to=ends.Where(x=>x is not null).Select(x=>x!.Value)
+                .DefaultIfEmpty(DateTimeOffset.MaxValue).Min();
+            if(to<=from)
+                throw new InvalidDataException("Approved mapping has no effective interpretation interval.");
             return new(siteId,revision,acknowledgement,Convert.ToHexString(packageHash),
-                new(machineId,streamKey,mappingId,sourceAddress,map));
-        }
-        catch
-        {
-            try{await tx.RollbackAsync(CancellationToken.None);}
-            catch(Exception error)when(error is SqlException or InvalidOperationException){}
-            throw;
-        }
+                new(machineId,streamKey,mappingId,sourceAddress,map),from,
+                to==DateTimeOffset.MaxValue?null:to);
     }
 }
