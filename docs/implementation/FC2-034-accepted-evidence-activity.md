@@ -1,6 +1,6 @@
 # FC2-034 — Accepted MTConnect evidence to machine activity
 
-**Status:** Implementation contract, draft PR #34. No production enablement or inferred activity from counter-only observations.
+**Status:** Evidence-processing implementation and controlled qualification complete at `5a7fa67a`; final-head CI/readiness/merge are tracked in PR #34. Earlier implementation checkpoints below are historical and are superseded by the final qualification/slice boundary. Activity API/UI, production worker hosting and commissioning are separate increments. No production enablement or inferred activity from counter-only observations.
 
 ## Customer outcome and boundary
 
@@ -239,3 +239,41 @@ The history fixture captures cached plans and plans after `UPDATE STATISTICS ...
 The child warms for 128 cuts then processes 512 steady cuts. Five points at 128-cut boundaries measure working set, live managed bytes after collection, heap size, fragmentation and committed GC memory; forced collection and stdout transport sit outside cut timing. Post-warm managed spread must fit within one existing 8-MiB source payload budget in this controlled workload. This is a fixture resource envelope, not an arbitrary production SLO or native/fleet lifetime promise. Working-set/native growth must still be reviewed from the actual measurements. `activity-isolated-worker-memory.json` retains numerical samples, not source-result history; the parent process reaps the worker on failure.
 
 **Pending:** qualify actual plans/memory, inspect the measured envelope, run backend/dashboard/full SQL and existing crash/corruption regressions, then record the final disposition before marking ready and squash merging. PR #34 stays draft until then. No API/UI, local setup, production configuration, migration or deployment is part of this increment.
+
+
+## Final accepted qualification — evidence-processing slice
+
+Executable commit `5a7fa67a211a060834857a65f3a47bcfe0f5101e` passed all jobs in [CI #42404994189](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42404994189). The dedicated performance run passed **188 checks**: 25 history/plan-specific and four isolated-memory checks alongside the existing ingestion foundation. Full SQL regression passed **1,126 checks, no skips**; backend/dashboard, eight-child-process restart, exact-source corruption/replay and local 142 pure checks remained green. The Release build had zero warnings/errors. [Raw performance artifacts](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42404994189/artifacts/13587406830) retain all six plan captures and isolated worker samples.
+
+| Retained observations | Retained batches | Ordinary median ms | Cached command logical reads | Refreshed-statistics command logical reads | Observation rows read | Batch rows read, both variants |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3,332 | 35 | 13.84 | 1,903 | 1,903 | 212 | 12 |
+| 14,532 | 147 | 13.12 | 1,928 | 1,905 | 212 | 12 |
+| 104,132 | 1,043 | 11.92 | 1,920 | 1,922 | 212 | 12 |
+
+All six plans used only seeks for retained batch access, with complete batch row-read counters and no batch index/table scans. Each captured 21 command and 95 stored-statement completions. Reader/apply TDS roundtrips remained four / 15; normal cuts still selected two states and one bounded document. The **1,031-period** updated oracle digest matched bounded readback, exact checkpoint/provenance and one receipt per cut. All deep-history failures rolled back without partial effects. These are serial bounded tail-cut results at natural cached and FULLSCAN-refreshed statistics states, not arbitrary historical-window, cold/concurrent/fleet or universal optimizer qualification. No before/after production speedup is inferred from separate CI runs.
+
+The isolated memory process (PID 4450 in this run) had no ingestion, XE/plan retention or historical result collection. Its first 128 cuts warmed runtime/SQL state; the next 512 were steady measurement cuts, each producing an exact period, checkpoint and receipt.
+
+| Total child cuts | Live managed bytes after collection | Working-set bytes | GC committed bytes |
+| ---: | ---: | ---: | ---: |
+| 128 | 1,431,096 | 124,940,288 | 19,947,520 |
+| 256 | 1,528,080 | 129,060,864 | 22,724,608 |
+| 384 | 1,624,112 | 133,431,296 | 27,045,888 |
+| 512 | 1,623,856 | 129,245,184 | 22,851,584 |
+| 640 | 1,623,560 | 129,224,704 | 22,851,584 |
+
+Live managed spread was **193,016 bytes**, within the controlled one-source-budget envelope, and the final three points plateaued around 1.55 MiB. Working set peaked at 127.25 MiB and settled around 123.24 MiB; GC committed memory likewise settled. Steady median cut time was 11.52 ms and median measured allocation was 603,352 bytes. GC sampling/stdout/parent ingestion were outside cut timing. All 640 child operations preserved exact periods, receipts, qualification/provenance and durable generation.
+
+**Attribution/disposition:** the earlier 188.6→266.3 MiB whole-fixture working-set increase was not reproduced by the clean worker. Those mixed parent/profiler/runtime measurements cannot be assigned to retained processing state. This experiment establishes the isolated worker's controlled 640-cut envelope and plateau; it does not identify every parent allocation or establish unlimited native/fleet lifetime bounds. The scoped worker-memory attribution gate is accepted, with those limits retained.
+
+| PR #34 merge qualification | Final disposition |
+| --- | --- |
+| Approved mapping, exact source cut/predecessor and immutable operation ancestry | Accepted; unchanged correctness regression remains green |
+| Atomic durability and eight-child-process crash/restart | Accepted; original same-batch anchor and cross-batch breaks preserved |
+| Retained metadata plan stability | Accepted for the defined serial tail-cut workload across all six cached/refreshed plans |
+| Isolated worker memory | Accepted for 128 warmup + 512 steady cuts with observed live/native plateau |
+| Exact output, replay and corruption behavior | Accepted; 1,031 history periods and 640 isolated-worker effects verified |
+| Final review | No unresolved GitHub review/inline comments at executable-head review; no activity host/API registration or unrelated scope additions |
+
+**Closure boundary:** PR #34 is merge-qualified for the evidence-processing slice, subject to final-head CI and GitHub's merge checks. Readiness/squash identity are recorded by [PR #34](https://github.com/abilgaiyan/FactoryConnect-V2/pull/34). Prior pending/performance-open notes above describe earlier checkpoints and do not reopen these accepted scoped gates. Full activity HTTPS/API, authenticated browser display, sustained cross-batch physical continuity, broad/cold/concurrent capacity, developer-machine setup and production commissioning remain separately tracked work. No production deployment, local setup or UI enablement is performed by this PR.

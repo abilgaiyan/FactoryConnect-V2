@@ -75,3 +75,10 @@ The measurement increment is CI accepted at `0a12d431` ([CI #42401790013](https:
 ## FC2-034 completion scope — 8 November 2026
 
 Finish the evidence-processing PR before developer-machine setup. The remaining increment stabilizes bounded batch-ID seek plans across cached/refreshed statistics and isolates 128 warmup + 512 steady cuts in a fresh SQL worker process. After measured acceptance and final CI/review, close and squash merge this slice. Activity HTTPS/API, authenticated display, production worker hosting and commissioning remain separate product increments; they do not silently become completed by this merge. No local setup or new UI work is introduced here.
+
+
+## FC2-034 final evidence-processing qualification
+
+`5a7fa67a` passed [CI #42404994189](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42404994189): all three jobs, 188 dedicated performance-run checks, 1,126 full SQL checks without skips, and unchanged crash/corruption/replay coverage. Six cached/refreshed plans at 35/147/1,043 retained batches used seeks and 12 batch rows read, with 212 observation rows read per tail cut. The updated 1,031-period oracle matched. An isolated 640-cut worker plateaued near 1.55 MiB live managed memory and 123 MiB working set after warmup, without ingestion/profiler retention. The two scoped performance gates are accepted; detailed data and limitations are in the implementation contract.
+
+This evidence-processing slice is qualified for final-head CI/review and squash merge through PR #34. Developer-machine setup follows completion of that PR. Activity API/authenticated UI, production worker hosting, stronger cross-batch acquisition assurance and production commissioning remain separate roadmap increments; none is enabled by this merge.
