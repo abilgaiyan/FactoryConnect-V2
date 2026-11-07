@@ -16,6 +16,8 @@ export interface DashboardApplicationRuntime {
   readonly reportingClient: ReportingClient;
   readonly currentStateClient: CurrentStateClient;
   readonly now?: () => Date;
+  /** Host-provided, in-memory human session; never sourced from URL, localStorage or dashboard config. */
+  readonly evidenceSession?: { readonly bearer: string };
 }
 
 export async function createDashboardApplicationRuntime(
