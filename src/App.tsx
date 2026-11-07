@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { CommissioningPage } from "./presentation/CommissioningPage.tsx";
+import { RetainedMachineEvidence } from "./presentation/RetainedMachineEvidence.tsx";
 import { overviewReturn } from "./routing/overview-return.ts";
 import { ManagementOverviewPage } from "./presentation/ManagementOverviewPage.tsx";
 import { MachineCounterReportPage } from "./presentation/MachineCounterReportPage.tsx";
@@ -292,7 +293,17 @@ function ConfiguredMachineDetail(props: {
   readonly runtime: DashboardApplicationRuntime;
 }) {
   const currentState = useMachineCurrentState(props.source.machineId, props.runtime);
-  return <MachineCurrentStatePage source={props.source} state={currentState.state} refresh={currentState.refresh} />;
+  return <>
+    <MachineCurrentStatePage source={props.source} state={currentState.state} refresh={currentState.refresh} />
+    {props.runtime.evidenceSession
+      ? <RetainedMachineEvidence machineId={props.source.machineId}
+          baseAddress={new URL(props.runtime.configuration.reportingBasePath, window.location.origin).toString()}
+          sessionBearer={props.runtime.evidenceSession.bearer} />
+      : <section aria-label="Retained machine evidence">
+          <h2>Accepted machine observations</h2>
+          <p>Protected historical evidence is unavailable until an authenticated human session is established. No observations are inferred.</p>
+        </section>}
+  </>;
 }
 
 interface DailyReportSelectionProps {
