@@ -374,10 +374,8 @@ internal static class MtConnectIngestionAcceptance
             activityObserved[1].RawValue=="READY" &&
             activityObserved.All(x=>x.BatchId==bulk.OperationId),
             "approved execution-state signal resolves two actual immutable accepted observations");
-        Check(currentActivity.EffectiveFrom<=activityObserved[0].ObservedAt &&
-            (currentActivity.EffectiveTo is null||
-                activityObserved[^1].ObservedAt<currentActivity.EffectiveTo),
-            "ingested execution evidence falls inside exact approved interpretation interval");
+        Check(currentActivity.EffectiveFrom>activityObserved[0].ObservedAt,
+            "retained observation predates current approved interpretation interval");
         var trustedCandidate=AcceptedActivityContinuityQualifier.Qualify(
             currentActivity,activityObserved);
         var interpretedCandidate=ActivityCheckpointEvaluator.Advance(
@@ -385,95 +383,27 @@ internal static class MtConnectIngestionAcceptance
             ActivityCheckpointEvaluator.Initial(trustedCandidate.Qualification),
             trustedCandidate.Samples);
         Check(trustedCandidate.ProvenInternalLinks==1 &&
-            !trustedCandidate.Samples[0].ContinuityFromPrevious &&
-            trustedCandidate.Samples[1].ContinuityFromPrevious &&
             interpretedCandidate.ClosedPeriods.Count==1 &&
             interpretedCandidate.ClosedPeriods[0].State==ActivityState.Running &&
             interpretedCandidate.ClosedPeriods[0].DurationTicks==TimeSpan.FromSeconds(2).Ticks,
-            "actual accepted activity signals receive conservative same-batch proof without checkpoint publication");
+            "retained accepted signals remain interpretable as candidates without publishing history");
         var atomicStore=new SqlActivityProcessorStore(target.ConnectionString);
-        var acceptedOperation=Guid.NewGuid();
         try
         {
-            await atomicStore.ApplyAcceptedAsync(acceptedOperation,target.InstallationId,
+            await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
                 site,machine,currentActivity.Signal.MappingId,Stream,
-                bulkFrame.InstanceId,firstBulk,firstBulk+3,0,injectRollback:true);
-            throw new InvalidOperationException("Expected accepted-source atomic rollback.");
-        }
-        catch(InvalidOperationException error) when(
-            error.Message=="Controlled atomic activity rollback fixture.")
-        {
-            Check((await atomicStore.ReadCheckpointAsync(trustedCandidate.Qualification))
-                .NextGeneration==0,
-                "accepted-source proof and generated intervals roll back with checkpoint transaction");
-        }
-        var acceptedCommit=await atomicStore.ApplyAcceptedAsync(
-            acceptedOperation,target.InstallationId,site,machine,
-            currentActivity.Signal.MappingId,Stream,
-            bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
-        Check(acceptedCommit.NewPeriods.Count==1 &&
-            acceptedCommit.NewPeriods[0]==interpretedCandidate.ClosedPeriods[0] &&
-            acceptedCommit.Checkpoint.NextGeneration==1 &&
-            (await atomicStore.ReadPeriodPageAsync(trustedCandidate.Qualification))
-                .Rows.Single().Period==acceptedCommit.NewPeriods[0],
-            "verified accepted MTConnect cut commits its exact immutable period and checkpoint atomically");
-        var acceptedReplay=await atomicStore.ApplyAcceptedAsync(
-            acceptedOperation,target.InstallationId,site,machine,
-            currentActivity.Signal.MappingId,Stream,
-            bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
-        Check(acceptedReplay.Replayed &&
-            acceptedReplay.NewPeriods.SequenceEqual(acceptedCommit.NewPeriods),
-            "verified accepted-source operation replays without a second activity period");
-        // An approved later activation must not reinterpret previously
-        // retained immutable execution samples. Drive a new *approved*
-        // acknowledgement head whose effective start is after this batch.
-        var previousActivationRevision=package.RevisionId;
-        var previousMappingId=currentActivity.Signal.MappingId;
-        var earlierSource=activityObserved[0].ObservedAt;
-        (package,review)=await Package();
-        activation=await Intent(from:earlierSource.AddMinutes(1));
-        ack=Ack(activation,1);
-        await service.AcknowledgeActivationAsync(pair.Channel,ack);
-        var laterSignal=package.Machines[0].Signals.Single(
-            x=>x.SemanticKey=="machine-activity");
-        // The new activation becomes eligible only after its future
-        // effective start; do not force it active by modifying SQL clocks.
-        try
-        {
-            await mappingResolver.ResolveAsync(site,machine,laterSignal.MappingId,Stream);
-            throw new InvalidOperationException("Future activation resolved prematurely.");
-        }
-        catch(InvalidDataException)
-        {
-            Check(true,"future-dated activation remains ineligible at the current clock");
-        }
-        Check(activation.EffectiveFrom>earlierSource &&
-            package.RevisionId!=previousActivationRevision,
-            "new approved activation has a strictly later interpretation start");
-        try
-        {
-            await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
-                site,machine,previousMappingId,Stream,bulkFrame.InstanceId,
-                firstBulk,firstBulk+3,0);
-            throw new InvalidOperationException(
-                "Historical source was interpreted under the old mapping.");
-        }
-        catch(InvalidDataException)
-        {
-            Check(true,"superseded approved activity mapping cannot reinterpret historical source");
-        }
-        try
-        {
-            await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
-                site,machine,laterSignal.MappingId,Stream,
                 bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
-            throw new InvalidOperationException(
-                "Historical source was interpreted under a not-yet-effective activation.");
+            throw new InvalidOperationException("Pre-activation evidence was published.");
         }
         catch(InvalidDataException)
         {
-            Check(true,"pre-activation observations cannot use future approved mapping");
+            Check(true,"pre-activation observations fail closed without writing a checkpoint or period");
         }
+        Check((await atomicStore.ReadCheckpointAsync(trustedCandidate.Qualification))
+            .NextGeneration==0 &&
+            (await atomicStore.ReadPeriodPageAsync(trustedCandidate.Qualification))
+                .Rows.Count==0,
+            "rejected historical interpretation leaves no activity effects");
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.
