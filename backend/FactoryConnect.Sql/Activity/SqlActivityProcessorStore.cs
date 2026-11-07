@@ -12,6 +12,15 @@ public sealed record ActivityDurableResult(
     IReadOnlyList<ClosedActivityPeriod> NewPeriods,
     bool Replayed);
 
+public sealed record ActivityPeriodCursor(
+    DateTimeOffset StartedAt,ulong InstanceId,ulong StartSequence,Guid EffectId);
+
+public sealed record ActivityPeriodRow(
+    ClosedActivityPeriod Period,ActivityQualificationIdentity Qualification,ActivityPeriodCursor Cursor);
+
+public sealed record ActivityPeriodPage(
+    IReadOnlyList<ActivityPeriodRow> Rows,ActivityPeriodCursor? Next);
+
 /// <summary>Serializable atomic checkpoint and closed-period commit.
 /// Caller supplies only independently qualified, retained input; this slice
 /// does not turn raw counters into state nor claim physical continuity.</summary>
@@ -208,30 +217,113 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         }
     }
 
+    /// <summary>A bounded, exact-qualification projection page. This store-level read
+    /// is not an operator authorization boundary: HTTPS callers must obtain
+    /// machine/site permission under the shared security gate first.</summary>
+    public async Task<ActivityPeriodPage> ReadPeriodPageAsync(
+        ActivityQualificationIdentity identity,int take=50,
+        ActivityPeriodCursor? after=null,CancellationToken ct=default)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        if(take is <1 or >100)throw new ArgumentOutOfRangeException(nameof(take));
+        await using var c=new SqlConnection(connectionString);
+        await c.OpenAsync(ct);
+        await using var t=(SqlTransaction)await c.BeginTransactionAsync(IsolationLevel.Serializable,ct);
+        try
+        {
+            // The checkpoint is the authority for exact qualification, including
+            // continuity identity and the complete canonical value-map digest.
+            // Never return historical periods after a missing or changed checkpoint.
+            await using(var validation=new SqlCommand("""
+                SELECT QualificationHash,CheckpointJson,CheckpointHash
+                FROM activity.ProcessorCheckpoint WITH(HOLDLOCK)
+                WHERE MachineId=@machine AND StreamKeyBytes=@stream AND MappingId=@mapping
+                """,c,t))
+            {
+                BindScope(validation,identity);
+                await using var reader=await validation.ExecuteReaderAsync(ct);
+                if(!await reader.ReadAsync(ct))
+                    throw new InvalidDataException("Qualified activity checkpoint does not exist.");
+                if(!((byte[])reader[0]).AsSpan().SequenceEqual(QualificationHash(identity)))
+                    throw new InvalidDataException("Period qualification or continuity identity changed.");
+                var json=reader.GetString(1);
+                if(!SHA256.HashData(Encoding.Unicode.GetBytes(json)).AsSpan()
+                    .SequenceEqual((byte[])reader[2]))
+                    throw new InvalidDataException("Activity checkpoint integrity mismatch.");
+                var actual=JsonSerializer.Deserialize<ActivityProcessorCheckpoint>(json)
+                    ?? throw new InvalidDataException("Activity checkpoint cannot be restored.");
+                if(actual.Qualification!=identity)
+                    throw new InvalidDataException("Activity checkpoint does not match requested qualification.");
+            }
+            var results=new List<ActivityPeriodRow>();
+            await using(var q=new SqlCommand("""
+                SELECT TOP (@limit) EffectId,QualificationHash,State,StartedAt,EndedAt,
+                    DurationTicks,InstanceId,StartSequence,EndSequence,StartRawValue,EndRawValue
+                FROM activity.ClosedPeriod
+                WHERE MachineId=@machine AND StreamKeyBytes=@stream AND MappingId=@mapping
+                    AND QualificationHash=@qualification
+                    AND (@afterTime IS NULL OR StartedAt>@afterTime
+                        OR (StartedAt=@afterTime AND
+                            (InstanceId>@afterInstance OR
+                            (InstanceId=@afterInstance AND
+                                (StartSequence>@afterStart OR
+                                (StartSequence=@afterStart AND EffectId>@afterEffect))))))
+                ORDER BY StartedAt,InstanceId,StartSequence,EffectId
+                """,c,t))
+            {
+                BindScope(q,identity);
+                q.Parameters.Add("@qualification",SqlDbType.Binary,32).Value=QualificationHash(identity);
+                q.Parameters.Add("@limit",SqlDbType.Int).Value=take+1;
+                q.Parameters.Add("@afterTime",SqlDbType.DateTimeOffset).Value=(object?)after?.StartedAt??DBNull.Value;
+                var instance=q.Parameters.Add("@afterInstance",SqlDbType.Decimal);
+                instance.Precision=20;
+                instance.Scale=0;
+                instance.Value=after is null?DBNull.Value:Convert.ToDecimal(after.InstanceId,CultureInfo.InvariantCulture);
+                var start=q.Parameters.Add("@afterStart",SqlDbType.Decimal);
+                start.Precision=20;
+                start.Scale=0;
+                start.Value=after is null?DBNull.Value:Convert.ToDecimal(after.StartSequence,CultureInfo.InvariantCulture);
+                q.Parameters.Add("@afterEffect",SqlDbType.UniqueIdentifier).Value=(object?)after?.EffectId??DBNull.Value;
+                await using var reader=await q.ExecuteReaderAsync(ct);
+                while(await reader.ReadAsync(ct))
+                {
+                    if(!((byte[])reader[1]).AsSpan().SequenceEqual(QualificationHash(identity)))
+                        throw new InvalidDataException("Period row qualification differs from checkpoint.");
+                    var cursor=new ActivityPeriodCursor(reader.GetDateTimeOffset(3),
+                        decimal.ToUInt64(reader.GetDecimal(6)),
+                        decimal.ToUInt64(reader.GetDecimal(7)),reader.GetGuid(0));
+                    var period=new ClosedActivityPeriod(identity.MachineId,identity.StreamKey,
+                        identity.MappingId,Enum.Parse<ActivityState>(reader.GetString(2)),
+                        reader.GetDateTimeOffset(3),reader.GetDateTimeOffset(4),
+                        reader.GetInt64(5),decimal.ToUInt64(reader.GetDecimal(6)),
+                        decimal.ToUInt64(reader.GetDecimal(7)),
+                        decimal.ToUInt64(reader.GetDecimal(8)),
+                        reader.GetString(9),reader.GetString(10));
+                    results.Add(new(period,identity,cursor));
+                }
+            }
+            await t.CommitAsync(ct);
+            var more=results.Count>take;
+            if(more)results.RemoveAt(results.Count-1);
+            return new(results.AsReadOnly(),more?results[^1].Cursor:null);
+        }
+        catch
+        {
+            try{await t.RollbackAsync(CancellationToken.None);}
+            catch(Exception error)when(error is SqlException or InvalidOperationException){}
+            throw;
+        }
+    }
+
+    // Compatibility for the existing tiny SQL acceptance fixture only. No
+    // public unbounded read exists: callers must page explicitly.
     public async Task<IReadOnlyList<ClosedActivityPeriod>> ReadPeriodsAsync(
         ActivityQualificationIdentity identity,CancellationToken ct=default)
     {
-        ArgumentNullException.ThrowIfNull(identity);
-        await using var c=new SqlConnection(connectionString);
-        await c.OpenAsync(ct);
-        await using var q=new SqlCommand("""
-            SELECT State,StartedAt,EndedAt,DurationTicks,InstanceId,StartSequence,EndSequence,
-                StartRawValue,EndRawValue FROM activity.ClosedPeriod
-            WHERE MachineId=@machine AND StreamKeyBytes=@stream AND MappingId=@mapping
-            ORDER BY StartedAt,InstanceId,StartSequence
-            """,c);
-        BindScope(q,identity);
-        var rows=new List<ClosedActivityPeriod>();
-        await using var reader=await q.ExecuteReaderAsync(ct);
-        while(await reader.ReadAsync(ct))
-        {
-            rows.Add(new(identity.MachineId,identity.StreamKey,identity.MappingId,
-                Enum.Parse<ActivityState>(reader.GetString(0)),reader.GetDateTimeOffset(1),
-                reader.GetDateTimeOffset(2),reader.GetInt64(3),
-                decimal.ToUInt64(reader.GetDecimal(4)),decimal.ToUInt64(reader.GetDecimal(5)),
-                decimal.ToUInt64(reader.GetDecimal(6)),reader.GetString(7),reader.GetString(8)));
-        }
-        return rows.AsReadOnly();
+        var page=await ReadPeriodPageAsync(identity,100,null,ct);
+        if(page.Next is not null)
+            throw new InvalidOperationException("Use explicit activity period pagination.");
+        return page.Rows.Select(row=>row.Period).ToArray();
     }
 
     private static byte[] QualificationHash(ActivityQualificationIdentity identity)
