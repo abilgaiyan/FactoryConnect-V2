@@ -126,6 +126,29 @@ internal static class ActivitySqlDurabilityAcceptance
             finalPeriods.Take(stored.Count).SequenceEqual(stored) &&
             finalPeriods.Skip(stored.Count).SequenceEqual(winningEffects),
             "reconstructed store reads the original immutable periods plus the winning concurrent effect");
+        var pageOne=await restored.ReadPeriodPageAsync(identity,take:1);
+        Check(pageOne.Rows.Count==1 && pageOne.Next is not null &&
+            pageOne.Rows[0].Qualification==identity,
+            "first keyset page preserves exact qualification and continuation");
+        var pageTwo=await restored.ReadPeriodPageAsync(identity,take:1,after:pageOne.Next);
+        Check(pageTwo.Rows.Count==1 && pageTwo.Rows[0].Qualification==identity &&
+            pageTwo.Rows[0].Period==finalPeriods[1],
+            "second keyset page resumes without repeating the previous effect");
+        var pageThree=await restored.ReadPeriodPageAsync(identity,take:1,after:pageTwo.Next);
+        Check(pageThree.Rows.Count==Math.Min(1,finalPeriods.Count-2) &&
+            pageThree.Rows.All(x=>x.Qualification==identity),
+            "later keyset page retains exact qualification and bounded row count");
+        await Reject(async()=>{await restored.ReadPeriodPageAsync(
+            identity with {ContinuityIdentity="unqualified-change"});},
+            "period read rejects different continuity identity");
+        await Reject(async()=>{await restored.ReadPeriodPageAsync(
+            identity with {ExactValueMapSha256=new string('A',64)});},
+            "period read rejects different value mapping digest");
+        await Reject(async()=>{await restored.ReadPeriodsAsync(
+            identity with {ContinuityIdentity="changed"});},
+            "compatibility period read cannot bypass qualification validation");
+        await Reject(async()=>{await restored.ReadPeriodPageAsync(identity,take:101);},
+            "period page size is capped at 100 rows");
         return passed;
     }
 }
