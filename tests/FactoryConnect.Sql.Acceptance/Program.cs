@@ -147,6 +147,10 @@ try
     var ingestionTarget=target with {ConnectionString=ingestionDb.ConnectionString,Database=ingestionDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(ingestionTarget);
     passed += await MtConnectIngestionAcceptance.Run(ingestionTarget with{InitializeEmpty=false});
+    var activityDb=await NewDatabase();
+    var activityTarget=target with {ConnectionString=activityDb.ConnectionString,Database=activityDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(activityTarget);
+    passed += await ActivitySqlDurabilityAcceptance.Run(activityTarget with {InitializeEmpty=false});
     var hostDb=await NewDatabase();
     var hostTarget=target with {ConnectionString=hostDb.ConnectionString,Database=hostDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(hostTarget);
