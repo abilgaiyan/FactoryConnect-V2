@@ -98,13 +98,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             throw new InvalidDataException("No accepted activity observations within the requested source cut.");
         ValidateInterpretationPeriod(approved,rows);
         var cut=AcceptedActivityContinuityQualifier.Qualify(approved,rows);
-        var proof=JsonSerializer.Serialize(rows.Select(row=>new {
-            sequence=row.Sequence.ToString(CultureInfo.InvariantCulture),
-            batch=row.BatchId,ack=row.AcknowledgementId,
-            canonical=row.CanonicalSha256,document=row.DocumentSha256,
-            value=row.RawValue,quality=row.Quality,timestamp=row.SourceTimestamp,
-            observed=row.ObservedAt
-        }));
+        var proof=SourceProof(rows);
         var binding=new AcceptedSourceBinding(siteId,installationId,approved,
             rows,instanceId,afterSequence,throughSequence,proof);
         return await ApplyCoreAsync(operationId,approved.Signal,cut.Qualification,
@@ -130,8 +124,11 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         var evaluatedPeriodRows=0;
         var savedSamples=samples.ToArray();
         var request=JsonSerializer.SerializeToUtf8Bytes(new {
-            version=1,operationId,identity,expectedGeneration,samples=savedSamples,
-            acceptedSourceProof=accepted?.ProofJson
+            version=2,operationId,identity,expectedGeneration,samples=savedSamples,
+            acceptedSourceProof=accepted?.ProofJson,
+            acceptedInstance=accepted?.InstanceId,
+            acceptedAfter=accepted?.AfterSequence,
+            acceptedThrough=accepted?.ThroughSequence
         });
         var requestHash=SHA256.HashData(request);
         var resource=$"fc2:activity:{identity.MachineId:N}:{identity.MappingId:N}:{Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(identity.StreamKey)))}";
@@ -245,7 +242,34 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             }
             if(checkpoint.NextGeneration!=expectedGeneration)
                 throw new InvalidOperationException("Stale activity processor generation.");
-            var evaluated=ActivityCheckpointEvaluator.Advance(signal,identity,checkpoint,savedSamples);
+            var evaluationSamples=savedSamples.ToArray();
+            if(accepted is not null)
+            {
+                await VerifyPredecessorAsync(c,t,identity,checkpoint,accepted,ct);
+                var prior=checkpoint.AcceptedSource?.LastObservation;
+                var first=accepted.Rows[0];
+                // A verified predecessor permits only the existing same-batch
+                // assurance. No adjacency-based or cross-batch inference.
+                evaluationSamples[0]=evaluationSamples[0] with {
+                    ContinuityFromPrevious=prior is not null &&
+                        prior.BatchId==first.BatchId && prior.InstanceId==first.InstanceId &&
+                        prior.AcknowledgementId==first.AcknowledgementId &&
+                        prior.DocumentSha256==first.DocumentSha256 };
+            }
+            else if(checkpoint.AcceptedSource is not null)
+                throw new InvalidDataException("Accepted checkpoint requires an accepted-source continuation.");
+            var evaluated=ActivityCheckpointEvaluator.Advance(signal,identity,checkpoint,evaluationSamples);
+            if(accepted is not null)
+            {
+                var anchor=evaluated.Checkpoint.OpenAnchor;
+                var anchorRow=anchor is null ? null : accepted.Rows.FirstOrDefault(
+                    row=>row.InstanceId==anchor.InstanceId && row.Sequence==anchor.Sequence)
+                    ?? checkpoint.AcceptedSource?.OpenAnchorObservation;
+                evaluated=evaluated with { Checkpoint=evaluated.Checkpoint with {
+                    AcceptedSource=new(accepted.InstanceId,accepted.ThroughSequence,
+                        accepted.Approved.PackageRevisionId,accepted.Approved.AcknowledgementId,
+                        accepted.Approved.PackageSha256,accepted.Rows[^1],anchorRow) } };
+            }
             var resultBytes=JsonSerializer.SerializeToUtf8Bytes(
                 new ActivityDurableResult(evaluated.Checkpoint,evaluated.ClosedPeriods,false));
             var snapshot=JsonSerializer.Serialize(evaluated.Checkpoint);
@@ -503,6 +527,82 @@ public sealed class SqlActivityProcessorStore(string connectionString)
         }
     }
 
+    private static string SourceProof(
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> rows)
+        => JsonSerializer.Serialize(rows.Select(row=>new {
+            sequence=row.Sequence.ToString(CultureInfo.InvariantCulture),
+            batch=row.BatchId,ack=row.AcknowledgementId,
+            canonical=row.CanonicalSha256,document=row.DocumentSha256,
+            value=row.RawValue,quality=row.Quality,timestamp=row.SourceTimestamp,
+            observed=row.ObservedAt
+        }));
+
+    private static async Task VerifyPredecessorAsync(
+        SqlConnection c,SqlTransaction t,ActivityQualificationIdentity identity,
+        ActivityProcessorCheckpoint checkpoint,AcceptedSourceBinding binding,CancellationToken ct)
+    {
+        if(checkpoint.Qualification!=identity)
+            throw new InvalidDataException("Checkpoint qualification does not match accepted source cut.");
+        if(checkpoint.NextGeneration==0)
+        {
+            if(checkpoint.LastConsumedSample is not null || checkpoint.AcceptedSource is not null)
+                throw new InvalidDataException("Initial accepted checkpoint has an unexpected predecessor.");
+            // Bootstrap explicitly at the first retained batch of this exact
+            // acknowledged source instance. A caller cannot choose a later start.
+            await using var initial=new SqlCommand("""
+                SELECT MIN(FromSequence) FROM acquisition.MtConnectBatch WITH(HOLDLOCK)
+                WHERE SiteId=@site AND MachineId=@machine AND StreamKeyBytes=@stream
+                    AND InstanceId=@instance AND AcknowledgementId=@ack
+                """,c,t);
+            BindScope(initial,identity);
+            initial.Parameters.AddWithValue("@site",binding.SiteId);
+            initial.Parameters.AddWithValue("@instance",(decimal)binding.InstanceId);
+            initial.Parameters.AddWithValue("@ack",binding.Approved.AcknowledgementId);
+            var start=await initial.ExecuteScalarAsync(ct);
+            if(start is not decimal first || (first==0 || first-1!=(decimal)binding.AfterSequence))
+                throw new InvalidDataException("Initial activity cut must start at its acknowledged retained batch boundary.");
+            return;
+        }
+        var frontier=checkpoint.AcceptedSource
+            ?? throw new InvalidDataException("Accepted checkpoint predecessor provenance is missing.");
+        if(frontier.InstanceId!=binding.InstanceId || frontier.ThroughSequence!=binding.AfterSequence ||
+           frontier.PackageRevisionId!=binding.Approved.PackageRevisionId ||
+           frontier.AcknowledgementId!=binding.Approved.AcknowledgementId ||
+           frontier.PackageSha256!=binding.Approved.PackageSha256 ||
+           frontier.LastObservation.Sequence>frontier.ThroughSequence)
+            throw new InvalidDataException("Accepted source cut does not continue the exact checkpoint frontier.");
+        async Task Verify(SqlAcceptedActivityEvidenceReader.AcceptedRow row,ActivityInputSample? sample)
+        {
+            if(sample is null || row.SiteId!=binding.SiteId || row.MachineId!=identity.MachineId ||
+               row.StreamKey!=identity.StreamKey || row.MappingId!=identity.MappingId ||
+               row.Address!=identity.SourceAddress || row.InstanceId!=frontier.InstanceId ||
+               row.AcknowledgementId!=frontier.AcknowledgementId ||
+               sample.MachineId!=row.MachineId || sample.StreamKey!=row.StreamKey ||
+               sample.MappingId!=row.MappingId || sample.SourceAddress!=row.Address ||
+               sample.InstanceId!=row.InstanceId || sample.Sequence!=row.Sequence ||
+               sample.ObservedAt!=row.ObservedAt || sample.RawValue!=row.RawValue || sample.Quality!=row.Quality ||
+               row.Sequence==0)
+                throw new InvalidDataException("Checkpoint predecessor differs from accepted source provenance.");
+            // Exact bounded retained predecessor recheck; never search by time.
+            var proof=binding with { Rows=new[]{row},InstanceId=row.InstanceId,
+                AfterSequence=row.Sequence-1,ThroughSequence=row.Sequence,ProofJson=SourceProof(new[]{row}) };
+            await VerifyAcceptedSourceInTransactionAsync(c,t,identity,proof,ct);
+        }
+        await Verify(frontier.LastObservation,checkpoint.LastConsumedSample);
+        if(checkpoint.OpenAnchor is not null)
+        {
+            var anchor=frontier.OpenAnchorObservation
+                ?? throw new InvalidDataException("Accepted open anchor provenance is missing.");
+            if(anchor.BatchId!=frontier.LastObservation.BatchId ||
+               anchor.DocumentSha256!=frontier.LastObservation.DocumentSha256 ||
+               anchor.Sequence>frontier.LastObservation.Sequence)
+                throw new InvalidDataException("Accepted open anchor crosses an unqualified batch boundary.");
+            await Verify(anchor,checkpoint.OpenAnchor);
+        }
+        else if(frontier.OpenAnchorObservation is not null)
+            throw new InvalidDataException("Unexpected accepted open anchor provenance.");
+    }
+
     private static async Task VerifyAcceptedSourceInTransactionAsync(
         SqlConnection c,SqlTransaction t,ActivityQualificationIdentity identity,
         AcceptedSourceBinding binding,CancellationToken ct)
@@ -512,6 +612,10 @@ public sealed class SqlActivityProcessorStore(string connectionString)
            identity.MappingId!=binding.Approved.Signal.MappingId)
             throw new InvalidDataException("Accepted source binding cannot be empty or ambiguous.");
         await using var q=new SqlCommand("""
+            IF NOT EXISTS (SELECT 1 FROM acquisition.MtConnectCursor WITH(HOLDLOCK)
+                WHERE SiteId=@site AND MachineId=@machine AND StreamKeyBytes=@stream
+                    AND InstanceId=@instance AND NextSequence>@through)
+                THROW 51078,'Activity source frontier is not durably accepted.',1;
             DECLARE @expected TABLE(
                 Sequence decimal(20,0) NOT NULL PRIMARY KEY,
                 BatchId uniqueidentifier NOT NULL,

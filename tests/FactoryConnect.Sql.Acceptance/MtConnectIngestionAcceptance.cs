@@ -410,6 +410,11 @@ internal static class MtConnectIngestionAcceptance
         // transaction. Lock-wait expiry needs a *currently eligible* retained
         // cut and an independently advanced authoritative eligibility end;
         // do not treat this pre-activation case as that concurrency proof.
+        // A fresh acknowledged epoch supplies an explicit initial retained boundary.
+        activation=await Intent();ack=Ack(activation,1);
+        await service.AcknowledgeActivationAsync(pair.Channel,ack);
+        currentActivity=await mappingResolver.ResolveAsync(site,machine,
+            currentActivity.Signal.MappingId,Stream);
         // Generate eligible timestamps at the source, before acquisition and ingestion.
         // Retain the historical rejection above as an independent negative case.
         context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
@@ -427,12 +432,25 @@ internal static class MtConnectIngestionAcceptance
             eligibleRows.All(x=>x.BatchId==eligibleRequest.OperationId &&
                 x.AcknowledgementId==currentActivity.AcknowledgementId),
             "positive source fixture includes the acknowledged interpretation from-boundary");
+        try
+        {
+            await atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                eligibleFrame.InstanceId,eligibleFrom+1,eligibleFrom+3,0);
+            throw new InvalidOperationException("Initial activity skipped a retained transition.");
+        }
+        catch(InvalidDataException error)when(error.Message.Contains("acknowledged retained batch boundary",StringComparison.Ordinal))
+        {
+            Check((await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)).NextGeneration==0 &&
+                await Count("activity.ClosedPeriod")==0 && await Count("activity.ProcessorOperation")==0,
+                "initial source cut cannot skip the acknowledged epoch's first retained transition");
+        }
         var positiveOperation=Guid.NewGuid();
         try
         {
             await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
                 site,machine,currentActivity.Signal.MappingId,Stream,
-                eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,0,injectRollback:true);
+                eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0,injectRollback:true);
             throw new InvalidDataException("Injected activity rollback did not execute.");
         }
         catch(InvalidOperationException error)when(error.Message=="Controlled atomic activity rollback fixture.")
@@ -444,10 +462,10 @@ internal static class MtConnectIngestionAcceptance
             "eligible rollback leaves checkpoint periods and receipts unchanged");
         var committed=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
             site,machine,currentActivity.Signal.MappingId,Stream,
-            eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,0);
+            eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
         var replay=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
             site,machine,currentActivity.Signal.MappingId,Stream,
-            eligibleFrame.InstanceId,eligibleFrom,eligibleFrom+3,0);
+            eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
         var persisted=await atomicStore.ReadPeriodPageAsync(eligibleCut.Qualification);
         var expectedPeriod=new ClosedActivityPeriod(machine,Stream,currentActivity.Signal.MappingId,
             ActivityState.Running,eligibleRows[0].ObservedAt,eligibleRows[1].ObservedAt,
@@ -463,6 +481,130 @@ internal static class MtConnectIngestionAcceptance
             JsonSerializer.Serialize(persisted.Rows[0].Period)==JsonSerializer.Serialize(committed.NewPeriods[0]) &&
             await Count("activity.ProcessorOperation")==1,
             "eligible ingestion commits exact qualified period checkpoint and replay receipt once");
+        // A new accepted batch is processed in two cuts by reconstructed stores.
+        // Its first sample must not bridge the prior batch; its second cut may
+        // link to the verified predecessor in that same immutable document.
+        context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+        var continuationFrom=context.Cursor!.NextSequence;
+        agent.Reply=(from,count)=>(200,Frame(from,count,activity:true,
+            activityStart:currentActivity.EffectiveFrom.AddSeconds(10)),null);
+        var continuationFrame=await client.AcquireAsync(agent.Endpoint,Device,continuationFrom,4);
+        await Transport(await Request(continuationFrame));
+        var baselineCheckpoint=await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification);
+        var baselineJson=(string)(await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+            ("@machine",machine),("@mapping",currentActivity.Signal.MappingId)))!;
+        var baselinePeriods=await Count("activity.ClosedPeriod");
+        var baselineReceipts=await Count("activity.ProcessorOperation");
+        async Task RejectBinding(Func<Task> action,string expected,string label)
+        {
+            try { await action(); }
+            catch(Exception error)when(error is InvalidDataException or InvalidOperationException or SqlException)
+            {
+                Check(error.Message.Contains(expected,StringComparison.Ordinal),label+" rejects exact invariant");
+                Check(Equals(baselineJson,await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                        ("@machine",machine),("@mapping",currentActivity.Signal.MappingId))) &&
+                    await Count("activity.ClosedPeriod")==baselinePeriods &&
+                    await Count("activity.ProcessorOperation")==baselineReceipts,
+                    label+" leaves checkpoint periods and receipts unchanged");
+                return;
+            }
+            throw new InvalidOperationException("Expected activity binding rejection: "+label);
+        }
+        Task<ActivityDurableResult> Continue(ulong after,ulong through,Guid? operation=null)
+            =>new SqlActivityProcessorStore(target.ConnectionString).ApplyAcceptedAsync(
+                operation??Guid.NewGuid(),target.InstallationId,site,machine,
+                currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId,after,through,1);
+        await RejectBinding(()=>Continue(continuationFrom+1,continuationFrom+3),
+            "exact checkpoint frontier","caller cannot omit an intervening accepted transition");
+        await RejectBinding(()=>Continue(eligibleFrom+2,eligibleFrom+3),
+            "exact checkpoint frontier","caller cannot overlap or rewind the committed source cut");
+        await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+5),
+            "not durably accepted","source cut cannot run beyond the durable acquisition frontier");
+        await RejectBinding(()=>atomicStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId+1,
+            eligibleFrom+3,continuationFrom+3,1),"No accepted activity observations",
+            "unrelated source instance cannot resume the checkpoint");
+        // Identical rows with a different cut end are different immutable requests.
+        await RejectBinding(()=>atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,eligibleFrame.InstanceId,
+            eligibleFrom-1,eligibleFrom+4,0),"different request bytes","operation replay pins exact source frontier");
+        async Task SetCheckpoint(ActivityProcessorCheckpoint value)
+        {
+            var json=JsonSerializer.Serialize(value);
+            await Exec("UPDATE activity.ProcessorCheckpoint SET CheckpointJson=@json,CheckpointHash=HASHBYTES('SHA2_256',CONVERT(varbinary(max),@json)) WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@json",json),("@machine",machine),("@mapping",currentActivity.Signal.MappingId));
+        }
+        // Checksum-consistent corruption is confined to this disposable database.
+        foreach(var damaged in new[]{
+            baselineCheckpoint with { LastConsumedSample=baselineCheckpoint.LastConsumedSample! with { RawValue="FORGED" } },
+            baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with {
+                LastObservation=baselineCheckpoint.AcceptedSource.LastObservation with { BatchId=Guid.NewGuid() } } },
+            baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with { AcknowledgementId=Guid.NewGuid() } },
+            baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with { InstanceId=8 } },
+            baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with {
+                OpenAnchorObservation=baselineCheckpoint.AcceptedSource.OpenAnchorObservation! with { MappingId=Guid.NewGuid() } } },
+            baselineCheckpoint with { Qualification=baselineCheckpoint.Qualification with { ContinuityIdentity="unrelated-policy" } },
+            baselineCheckpoint with { AcceptedSource=null } })
+        {
+            await SetCheckpoint(damaged);
+            var damagedJson=(string)(await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@machine",machine),("@mapping",currentActivity.Signal.MappingId)))!;
+            try
+            {
+                try { await Continue(eligibleFrom+3,continuationFrom+1);throw new ArgumentException("Forged predecessor accepted."); }
+                catch(Exception error)when(error is InvalidDataException or SqlException)
+                {
+                    Check(Equals(damagedJson,await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",
+                            ("@machine",machine),("@mapping",currentActivity.Signal.MappingId))) &&
+                        await Count("activity.ClosedPeriod")==baselinePeriods &&
+                        await Count("activity.ProcessorOperation")==baselineReceipts,
+                        "checksum-consistent predecessor or policy mismatch fails closed without effects");
+                }
+            }
+            finally { await SetCheckpoint(baselineCheckpoint); }
+        }
+        await Exec("DISABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+        try
+        {
+            var counterMapping=package.Machines[0].Signals.Single(x=>x.SemanticKey=="counter-upper").MappingId;
+            await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@other WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
+                ("@other",counterMapping),("@machine",machine),("@sequence",(decimal)(continuationFrom+1)));
+            await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+3),
+                "omits or duplicates","missing projected transition cannot disappear from the source cut");
+            await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@other WHERE MachineId=@machine AND InstanceId=7 AND Sequence=@sequence",
+                ("@other",counterMapping),("@machine",machine),("@sequence",(decimal)(continuationFrom+3)));
+            await RejectBinding(()=>Continue(eligibleFrom+3,continuationFrom+3),
+                "omits or duplicates","wholly omitted signal batch is found independently of projected rows");
+        }
+        finally
+        {
+            await Exec("UPDATE acquisition.MtConnectObservation SET MappingId=@mapping WHERE MachineId=@machine AND InstanceId=7 AND Sequence IN (@first,@last)",
+                ("@mapping",currentActivity.Signal.MappingId),("@machine",machine),
+                ("@first",(decimal)(continuationFrom+1)),("@last",(decimal)(continuationFrom+3)));
+            await Exec("ENABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+        }
+        var continued=await Continue(eligibleFrom+3,continuationFrom+1);
+        Check(continued.NewPeriods.Count==0 && continued.Checkpoint.NextGeneration==2 &&
+            continued.Checkpoint.OpenAnchor?.Sequence==continuationFrom+1 &&
+            continued.Checkpoint.LastConsumedSample?.ContinuityFromPrevious==false &&
+            continued.Checkpoint.AcceptedSource?.ThroughSequence==continuationFrom+1,
+            "reconstructed writer continues exact frontier while fencing the cross-batch anchor");
+        var splitOperation=Guid.NewGuid();
+        var splitStore=new SqlActivityProcessorStore(target.ConnectionString);
+        var split=await splitStore.ApplyAcceptedAsync(splitOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId,
+            continuationFrom+1,continuationFrom+3,2);
+        Check(split.NewPeriods.Count==1 && split.NewPeriods[0].StartSequence==continuationFrom+1 &&
+            split.NewPeriods[0].EndSequence==continuationFrom+3 &&
+            split.NewPeriods[0].StartRawValue=="ACTIVE" && split.NewPeriods[0].EndRawValue=="READY" &&
+            split.Checkpoint.NextGeneration==3 && split.Checkpoint.LastConsumedSample?.ContinuityFromPrevious==true &&
+            split.Checkpoint.AcceptedSource?.LastObservation.Sequence==continuationFrom+3 &&
+            (await splitStore.ReadPeriodPageAsync(eligibleCut.Qualification)).Rows.Count==2,
+            "split same-batch continuation revalidates exact retained predecessor and publishes one period");
+        Check((await splitStore.ApplyAcceptedAsync(splitOperation,target.InstallationId,
+            site,machine,currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId,
+            continuationFrom+1,continuationFrom+3,2)).Replayed,
+            "continued source cut replays its immutable receipt without duplicate effects");
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.

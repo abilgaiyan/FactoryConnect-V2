@@ -142,21 +142,21 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                         Convert.ToHexString(hash)));
                 }
             }
-            var batchIds=pending.Select(row=>row.BatchId).Distinct().ToArray();
+
             var batches=new Dictionary<Guid,VerifiedBatch>();
-            if(batchIds.Length>0)
             {
                 // One distinct batch row/document per selected source cut.
-                var idsJson=JsonSerializer.Serialize(batchIds);
                 await using var command=new SqlCommand("""
                     DECLARE @selected TABLE(BatchId uniqueidentifier NOT NULL PRIMARY KEY);
                     INSERT @selected(BatchId)
-                    SELECT DISTINCT BatchId
-                    FROM OPENJSON(@batchIds) WITH(BatchId uniqueidentifier '$');
-                    IF (SELECT COUNT_BIG(*) FROM @selected)<>@expected
-                        THROW 51075,'Duplicate or missing requested source batch.',1;
+                    SELECT TOP (101) BatchId FROM acquisition.MtConnectBatch WITH(HOLDLOCK)
+                    WHERE SiteId=@site AND MachineId=@machine AND StreamKeyBytes=@stream
+                        AND InstanceId=@instance AND FromSequence<=@through AND NextSequence>@after+1
+                    ORDER BY FromSequence,BatchId;
+                    IF (SELECT COUNT_BIG(*) FROM @selected)>100
+                        THROW 51075,'Accepted source cut exceeds batch bound.',1;
                     IF (SELECT COUNT_BIG(*) FROM acquisition.MtConnectBatch b
-                        JOIN @selected selected ON selected.BatchId=b.BatchId)<>@expected
+                        JOIN @selected selected ON selected.BatchId=b.BatchId)<>(SELECT COUNT_BIG(*) FROM @selected)
                         THROW 51075,'Missing source batch.',1;
                     IF COALESCE((
                         SELECT SUM(CONVERT(bigint,DATALENGTH(b.RawDocument))+512)
@@ -170,8 +170,12 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                     FROM acquisition.MtConnectBatch b WITH(HOLDLOCK)
                     JOIN @selected selected ON selected.BatchId=b.BatchId
                     """,connection,tx);
-                command.Parameters.Add("@batchIds",SqlDbType.NVarChar,-1).Value=idsJson;
-                command.Parameters.Add("@expected",SqlDbType.Int).Value=batchIds.Length;
+                command.Parameters.AddWithValue("@site",siteId);
+                command.Parameters.AddWithValue("@machine",identity.MachineId);
+                command.Parameters.Add("@stream",SqlDbType.VarBinary,512).Value=stream;
+                DecimalParam(command,"@instance",instanceId);
+                DecimalParam(command,"@after",afterSequence);
+                DecimalParam(command,"@through",throughSequence);
                 command.Parameters.Add("@remaining",SqlDbType.BigInt).Value=
                     aggregateByteBudget-transferred;
                 await using var reader=await command.ExecuteReaderAsync(ct);
@@ -210,8 +214,12 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                         from,next,first,bySequence,Convert.ToHexString(hash))))
                         throw new InvalidDataException("Duplicate accepted batch identity.");
                 }
-                if(batches.Count!=batchIds.Length)
-                    throw new InvalidDataException("Missing retained accepted batch.");
+                var expected=batches.Values.SelectMany(batch=>batch.BySequence.Values)
+                    .Where(source=>source.Sequence>afterSequence && source.Sequence<=throughSequence &&
+                        string.Equals(source.DataItemId,identity.SourceAddress,StringComparison.Ordinal))
+                    .Select(source=>source.Sequence).Order().ToArray();
+                if(!expected.SequenceEqual(pending.Select(row=>row.Sequence)))
+                    throw new InvalidDataException("Accepted source cut omits or duplicates document observations.");
             }
             var rows=new List<AcceptedRow>(pending.Count);
             foreach(var projected in pending)

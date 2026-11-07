@@ -38,12 +38,18 @@ public sealed record ActivityQualificationIdentity(
 /// identity and original value. The open anchor and its interpreted state survive
 /// an empty batch or a worker restart.
 /// </summary>
+public sealed record ActivityAcceptedFrontier(
+    ulong InstanceId,ulong ThroughSequence,Guid PackageRevisionId,
+    Guid AcknowledgementId,string PackageSha256,
+    SqlAcceptedActivityEvidenceReader.AcceptedRow LastObservation,
+    SqlAcceptedActivityEvidenceReader.AcceptedRow? OpenAnchorObservation);
+
 public sealed record ActivityProcessorCheckpoint(
     ActivityQualificationIdentity Qualification,
     ActivityInputSample? LastConsumedSample,
     ActivityInputSample? OpenAnchor,
     ActivityState? OpenState,
-    ulong NextGeneration);
+    ulong NextGeneration,ActivityAcceptedFrontier? AcceptedSource=null);
 
 public sealed record ActivityProcessorBatch(
     ActivityProcessorCheckpoint Checkpoint,
