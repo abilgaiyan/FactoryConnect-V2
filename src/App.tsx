@@ -74,7 +74,7 @@ export function App({ runtime }: AppProps) {
       </header>
       <main id="main-content">
         {returnToOverview && <ApplicationLink href={returnToOverview} navigate={navigate}>Back to selected overview</ApplicationLink>}
-        <RouteView route={route} navigate={navigate} runtime={{ ...runtime, evidenceSession: evidenceSession ?? undefined }} />
+        <RouteView route={route} navigate={navigate} runtime={evidenceSession ? { ...runtime, evidenceSession } : { ...runtime, evidenceSession: undefined }} />
       </main>
     </div>
   );
