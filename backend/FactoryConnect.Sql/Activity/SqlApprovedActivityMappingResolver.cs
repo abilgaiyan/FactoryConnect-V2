@@ -124,7 +124,6 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
                     p.CanonicalBytes,m.SemanticKey,m.Protocol,m.StreamKey,
                     m.AddressEncoding,m.Normalization,m.AddressBytes,
                     a.AppliedFrom,a.EffectiveTo,activation.EffectiveFrom,activation.EffectiveTo,
-                    assignment.EffectiveFrom,assignment.EffectiveTo,
                     assignment.EffectiveFrom,assignment.EffectiveTo
                 FROM configuration.MachineAcknowledgementHead h WITH(HOLDLOCK)
                 JOIN configuration.RuntimeActivationAcknowledgement a WITH(HOLDLOCK)
@@ -206,8 +205,8 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
                 activationTo=reader.IsDBNull(13)?null:reader.GetDateTimeOffset(13);
                 assignmentFrom=reader.GetDateTimeOffset(14);
                 assignmentTo=reader.IsDBNull(15)?null:reader.GetDateTimeOffset(15);
-                packageFrom=reader.GetDateTimeOffset(16);
-                packageTo=reader.IsDBNull(17)?null:reader.GetDateTimeOffset(17);
+                packageFrom=assignmentFrom;
+                packageTo=assignmentTo;
                 if(await reader.ReadAsync(ct))
                     throw new InvalidDataException("Ambiguous active mapping identity.");
             }
@@ -233,6 +232,11 @@ public sealed class SqlApprovedActivityMappingResolver(string connectionString,G
                     throw new InvalidDataException("Approved package machine scope missing or ambiguous.");
                 var signal=machine[0].GetProperty("signals").EnumerateArray()
                     .Where(m=>m.GetProperty("mappingId").GetGuid()==mappingId).ToArray();
+                packageFrom=machine[0].GetProperty("effectiveFrom").GetDateTimeOffset();
+                packageTo=machine[0].GetProperty("effectiveTo").ValueKind==JsonValueKind.Null
+                    ?null:machine[0].GetProperty("effectiveTo").GetDateTimeOffset();
+                if(packageFrom!=assignmentFrom||packageTo!=assignmentTo)
+                    throw new InvalidDataException("Approved package assignment effective interval differs from projection.");
                 if(signal.Length!=1 ||
                    !string.Equals(signal[0].GetProperty("semanticKey").GetString(),semantic,StringComparison.Ordinal)||
                    !string.Equals(signal[0].GetProperty("protocol").GetString(),protocol,StringComparison.Ordinal)||
