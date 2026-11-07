@@ -128,6 +128,21 @@ internal static class MtConnectIngestionAcceptance
                 ("@machine",machine),("@observed",counterEvidence.ObservedAt));
             await RejectTampered("changed projected address rejected against canonical identity",
                 counterIdentity with{SourceAddress="counter"});
+            // SQL must reject an oversized aggregate *before* fetching the
+            // tampered LOB over the network. This is disposable SQL only.
+            await Exec("UPDATE acquisition.MtConnectObservation SET "+
+                "AddressBytes=0x436F756E746572,"+
+                "RawValue=REPLICATE(CONVERT(nvarchar(max),N'X'),5000000) "+
+                sourceWhere,("@machine",machine));
+            try
+            {
+                await acceptedReader.ReadBoundedAsync(site,counterIdentity,7,99,100);
+                throw new InvalidOperationException("Oversized accepted source projection transferred.");
+            }
+            catch(SqlException error) when(error.Number==51074)
+            {
+                Check(true,"SQL aggregate byte budget rejects oversized LOB before transfer");
+            }
         }
         finally
         {
