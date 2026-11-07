@@ -16,7 +16,8 @@ public sealed record ActivityPeriodCursor(
     DateTimeOffset StartedAt,ulong InstanceId,ulong StartSequence,Guid EffectId);
 
 public sealed record ActivityPeriodRow(
-    ClosedActivityPeriod Period,ActivityQualificationIdentity Qualification,ActivityPeriodCursor Cursor);
+    ClosedActivityPeriod Period,ActivityQualificationIdentity Qualification,
+    string PersistedQualificationSha256,ActivityPeriodCursor Cursor);
 
 public sealed record ActivityPeriodPage(
     IReadOnlyList<ActivityPeriodRow> Rows,ActivityPeriodCursor? Next);
@@ -234,6 +235,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             // The checkpoint is the authority for exact qualification, including
             // continuity identity and the complete canonical value-map digest.
             // Never return historical periods after a missing or changed checkpoint.
+            ActivityQualificationIdentity persistedQualification;
             await using(var validation=new SqlCommand("""
                 SELECT QualificationHash,CheckpointJson,CheckpointHash
                 FROM activity.ProcessorCheckpoint WITH(HOLDLOCK)
@@ -254,6 +256,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                     ?? throw new InvalidDataException("Activity checkpoint cannot be restored.");
                 if(actual.Qualification!=identity)
                     throw new InvalidDataException("Activity checkpoint does not match requested qualification.");
+                persistedQualification=actual.Qualification;
             }
             var results=new List<ActivityPeriodRow>();
             await using(var q=new SqlCommand("""
@@ -299,7 +302,8 @@ public sealed class SqlActivityProcessorStore(string connectionString)
                         decimal.ToUInt64(reader.GetDecimal(7)),
                         decimal.ToUInt64(reader.GetDecimal(8)),
                         reader.GetString(9),reader.GetString(10));
-                    results.Add(new(period,identity,cursor));
+                    results.Add(new(period,persistedQualification,
+                        Convert.ToHexString((byte[])reader[1]),cursor));
                 }
             }
             await t.CommitAsync(ct);
