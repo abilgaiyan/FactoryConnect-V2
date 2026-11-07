@@ -77,6 +77,8 @@ jobs:
             sleep 2
           done
           echo 'SQL did not become ready'; exit 1
+      - name: Run first-machine HTTP TLS SQL demonstration
+        run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
       - name: Real SQL acceptance (missing SQL is a failure)
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release
       - name: Upload synthetic SQL performance evidence
