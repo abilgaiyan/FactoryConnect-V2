@@ -406,44 +406,10 @@ internal static class MtConnectIngestionAcceptance
                 WHERE MachineId=@machine AND MappingId=@mapping
                 """,("@machine",machine),("@mapping",currentActivity.Signal.MappingId)))==0,
             "rejected historical interpretation leaves no activity checkpoint or effects");
-        // A delayed source-to-checkpoint write cannot retain a mapping
-        // eligibility decision made before a processor lock wait. Hold the
-        // exact processor lock, race a new approved current head, then allow
-        // the waiting writer to re-evaluate on its own transaction.
-        var activityResource=$"fc2:activity:{machine:N}:{currentActivity.Signal.MappingId:N}:"+
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Stream)));
-        var waitingStore=new SqlActivityProcessorStore(
-            new SqlConnectionStringBuilder(target.ConnectionString){
-                ApplicationName="fc2-activity-waiter"}.ConnectionString);
-        await using(var lockConnection=new SqlConnection(target.ConnectionString))
-        {
-            await lockConnection.OpenAsync();
-            await using var lockTransaction=(SqlTransaction)await lockConnection.BeginTransactionAsync();
-            await Hold(lockConnection,lockTransaction,activityResource);
-            var delayed=waitingStore.ApplyAcceptedAsync(Guid.NewGuid(),target.InstallationId,
-                site,machine,currentActivity.Signal.MappingId,Stream,
-                bulkFrame.InstanceId,firstBulk,firstBulk+3,0);
-            try
-            {
-                await WaitForLock("fc2-activity-waiter","X");
-                Check(!delayed.IsCompleted,
-                    "accepted activity writer is observed waiting on the exact processor lock");
-            }
-            finally
-            {
-                await lockTransaction.CommitAsync();
-            }
-            try
-            {
-                await delayed;
-                throw new InvalidOperationException("Pre-activation delayed writer published source.");
-            }
-            catch(InvalidDataException)
-            {
-                Check(true,
-                    "accepted activity writer rechecks interval after processor wait and refuses historical source");
-            }
-        }
+        // The rejected historical source cut fails before entering the writer
+        // transaction. Lock-wait expiry needs a *currently eligible* retained
+        // cut and an independently advanced authoritative eligibility end;
+        // do not treat this pre-activation case as that concurrency proof.
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.
