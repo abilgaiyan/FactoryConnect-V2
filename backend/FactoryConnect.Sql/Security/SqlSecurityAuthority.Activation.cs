@@ -159,10 +159,10 @@ public sealed partial class SqlSecurityAuthority
     {
             var timezone=root.GetProperty("timezone");var schedule=machine.GetProperty("schedule");var breaks=machine.GetProperty("breakPolicy");
             await using(var q=Command(c,t,"""
-                SELECT COUNT(*) FROM configuration.PolicySafetyRevocation WHERE SiteId=@site AND EffectiveFrom<=@now AND
-                    ((PolicyKind='timezone' AND TimezoneRevisionId=@timezone AND ContentHash=@timezoneHash) OR
-                     (PolicyKind='schedule' AND ScheduleRevisionId=@schedule AND ContentHash=@scheduleHash) OR
-                     (PolicyKind='break' AND BreakPolicyRevisionId=@break AND ContentHash=@breakHash));
+                SELECT CASE WHEN EXISTS(SELECT 1 FROM configuration.PolicySafetyRevocation WHERE SiteId=@site AND PolicyKind='timezone' AND TimezoneRevisionId=@timezone AND ContentHash=@timezoneHash AND EffectiveFrom<=@now)
+                    OR EXISTS(SELECT 1 FROM configuration.PolicySafetyRevocation WHERE SiteId=@site AND PolicyKind='schedule' AND ScheduleRevisionId=@schedule AND ContentHash=@scheduleHash AND EffectiveFrom<=@now)
+                    OR EXISTS(SELECT 1 FROM configuration.PolicySafetyRevocation WHERE SiteId=@site AND PolicyKind='break' AND BreakPolicyRevisionId=@break AND ContentHash=@breakHash AND EffectiveFrom<=@now)
+                    THEN 1 ELSE 0 END;
                 """))
             {
                 Add(q,("@site",siteId),("@now",at),("@timezone",timezone.GetProperty("revisionId").GetGuid()),("@timezoneHash",PinHash(timezone)),
