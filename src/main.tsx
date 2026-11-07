@@ -37,7 +37,11 @@ async function bootstrap() {
         </StrictMode>,
       );
     } catch {
-      // In case /dashboard/config is not directly served (static preview), provide in-memory mock runtime
+      if (import.meta.env.VITE_ENABLE_FIXTURES !== "true") {
+        createRoot(rootElement!).render(<main><h1>FactoryConnect unavailable</h1><p>Dashboard authority could not be loaded. No machine observations are inferred.</p></main>);
+        return;
+      }
+      // Demonstration fixtures require explicit opt-in and are never an error fallback in real mode.
       const { MOCK_DASHBOARD_CONFIG } = await import("./mock-api.ts");
       const runtime = await createDashboardApplicationRuntime(
         window.location.origin,

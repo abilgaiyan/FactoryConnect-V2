@@ -8,10 +8,12 @@ import { formatReportTimestamp } from './date-formatting.ts';
 import type { RangeItem } from '../application/date-range-reporting.ts';
 import './management-overview.css';
 export function ManagementOverviewPage({ runtime, search, navigate }: { runtime: DashboardApplicationRuntime; search: string; navigate: (href: string) => void }) {
-    let selection: OverviewSelection;
-    try { selection = overviewSelection(search, runtime.configuration.sources); }
-    catch (error) { return <section><h1>Management Overview</h1><p role="alert">{error instanceof Error ? error.message : 'Invalid selection'}</p><a href="/overview">Reset overview selection</a></section>; }
-    return <Overview key={search} runtime={runtime} selection={selection} navigate={navigate} />;
+    const selection = useMemo(() => {
+        try { return { kind: 'valid' as const, value: overviewSelection(search, runtime.configuration.sources) }; }
+        catch (error) { return { kind: 'invalid' as const, message: error instanceof Error ? error.message : 'Invalid selection' }; }
+    }, [search, runtime.configuration.sources]);
+    if (selection.kind === 'invalid') return <section><h1>Management Overview</h1><p role="alert">{selection.message}</p><a href="/overview">Reset overview selection</a></section>;
+    return <Overview key={search} runtime={runtime} selection={selection.value} navigate={navigate} />;
 }
 function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicationRuntime; selection: OverviewSelection; navigate: (href: string) => void }) {
     const machines = useMemo(() => selectedMachines(selection, runtime.configuration.sources), [selection, runtime.configuration.sources]);

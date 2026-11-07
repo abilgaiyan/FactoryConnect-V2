@@ -46,3 +46,19 @@ Commissioning discovery merged PR #30 at `1e94c91`; CI 42347061759 PASS (870 com
 First machine ingestion merged PR #31 at `fcfb902`; CI 42349877871 passed 920 combined checks, 463 dashboard tests and 15 CLI checks. Real HTTP/mTLS/SQL readback and retained-cursor reconstruction are qualified in a controlled fixture; 1000-observation fetch/transfer/commit took 271.83 ms and 19 ingestion-transaction TDS roundtrips.
 
 The [single-machine acquisition host](../implementation/FC2-single-machine-acquisition-host.md) now implements serial polling, cancellation, bounded backpressure and whole-child-process restart acceptance, plus an authenticated operator console read. Final qualification is recorded in its PR. Production/fleet rollout, source-instance recovery and browser presentation remain pending; activity/OEE processing follows accepted-data visibility.
+
+## Operator evidence delivery — PR #33
+
+PR #32 merged at `1cca250`: continuous machine-scoped polling and whole-process
+restart qualification are complete in controlled fixtures. PR #33 composes trusted
+OIDC code/PKCE login, SQL-authorized machine discovery, retained evidence HTTP reads
+and React display. Its acceptance includes actual HTTPS Kestrel, a signed-token
+identity provider and Chromium, plus session/grant revocation and durable logout.
+Final CI and merge identity are recorded in PR #33. Production IdP/PKI provisioning
+and commissioning remain separate; this does not close activity, quantity or OEE.
+
+The next product increment is accepted-evidence activity processing and an operator
+activity screen, followed by production quantities and incremental shift metrics.
+Broader administration, supervisor operations, deployment rehearsal and production
+cutover remain open. Earlier table entries describe their historical slice scope;
+later merged milestones do not imply production commissioning.
