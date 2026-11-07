@@ -14,6 +14,7 @@ import {
   type PropsWithChildren,
   useState,
   useEffect,
+  useMemo,
 } from "react";
 
 import type { DashboardApplicationRuntime } from "./application/application-runtime.ts";
@@ -59,12 +60,15 @@ export function App({ runtime }: AppProps) {
     }, Math.max(1, Math.min(remaining + 10, 2147483647)));
     return () => window.clearTimeout(timer);
   }, [validEvidenceSession?.expiresAt]);
-  const publicRuntime: DashboardApplicationRuntime = {
+  const publicRuntime: DashboardApplicationRuntime = useMemo(() => ({
     configuration: runtime.configuration,
     reportingClient: runtime.reportingClient,
     currentStateClient: runtime.currentStateClient,
     ...(runtime.now ? { now: runtime.now } : {}),
-  };
+  }), [runtime.configuration, runtime.reportingClient, runtime.currentStateClient, runtime.now]);
+  const routedRuntime = useMemo(() => evidenceSession
+    ? { ...publicRuntime, evidenceSession }
+    : publicRuntime, [publicRuntime, evidenceSession]);
   useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); setSessionClock(Date.now()); }, [runtime.evidenceSession]);
   const returnToOverview = overviewReturn(window.location.search, runtime.configuration.sources);
 
