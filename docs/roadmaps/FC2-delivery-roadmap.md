@@ -32,3 +32,5 @@ Operating sequence: implement one reviewable increment → validate .NET/React a
 | Production cutover | Not ready | Actual target/identity provisioning and accepted commissioning evidence; no existing database replacement |
 
 A green test for one row does not close another row. G1 stays frozen; G2/G3 engineering choices may proceed under the execution authorization, but security and runtime correctness require executable evidence before those features become available.
+
+Trusted SQL roster reader: implemented on `fc2/trusted-roster-eligibility`, with bounded complete site cuts and real producer/read-order acceptance under qualification. Separate commissioning discovery and HTTP composition remain pending.
