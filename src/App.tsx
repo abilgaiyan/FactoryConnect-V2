@@ -47,6 +47,7 @@ export interface AppProps {
 export function App({ runtime }: AppProps) {
   const { route, navigate } = useApplicationRouter();
   const [evidenceSession, setEvidenceSession] = useState(runtime.evidenceSession ?? null);
+  const { evidenceSession: _hostEvidenceSession, ...publicRuntime } = runtime;
   useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); }, [runtime.evidenceSession]);
   const returnToOverview = overviewReturn(window.location.search, runtime.configuration.sources);
 
@@ -74,7 +75,7 @@ export function App({ runtime }: AppProps) {
       </header>
       <main id="main-content">
         {returnToOverview && <ApplicationLink href={returnToOverview} navigate={navigate}>Back to selected overview</ApplicationLink>}
-        <RouteView route={route} navigate={navigate} runtime={evidenceSession ? { ...runtime, evidenceSession } : { ...runtime, evidenceSession: undefined }} />
+        <RouteView route={route} navigate={navigate} runtime={evidenceSession ? { ...publicRuntime, evidenceSession } : publicRuntime} />
       </main>
     </div>
   );
