@@ -88,7 +88,7 @@ internal static class MtConnectIngestionAcceptance
                 "verified human sees only currently authorized machine in bounded operator roster");
             // A full 100-machine visible roster must stay query-bounded. Historical
             // revoked grants must not consume the visible-machine limit.
-            var rosterMachines=Enumerable.Range(0,99).Select(_=>Guid.NewGuid()).ToArray();
+            var rosterMachines=Enumerable.Range(0,98).Select(_=>Guid.NewGuid()).ToArray();
             await using(var rosterInsert=new SqlCommand("",c))
             {
                 var rosterValues=string.Join(",",rosterMachines.Select((_,i)=>$"(@id{i},@site,N'Roster fixture')"));
@@ -117,6 +117,7 @@ internal static class MtConnectIngestionAcceptance
             {
                 ActivitySource.AddActivityListener(rosterListener);
                 var clock=Stopwatch.StartNew();
+                // Fixture includes both original machines; the broad grant sees 98 new plus two retained.
                 var all=await rosterReader.ReadOperatorEvidenceMachinesAsync(issuedHash,site);
                 clock.Stop();
                 Check(all.Count==100&&all.Select(m=>m.MachineId).Distinct().Count()==100,
