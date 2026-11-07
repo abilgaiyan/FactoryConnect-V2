@@ -209,13 +209,14 @@ internal static class ActivitySqlDurabilityAcceptance
             lock(activities)observations=activities
                 .Where(a=>a.OperationName=="activity.sql.apply").ToArray();
             Check(observations.Length==1 &&
-                Convert.ToInt32(observations[0].GetTagItem("activity.sql.period.insert.commands"))==120,
-                "per-period SQL INSERT commands measured explicitly for 120 transitions");
+                Convert.ToInt32(observations[0].GetTagItem("activity.sql.period.insert.commands"))==2 &&
+                Convert.ToInt32(observations[0].GetTagItem("activity.sql.period.insert.rows"))==120,
+                "120 transitions persist in two bounded batch INSERT commands");
             var roundtrips=Convert.ToInt64(observations.Single().GetTagItem("activity.sql.roundtrips"));
             var insertMs=Convert.ToDouble(observations.Single().GetTagItem("activity.sql.period.insert.elapsed.ms"));
-            Check(roundtrips>=120&&insertMs>=0,
-                "large-transition SQL fixture captures the per-row roundtrip cost");
-            Console.WriteLine($"MEASURE: activity transitions=120 periodInsertCommands=120 " +
+            Check(roundtrips>=2&&roundtrips<30&&insertMs>=0,
+                "large-transition SQL fixture avoids per-period SQL roundtrips");
+            Console.WriteLine($"MEASURE: activity transitions=120 periodInsertCommands=2 " +
                 $"sqlRoundtrips={roundtrips} insertElapsedMs={insertMs:F2} applyElapsedMs={clock.Elapsed.TotalMilliseconds:F2}");
         }
         var loadStore=new SqlActivityProcessorStore(target.ConnectionString);
