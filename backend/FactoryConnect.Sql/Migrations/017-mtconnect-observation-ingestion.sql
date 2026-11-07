@@ -24,7 +24,8 @@ CREATE TABLE acquisition.MtConnectObservation (
     BatchId uniqueidentifier NOT NULL,MappingId uniqueidentifier NOT NULL,
     AddressBytes varbinary(512) NOT NULL CHECK(DATALENGTH(AddressBytes)>0),RawValue nvarchar(max) NOT NULL,SourceTimestamp nvarchar(128) NOT NULL,
     ObservedAt datetimeoffset(7) NOT NULL,Quality varchar(32) NOT NULL CHECK(Quality IN ('source-reported','unavailable')),
-    CanonicalBytes varbinary(max) NOT NULL,ContentHash binary(32) NOT NULL CHECK(ContentHash=HASHBYTES('SHA2_256',CanonicalBytes)),
+    CanonicalBytes varbinary(max) NOT NULL,ContentHash binary(32) NOT NULL,
+    CHECK(ContentHash=HASHBYTES('SHA2_256',CanonicalBytes)),
     PRIMARY KEY(MachineId,StreamKeyBytes,InstanceId,Sequence),
     FOREIGN KEY(MachineId,MappingId) REFERENCES configuration.PackageSignalMapping(MachineId,MappingId),
     FOREIGN KEY(SiteId,MachineId,StreamKeyBytes,BatchId) REFERENCES acquisition.MtConnectBatch(SiteId,MachineId,StreamKeyBytes,BatchId)

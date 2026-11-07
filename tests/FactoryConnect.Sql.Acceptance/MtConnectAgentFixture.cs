@@ -28,7 +28,7 @@ internal sealed class MtConnectAgentFixture:IAsyncDisposable
                 string? line;do{line=await reader.ReadLineAsync(stopped.Token);}while(!string.IsNullOrEmpty(line));
                 var uri=new Uri("http://fixture"+first.Split(' ')[1]);var query=uri.Query.TrimStart('?').Split('&').Select(x=>x.Split('=')).ToDictionary(x=>x[0],x=>x[1],StringComparer.Ordinal);
                 var from=ulong.Parse(query["from"],CultureInfo.InvariantCulture);var count=int.Parse(query["count"],CultureInfo.InvariantCulture);var reply=Reply(from,count);
-                var header=Encoding.ASCII.GetBytes($"HTTP/1.1 {reply.Status} Fixture\r\nContent-Type: application/xml; charset=utf-8\r\nContent-Length: {reply.DeclaredLength??reply.Body.Length}\r\nConnection: close\r\n\r\n");await stream.WriteAsync(header,stopped.Token);await stream.WriteAsync(reply.Body,stopped.Token);
+                var lengthHeader=reply.DeclaredLength==-1?"":$"Content-Length: {reply.DeclaredLength??reply.Body.Length}\r\n";var header=Encoding.ASCII.GetBytes($"HTTP/1.1 {reply.Status} Fixture\r\nContent-Type: application/xml; charset=utf-8\r\n{lengthHeader}Connection: close\r\n\r\n");await stream.WriteAsync(header,stopped.Token);await stream.WriteAsync(reply.Body,stopped.Token);
             }
             catch(Exception e)when(e is IOException or OperationCanceledException or ObjectDisposedException){}
         }

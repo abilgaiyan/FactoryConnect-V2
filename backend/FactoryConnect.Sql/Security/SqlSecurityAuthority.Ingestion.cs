@@ -20,7 +20,7 @@ public sealed record MtConnectAcceptedObservation(string Sequence,string Instanc
 public sealed partial class SqlSecurityAuthority
 {
     private static readonly UTF8Encoding AcquisitionUtf8=new(false,true);
-    private sealed record IngestionAuthority(Guid Ack,Guid Activation,long Generation,Guid Revision,byte[] Hash,Guid Review,DateTimeOffset From,DateTimeOffset? Until,byte[] Canonical);
+    private sealed record IngestionAuthority(Guid Ack,Guid Activation,long Generation,Guid Revision,byte[] Hash,Guid Review,DateTimeOffset From,DateTimeOffset? Until,byte[] Canonical,DateTimeOffset AppliedFrom,DateTimeOffset? AppliedUntil);
     public async Task<byte[]> ReceiveMtConnectAsync(RuntimeMtlsChannel channel,MtConnectBatchEnvelope envelope,CancellationToken ct=default)
     {
         _=channel.Revalidate(ct);var prefix=new byte[4];await ReadExactly(prefix);var length=BinaryPrimitives.ReadInt32BigEndian(prefix);
@@ -131,7 +131,7 @@ public sealed partial class SqlSecurityAuthority
     private static async Task<IngestionAuthority> LoadIngestionAuthority(SqlConnection c,SqlTransaction t,Guid site,Guid machine,Guid? expected,RuntimeMachineAuthority runtime,DateTimeOffset now,CancellationToken ct)
     {
         await using var q=Command(c,t,"""
-            SELECT a.AcknowledgementId,a.ActivationId,a.ActivationGeneration,a.PackageRevisionId,a.ContentHash,a.ReviewId,r.EffectiveFrom,r.EffectiveTo,p.CanonicalBytes
+            SELECT a.AcknowledgementId,a.ActivationId,a.ActivationGeneration,a.PackageRevisionId,a.ContentHash,a.ReviewId,r.EffectiveFrom,r.EffectiveTo,p.CanonicalBytes,a.AppliedFrom,a.EffectiveTo
             FROM configuration.MachineAcknowledgementHead h JOIN configuration.RuntimeActivationAcknowledgement a ON a.AcknowledgementId=h.AcknowledgementId AND a.ActivationGeneration=h.ActivationGeneration
             JOIN configuration.ActivationRequest r ON r.ActivationId=a.ActivationId
             JOIN configuration.ConfigurationPackageRevision p ON p.PackageRevisionId=a.PackageRevisionId AND p.ContentHash=a.ContentHash AND p.SiteId=a.SiteId
@@ -142,10 +142,11 @@ public sealed partial class SqlSecurityAuthority
                 AND NOT EXISTS(SELECT 1 FROM configuration.ActivationRequestRevocation WHERE ActivationId=a.ActivationId);
             """);Add(q,("@site",site),("@machine",machine),("@runtime",runtime.RuntimeIdentityId),("@assignment",runtime.AssignmentId),("@assignmentGeneration",runtime.AssignmentGeneration),("@credentialGeneration",runtime.CredentialGeneration),("@operationalGeneration",runtime.OperationalGeneration),("@now",now));q.Parameters.Add("@ack",SqlDbType.UniqueIdentifier).Value=(object?)expected??DBNull.Value;
         await using var r=await q.ExecuteReaderAsync(ct);if(!await r.ReadAsync(ct))throw new SecurityDeniedException();var canonical=(byte[])r[8];var hash=(byte[])r[4];if(canonical.Length>1048576||!CryptographicOperations.FixedTimeEquals(hash,SHA256.HashData(canonical)))throw new SecurityDeniedException();
-        return new(r.GetGuid(0),r.GetGuid(1),r.GetInt64(2),r.GetGuid(3),hash,r.GetGuid(5),r.GetDateTimeOffset(6),r.IsDBNull(7)?null:r.GetDateTimeOffset(7),canonical);
+        return new(r.GetGuid(0),r.GetGuid(1),r.GetInt64(2),r.GetGuid(3),hash,r.GetGuid(5),r.GetDateTimeOffset(6),r.IsDBNull(7)?null:r.GetDateTimeOffset(7),canonical,r.GetDateTimeOffset(9),r.IsDBNull(10)?null:r.GetDateTimeOffset(10));
     }
     private static async Task VerifyIngestionAuthority(SqlConnection c,SqlTransaction t,IngestionAuthority pin,RuntimeMachineAuthority runtime,JsonElement root,JsonElement machine,DateTimeOffset now,CancellationToken ct)
     {
+        if(pin.From>now||pin.Until is {} ended&&ended<=now||pin.AppliedFrom>now||pin.AppliedUntil is {} appliedEnded&&appliedEnded<=now)throw new SecurityDeniedException();
         if(root.GetProperty("siteId").GetGuid()!=runtime.SiteId||root.GetProperty("revisionId").GetGuid()!=pin.Revision||!Contains(machine.GetProperty("effectiveFrom").GetDateTimeOffset(),OptionalInstant(machine,"effectiveTo"),pin.From,pin.Until))throw new SecurityDeniedException();
         await ValidateActivationPrerequisites(c,t,new(Guid.NewGuid(),pin.Activation,runtime.SiteId,runtime.MachineId,pin.Revision,pin.Hash,pin.Review,runtime.RuntimeIdentityId,runtime.AssignmentId,runtime.AssignmentGeneration,runtime.CredentialGeneration,pin.From,pin.Until,0,null,0,"ingestion authority"),machine,pin.From,pin.Until,now,ct);
         await ValidatePinnedPolicies(c,t,root,machine,runtime.SiteId,now,ct);
