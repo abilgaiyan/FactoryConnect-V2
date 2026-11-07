@@ -53,15 +53,12 @@ export function App({ runtime }: AppProps) {
   const [sessionClock, setSessionClock] = useState(() => Date.now());
   const [loginStatus, setLoginStatus] = useState<"idle" | "submitting" | "denied" | "unavailable" | "failed">("idle");
   const [loginAssertion, setLoginAssertion] = useState("");
-  const [loginController, setLoginController] = useState<AbortController | null>(null);
-  useEffect(() => () => loginController?.abort(), [loginController]);
   async function establishEvidenceSession(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (loginStatus === "submitting" || !loginAssertion.trim()) return;
     const proof = loginAssertion;
     setLoginAssertion("");
     const controller = new AbortController();
-    setLoginController(controller);
     setLoginStatus("submitting");
     try {
       const issued = await issueHumanSession(window.location.origin + "/", proof, controller.signal);
@@ -74,7 +71,7 @@ export function App({ runtime }: AppProps) {
       if (!controller.signal.aborted) setLoginStatus(error instanceof HumanSessionFailure
         ? error.status === 401 ? "denied" : error.status === 503 ? "unavailable" : "failed"
         : "failed");
-    } finally { setLoginController(null); }
+    } finally { /* One-use proof is not retained. */ }
   }
 
   const validEvidenceSession = evidenceSession && Number.isFinite(Date.parse(evidenceSession.expiresAt))
