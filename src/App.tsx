@@ -47,7 +47,11 @@ export interface AppProps {
 export function App({ runtime }: AppProps) {
   const { route, navigate } = useApplicationRouter();
   const [evidenceSession, setEvidenceSession] = useState(runtime.evidenceSession ?? null);
-  const { evidenceSession: _hostEvidenceSession, ...publicRuntime } = runtime;
+  const publicRuntime: DashboardApplicationRuntime = {
+    configuration: runtime.configuration,
+    reportingClient: runtime.reportingClient,
+    currentStateClient: runtime.currentStateClient,
+  };
   useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); }, [runtime.evidenceSession]);
   const returnToOverview = overviewReturn(window.location.search, runtime.configuration.sources);
 
