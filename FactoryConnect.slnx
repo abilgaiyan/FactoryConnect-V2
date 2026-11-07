@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/backend/">
     <Project Path="backend/FactoryConnect.Api/FactoryConnect.Api.csproj" />
+    <Project Path="backend/FactoryConnect.Protocols.MTConnect/FactoryConnect.Protocols.MTConnect.csproj" />
     <Project Path="backend/FactoryConnect.Sql/FactoryConnect.Sql.csproj" />
   </Folder>
   <Folder Name="/tools/">

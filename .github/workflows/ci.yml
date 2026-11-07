@@ -86,6 +86,13 @@ jobs:
           name: inventory-performance
           path: artifacts/performance/*.json
           if-no-files-found: warn
+      - name: Upload first-machine ingestion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-machine-ingestion
+          path: artifacts/ingestion/*.json
+          if-no-files-found: warn
       - name: Remove disposable SQL container
         if: always()
         run: docker rm -f fc2-sql || true
