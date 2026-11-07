@@ -1,86 +1,86 @@
 # FC2 — Operator-visible accepted machine evidence
 
-Status: implementation slice opened after PR #32. This document is a delivery contract, not an assertion that the API/dashboard integration already exists.
+PR #33 implements the operator evidence slice. Final qualification and merge identity
+are recorded in the pull request. Production commissioning is a separate gate.
 
 ## User outcome
 
-An authorized operator selects a commissioned machine and sees **actual retained V2 MTConnect observations**, including exact raw value (preserving whitespace and case), explicit source quality, original timestamp, source instance/sequence, mapping identity and receipt provenance. Historical evidence is not represented as current connectivity, machine state, quantity or OEE.
+An enrolled operator signs in at the configured identity provider, selects a machine
+currently authorized for `commissioning.read`, and sees actual retained SQL observations.
+The view preserves original value whitespace/case and source quality, timestamp and
+UInt64 decimal identifiers. Expandable provenance includes mapping, batch,
+acknowledgement, document SHA-256, observation time and receipt time. Historical
+observations never establish current connectivity, activity, production quantity or OEE.
 
-## Trust boundary
+## Trust and authorization
 
-The existing SQL `ReadMtConnectEvidenceAsync` authority is the only source of evidence. The browser must not supply a trusted site/role/permission, runtime acknowledgement, checkpoint or SQL credential. Establish a real human session on the server, bind machine-scoped `commissioning.read`, then call the protected bounded SQL reader. Never reuse the acquisition runtime's private key, the CLI stdin bearer, or a fixture session as a browser authentication mechanism.
+The platform OIDC middleware uses authorization code with S256 PKCE, HTTPS metadata,
+exact configured issuer/client audience, signed/lifetime validated ID tokens,
+correlation/state and nonce checks. Only after the validated ticket event does a
+server-owned `IHumanIdentityVerifier` proof issue a durable SQL session for the exact
+enrolled issuer/subject. Provider roles never grant FactoryConnect access. No manual
+assertion/password field, fixture identity verifier or fallback provider is registered.
 
-The current `FactoryConnect.Api` host is a readiness shell and has no authenticated human-session middleware. Until a real session-to-API boundary is implemented and acceptance-tested, do not publish a browser evidence endpoint. In particular, no unauthenticated or static-token query route and no mock fallback on API errors.
+The secure HttpOnly `__Host-` cookie contains an ASP.NET Data Protection encrypted
+authentication ticket. No provider access/refresh tokens are saved. The browser gets
+its SQL bearer from the same-origin no-store session endpoint and holds it in memory;
+credentials never come from URLs, dashboard config or persistent browser storage.
+Every protected read checks current SQL session/grant authority. Logout requires a
+same-origin HTTPS POST, atomically revokes only the caller's session with audit, then
+clears the ticket. It grants no access-management permission. Revocation does not erase
+observations already legitimately viewed; subsequent reads fail closed.
 
-## API acceptance
+Machine discovery loads grant ancestry once inside the protected transaction. Validated
+machine IDs filter SQL directly; site-wide access returns at most 101 eligible rows to
+enforce the 100-visible-machine limit after authorization. It does not page unrelated
+inventory. Retained evidence reads select at most 100 observations with the existing
+SQL byte guard. SQL failures never become a successful healthy-empty result. The UI
+cancels stale reads, hides previous-machine/session values, and distinguishes loading,
+empty, denied, unavailable and failed results.
 
-- Read-only machine-scoped endpoint with server-derived session authority; unauthorized and revoked sessions fail closed.
-- Explicit `no-evidence`, `authority-unavailable`, and `evidence` outcomes. No healthy empty response when SQL authority is unavailable.
-- Bounded page <=100 observations and existing SQL byte guard. Exact UInt64 decimal strings and original raw values; no JavaScript numeric conversion of source sequence.
-- Evidence response includes provenance and a clear `historical-retained-evidence` designation, never inferred machine connectivity.
-- Integration acceptance tests use real SQL, real human-session authorization, revocation ordering, and saved observations from PR #31/32. No per-row SQL or full-history scan.
+## Installation inputs
 
-## React acceptance
+Supply `Identity:Authority` (exact HTTPS issuer pinned by installation enrollment),
+`Identity:ClientId`, `Identity:ClientSecret` from a protected secret source, plus
+`ConnectionStrings:Evidence`, `Evidence:InstallationId`, `Evidence:SiteId` and
+`Evidence:StreamKey`. Register the exact HTTPS `/signin-oidc` callback at the provider.
+Missing identity configuration fails closed. No customer tenant/client is provisioned
+by this increment.
 
-- Reuse the existing dashboard routing/layout and runtime client conventions.
-- Display the exact raw value with preserved whitespace, signal address, timestamp, quality and provenance; show `UNAVAILABLE` as unavailable, not numeric zero.
-- Distinguish loading, no evidence, unauthorized, unavailable and failed states. Never fabricate OEE or current machine status.
-- Abort stale requests on machine change/unmount and avoid showing a previous machine's data.
-- Browser tests assert literal values from the protected endpoint contract and explicit error states; mock transport tests alone do not establish server integration.
+Serve built `dist` assets from the API's web root on the same HTTPS origin. Persist
+protected Data Protection keys under the installation service account. API TLS, IdP
+trust, callback registration, secret/key rotation, least-privilege SQL and production
+service packaging remain target commissioning responsibilities. No forwarded-header
+trust is implicitly enabled. The API `/dashboard/config` remains a reporting-readiness
+shell; operator selection uses its separate protected endpoint.
 
-## Delivery order
+Real dashboard mode has no mock fallback. Demonstration mode requires explicit
+`VITE_ENABLE_FIXTURES=true` at build/dev startup and is not production acceptance.
 
-1. Server human-session integration and protected bounded evidence endpoint.
-2. Typed frontend client and operator evidence view with mounted tests.
-3. SQL-backed end-to-end browser acceptance and latency/roundtrip measurements.
-4. Separate production provisioning and service packaging. V1 production remains untouched.
+## Executable acceptance
 
-No V1 historical migration, reporting pipeline import, production deployment or credential bootstrap is authorized by this slice.
+CI builds React, installs Chromium and invokes:
 
+```sh
+FC2_BROWSER_ACCEPTANCE=1 dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
+```
 
-## PR #33 review disposition — 2026-11-07
+The disposable SQL fixture first ingests actual controlled HTTP MTConnect observations.
+An isolated signed-token OIDC provider and the product API then listen on actual HTTPS
+Kestrel sockets. Chromium follows code/PKCE redirects, renders literal SQL observations
+and provenance, and proves session/grant revocation and durable logout denial. Negative
+identity cases reject invalid signature, issuer, audience, nonce and expiry. Provider code consumption,
+redirect/client binding and PKCE are checked. The pinned installation issuer is retained;
+only its discovery address is redirected to the test TLS listener. No token-validation
+checks are disabled. Temporary fixture CA trust is removed; Chromium trusts only the
+exact fixture leaf SPKI, never arbitrary certificates. No secrets enter artifacts.
 
-The following integration gates remain **OPEN**. This pull request stays draft and must not be merged solely because CI is green.
+TestServer handler coverage and mocked mounted UI tests remain separate, narrower checks.
+The existing 100-machine and sparse-access SQL performance fixtures remain in CI.
+Browser screenshot/qualification artifacts are uploaded with ingestion evidence.
+These results qualify controlled workloads and protocol integration, not customer IdP,
+factory network, fleet capacity or production deployment.
 
-- **P1 trusted verifier:** the browser now has a one-use assertion exchange and operator machine-selection screen, but the API intentionally does not register a real `IHumanIdentityVerifier`. A production-trusted provider must validate issuer, audience, signature, freshness, nonce/state and proof binding before registering the service. The manually entered assertion field is a transitional integration seam, **not** a production sign-in protocol or approval to enter credentials into the dashboard.
-- **P1 HTTP/SQL/browser acceptance:** direct SQL tests and mocked browser transport do not establish the complete HTTPS API contract. Add disposable SQL plus hosted HTTPS route tests, machine grant/session revocation, true rendered observation values, and measured per-endpoint latency/SQL roundtrips before readiness.
-- **P1 machine selection:** `GET /api/commissioning/v2/evidence-machines` enumerates bounded current machine-scoped `commissioning.read` authorization and rechecks grant chains under the SQL security gate. It does not grant machine access or make a machine-current-state claim. API `/dashboard/config` remains a readiness shell with no reporting sources.
-- **P2 provenance:** each observation can expand mapping ID, batch ID, acknowledgement ID, source document SHA-256, receipt time and observation time. The original raw value and UInt64 decimal identifiers remain visible unchanged.
-
-No V1 production changes, production credential bootstrap or release/deployment is authorized by these slices.
-
-## Trusted browser delivery
-
-The API now composes the platform OIDC middleware: authorization code with S256
-PKCE, HTTPS metadata, configured exact issuer/client audience, signed/lifetime
-validated ID tokens, correlation/state and nonce checks. Only after the validated
-ticket event does a server-owned `IHumanIdentityVerifier` proof issue a durable SQL
-session for the exact enrolled issuer/subject. Provider roles never grant access.
-The manual assertion input is removed. The login link redirects to the provider;
-no provider password or provider token is entered into/stored by FactoryConnect.
-
-Installation inputs (none have shipped defaults): `Identity:Authority` (exact HTTPS
-issuer), `Identity:ClientId`, `Identity:ClientSecret` from a protected secret source,
-and the existing `ConnectionStrings:Evidence`, `Evidence:InstallationId`,
-`Evidence:SiteId`, `Evidence:StreamKey`. Register the exact HTTPS
-`/signin-oidc` callback with the provider. Missing provider configuration fails
-closed. This increment does not provision a customer tenant or client.
-
-Host the built `dist` assets in the API's configured web root on the same HTTPS
-origin. The browser discovers its session through a no-store endpoint, retains
-only the opaque SQL bearer in memory and loads the separately authorized machine
-list. The secure HttpOnly `__Host-` cookie contains a Data Protection encrypted
-authentication ticket; no OIDC access/refresh tokens are saved. Provision protected
-persistent Data Protection keys for the installation, with access limited to the
-service account. Session expiry and SQL revocation are checked independently.
-The same-origin POST logout atomically revokes the caller's SQL session and audit
-before clearing the ticket; it grants no administrator permissions.
-
-CI `FC2_BROWSER_ACCEPTANCE=1 ... --ingestion-only` launches an isolated signed-token
-OIDC provider and actual HTTPS Kestrel API with disposable SQL plus built React in
-Chromium. It verifies audience/nonce/expiry rejection, code/PKCE flow, saved literal
-values/provenance, and session and grant revocation. Fixture CA trust is temporary;
-Chromium trusts only the exact fixture leaf SPKI, not arbitrary certificates. No
-fixture verifier/provider is registered in the product. Existing TestServer tests
-remain narrower handler tests. Customer IdP/PKI and production commissioning are
-separate deployment qualification, not claimed by CI.
+Next: accepted-evidence activity processing and operator activity visibility before
+quantity/OEE expansion. No V1 history migration, production configuration change,
+production database write or cutover is authorized by this slice.

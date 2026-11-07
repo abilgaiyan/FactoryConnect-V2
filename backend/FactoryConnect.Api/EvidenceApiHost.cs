@@ -7,9 +7,10 @@ namespace FactoryConnect.Api;
 
 public static class EvidenceApiHost
 {
-public static WebApplication Build(string[] args, Action<WebApplicationBuilder>? configure = null)
+public static WebApplication Build(string[] args, Action<WebApplicationBuilder>? configure = null, string? webRoot = null)
 {
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args,
+    ApplicationName = typeof(EvidenceApiHost).Assembly.FullName, WebRootPath = webRoot });
 configure?.Invoke(builder);
 builder.Services.AddOperatorLogin(builder.Configuration);
 var app = builder.Build();

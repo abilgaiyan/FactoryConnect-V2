@@ -46,6 +46,7 @@ internal static class OperatorBrowserAcceptance
         try
         {
             using var signingKey=RSA.Create(3072);
+            using var wrongSigningKey=RSA.Create(3072);
             var securityKey=new RsaSecurityKey(signingKey){KeyId="browser-fixture-key"};
             var clientSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             var password=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
@@ -95,10 +96,10 @@ internal static class OperatorBrowserAcceptance
                     ||Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(form["code_verifier"].ToString())))!=login.Challenge)
                     return Results.Unauthorized();
                 var now=DateTimeOffset.UtcNow;
-                var token=new JwtSecurityToken(issuer,mode=="bad-audience"?"wrong-client":login.Client,
+                var token=new JwtSecurityToken(mode=="bad-issuer"?"https://wrong-issuer.invalid":issuer,mode=="bad-audience"?"wrong-client":login.Client,
                     [new("sub","browser-operator"),new("nonce",mode=="bad-nonce"?"incorrect-nonce":login.Nonce),new("jti",Guid.NewGuid().ToString("N")),
                      new("iat",(mode=="expired"?now.AddMinutes(-10):now).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),System.Security.Claims.ClaimValueTypes.Integer64)],
-                    (mode=="expired"?now.AddMinutes(-10):now.AddSeconds(-1)).UtcDateTime,(mode=="expired"?now.AddMinutes(-5):now.AddMinutes(3)).UtcDateTime,new SigningCredentials(securityKey,SecurityAlgorithms.RsaSha256));
+                    (mode=="expired"?now.AddMinutes(-10):now.AddSeconds(-1)).UtcDateTime,(mode=="expired"?now.AddMinutes(-5):now.AddMinutes(3)).UtcDateTime,new SigningCredentials(mode=="bad-signature"?new RsaSecurityKey(wrongSigningKey){KeyId="browser-fixture-key"}:securityKey,SecurityAlgorithms.RsaSha256));
                 return Results.Json(new{access_token="unused-fixture-access-token",token_type="Bearer",expires_in=180,id_token=new JwtSecurityTokenHandler().WriteToken(token)});
             });
             await provider.StartAsync(ct);providerAddress=provider.Urls.Single();
@@ -118,13 +119,12 @@ internal static class OperatorBrowserAcceptance
                 // actual TLS listener; token issuer validation remains exact and enabled.
                 builder.Services.PostConfigure<OpenIdConnectOptions>("operator-oidc", options =>
                     options.MetadataAddress=providerAddress+"/.well-known/openid-configuration");
-                builder.WebHost.UseWebRoot(Path.GetFullPath("dist"));
                 builder.WebHost.ConfigureKestrel(o=>o.Listen(IPAddress.Loopback,0,l=>l.UseHttps(certificate)));
                 builder.Configuration.AddInMemoryCollection(new Dictionary<string,string?>{
                     ["ConnectionStrings:Evidence"]=sql,["Evidence:InstallationId"]=installation.ToString(),
                     ["Evidence:SiteId"]=site.ToString(),["Evidence:StreamKey"]="mtconnect:uuid:fixture-device",
                     ["Identity:Authority"]=issuer,["Identity:ClientId"]="fc2-browser",["Identity:ClientSecret"]=clientSecret});
-            });
+            }, Path.GetFullPath("dist"));
             await api.StartAsync(ct);var address=api.Urls.Single();callback=address+"/signin-oidc";
             var info=new ProcessStartInfo("node","scripts/ci/operator-browser.mjs"){
                 RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,UseShellExecute=false};
@@ -143,7 +143,11 @@ internal static class OperatorBrowserAcceptance
                     if(stage=="invalid-denied")
                     {
                         var next=message.RootElement.GetProperty("next").GetString();
-                        mode=next is "bad-nonce" or "expired" or "valid" ? next : throw new InvalidOperationException();
+                        mode=next is "bad-nonce" or "expired" or "bad-signature" or "bad-issuer" or "valid" ? next : throw new InvalidOperationException();
+                        await using var noSession=new SqlCommand("SELECT COUNT(*) FROM security.SessionAuthority WHERE PrincipalId=@principal",connection);
+                        noSession.Parameters.AddWithValue("@principal",principal);
+                        if(Convert.ToInt32(await noSession.ExecuteScalarAsync(ct))!=0)
+                            throw new InvalidOperationException("Rejected OIDC proof created a SQL session");
                     }
                     else if(stage=="revoke-session")
                     {
@@ -156,7 +160,7 @@ internal static class OperatorBrowserAcceptance
                     await child.StandardInput.WriteLineAsync("continue");await child.StandardInput.FlushAsync(ct);
                 }
                 await child.WaitForExitAsync(ct);
-                if(child.ExitCode!=0||stages!=6)throw new InvalidOperationException("Browser acceptance failed: "+await errors);
+                if(child.ExitCode!=0||stages!=8)throw new InvalidOperationException("Browser acceptance failed: "+await errors);
                 return stages;
             }
             finally{if(!child.HasExited)child.Kill(true);}

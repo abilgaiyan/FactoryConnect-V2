@@ -21,7 +21,7 @@ try {
     await page.getByLabel('Password').fill(process.env.FC2_BROWSER_PASSWORD);
     await page.getByRole('button', { name: 'Provider sign in' }).click();
   }
-  for (const next of ['bad-nonce', 'expired', 'valid']) {
+  for (const next of ['bad-nonce', 'expired', 'bad-signature', 'bad-issuer', 'valid']) {
     await login();
     await expect(page.locator('body')).toContainText('Operator identity verification failed.');
     await stage('invalid-denied', { next });
@@ -58,6 +58,6 @@ try {
   await page.reload();
   await expect(page.locator('select')).toHaveCount(0);
   await expect(page.getByText('No machines currently authorized for commissioning evidence.')).toBeVisible();
-  await writeFile('artifacts/ingestion/operator-browser.json', JSON.stringify({ controlledFixture: true, https: true, browser: 'Chromium', oidcCodePkce: true, invalidAudienceNonceExpiryDenied: true, literalValuePreserved: true, sessionRevocationDenied: true, logoutRevokesSqlSession: true, grantRevocationDenied: true }));
+  await writeFile('artifacts/ingestion/operator-browser.json', JSON.stringify({ controlledFixture: true, https: true, browser: 'Chromium', oidcCodePkce: true, invalidAudienceNonceExpirySignatureIssuerDenied: true, literalValuePreserved: true, sessionRevocationDenied: true, logoutRevokesSqlSession: true, grantRevocationDenied: true }));
   await stage('complete');
 } finally { await browser.close(); input.close(); }
