@@ -36,3 +36,15 @@ The current `FactoryConnect.Api` host is a readiness shell and has no authentica
 4. Separate production provisioning and service packaging. V1 production remains untouched.
 
 No V1 historical migration, reporting pipeline import, production deployment or credential bootstrap is authorized by this slice.
+
+
+## PR #33 review disposition — 2026-11-07
+
+The following integration gates remain **OPEN**. This pull request stays draft and must not be merged solely because CI is green.
+
+- **P1 trusted verifier:** the browser now has a one-use assertion exchange and operator machine-selection screen, but the API intentionally does not register a real `IHumanIdentityVerifier`. A production-trusted provider must validate issuer, audience, signature, freshness, nonce/state and proof binding before registering the service. The manually entered assertion field is a transitional integration seam, **not** a production sign-in protocol or approval to enter credentials into the dashboard.
+- **P1 HTTP/SQL/browser acceptance:** direct SQL tests and mocked browser transport do not establish the complete HTTPS API contract. Add disposable SQL plus hosted HTTPS route tests, machine grant/session revocation, true rendered observation values, and measured per-endpoint latency/SQL roundtrips before readiness.
+- **P1 machine selection:** `GET /api/commissioning/v2/evidence-machines` enumerates bounded current machine-scoped `commissioning.read` authorization and rechecks grant chains under the SQL security gate. It does not grant machine access or make a machine-current-state claim. API `/dashboard/config` remains a readiness shell with no reporting sources.
+- **P2 provenance:** each observation can expand mapping ID, batch ID, acknowledgement ID, source document SHA-256, receipt time and observation time. The original raw value and UInt64 decimal identifiers remain visible unchanged.
+
+No V1 production changes, production credential bootstrap or release/deployment is authorized by these slices.
