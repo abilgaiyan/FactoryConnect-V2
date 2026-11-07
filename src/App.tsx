@@ -47,13 +47,22 @@ export interface AppProps {
 export function App({ runtime }: AppProps) {
   const { route, navigate } = useApplicationRouter();
   const [evidenceSession, setEvidenceSession] = useState(runtime.evidenceSession ?? null);
+  const [sessionClock, setSessionClock] = useState(() => Date.now());
+  const validEvidenceSession = evidenceSession && Number.isFinite(Date.parse(evidenceSession.expiresAt))
+    && Date.parse(evidenceSession.expiresAt) > sessionClock ? evidenceSession : null;
+  useEffect(() => {
+    if (!validEvidenceSession) return;
+    const remaining = Date.parse(validEvidenceSession.expiresAt) - Date.now();
+    const timer = window.setTimeout(() => setSessionClock(Date.now()), Math.max(0, Math.min(remaining, 2147483647)));
+    return () => window.clearTimeout(timer);
+  }, [validEvidenceSession?.expiresAt]);
   const publicRuntime: DashboardApplicationRuntime = {
     configuration: runtime.configuration,
     reportingClient: runtime.reportingClient,
     currentStateClient: runtime.currentStateClient,
     ...(runtime.now ? { now: runtime.now } : {}),
   };
-  useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); }, [runtime.evidenceSession]);
+  useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); setSessionClock(Date.now()); }, [runtime.evidenceSession]);
   const returnToOverview = overviewReturn(window.location.search, runtime.configuration.sources);
 
   return (
@@ -66,7 +75,7 @@ export function App({ runtime }: AppProps) {
             `${source.groupName ?? 'Group not configured'} · ${source.siteId}`,
           ))].map(label => <span key={label}>{label}</span>)}
         </div>
-        {evidenceSession && <button type="button" onClick={() => setEvidenceSession(null)}>End evidence session</button>}
+        {validEvidenceSession && <button type="button" onClick={() => setEvidenceSession(null)}>End evidence session</button>}
         <nav aria-label="Dashboard">
           {SupervisorWorkspace && <ApplicationLink href="/supervisor-preview" navigate={navigate} current={route.kind === "supervisorPreview"}>Supervisor desk preview</ApplicationLink>}
           <ApplicationLink href="/commissioning" navigate={navigate} current={route.kind === "commissioning"}>Commissioning</ApplicationLink>{" "}
@@ -80,7 +89,7 @@ export function App({ runtime }: AppProps) {
       </header>
       <main id="main-content">
         {returnToOverview && <ApplicationLink href={returnToOverview} navigate={navigate}>Back to selected overview</ApplicationLink>}
-        <RouteView route={route} navigate={navigate} runtime={evidenceSession ? { ...publicRuntime, evidenceSession } : publicRuntime} />
+        <RouteView route={route} navigate={navigate} runtime={validEvidenceSession ? { ...publicRuntime, evidenceSession: validEvidenceSession } : publicRuntime} />
       </main>
     </div>
   );
