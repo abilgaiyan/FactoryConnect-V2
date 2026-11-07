@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text.Json;
 using FactoryConnect.Sql;
 using FactoryConnect.Sql.ActivityProcessing;
@@ -162,6 +163,67 @@ internal static class ActivitySqlDurabilityAcceptance
         {
             Check(true,"period page size is capped at 100 rows");
         }
+        // Larger transition-density qualification of the current per-period
+        // INSERT loop. This is disposable SQL, not a production load claim.
+        var loadMachine=Guid.NewGuid();
+        await using(var c=new SqlConnection(target.ConnectionString))
+        {
+            await c.OpenAsync();
+            await using var q=new SqlCommand("""
+                INSERT [master].Machine(MachineId,SiteId,DisplayName)
+                VALUES(@machine,@site,N'Activity high-transition fixture')
+                """,c);
+            q.Parameters.AddWithValue("@machine",loadMachine);
+            q.Parameters.AddWithValue("@site",site);
+            await q.ExecuteNonQueryAsync();
+        }
+        var loadMapping=Guid.NewGuid();
+        var loadSignal=new QualifiedActivitySignal(loadMachine,stream,loadMapping,"execution",
+            new Dictionary<string,ActivityState>(StringComparer.Ordinal)
+            {["ACTIVE"]=ActivityState.Running,["READY"]=ActivityState.Idle});
+        var loadIdentity=ActivityQualificationIdentity.From(loadSignal,"qualified-load-v1");
+        var loadSamples=Enumerable.Range(0,121).Select(i=>new ActivityInputSample(
+            loadMachine,stream,loadMapping,"execution",7,(ulong)(1000+i),
+            time.AddSeconds(i),i%2==0?"ACTIVE":"READY","source-reported",true)).ToArray();
+        var activities=new List<Activity>();
+        using(var listener=new ActivityListener
+        {
+            ShouldListenTo=source=>source.Name=="FactoryConnect.V2.Activity",
+            Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped=a=>{lock(activities)activities.Add(a);}
+        })
+        {
+            ActivitySource.AddActivityListener(listener);
+            var clock=Stopwatch.StartNew();
+            var inserted=await new SqlActivityProcessorStore(target.ConnectionString).ApplyAsync(
+                Guid.NewGuid(),loadSignal,loadIdentity,0,loadSamples);
+            clock.Stop();
+            Check(inserted.NewPeriods.Count==120 &&
+                inserted.Checkpoint.NextGeneration==1,
+                "dense transition fixture commits exactly 120 immutable activity periods");
+            Activity[] observations;
+            lock(activities)observations=activities
+                .Where(a=>a.OperationName=="activity.sql.apply").ToArray();
+            Check(observations.Length==1 &&
+                Convert.ToInt32(observations[0].GetTagItem("activity.sql.period.insert.commands"))==120,
+                "per-period SQL INSERT commands measured explicitly for 120 transitions");
+            var roundtrips=Convert.ToInt64(observations.Single().GetTagItem("activity.sql.roundtrips"));
+            var insertMs=Convert.ToDouble(observations.Single().GetTagItem("activity.sql.period.insert.elapsed.ms"));
+            Check(roundtrips>=120&&insertMs>=0,
+                "large-transition SQL fixture captures the per-row roundtrip cost");
+            Console.WriteLine($"MEASURE: activity transitions=120 periodInsertCommands=120 " +
+                $"sqlRoundtrips={roundtrips} insertElapsedMs={insertMs:F2} applyElapsedMs={clock.Elapsed.TotalMilliseconds:F2}");
+        }
+        var loadStore=new SqlActivityProcessorStore(target.ConnectionString);
+        var loadPage1=await loadStore.ReadPeriodPageAsync(loadIdentity,take:100);
+        var loadPage2=await loadStore.ReadPeriodPageAsync(loadIdentity,take:100,after:loadPage1.Next);
+        Check(loadPage1.Rows.Count==100&&loadPage1.Next is not null &&
+            loadPage2.Rows.Count==20&&loadPage2.Next is null &&
+            loadPage1.Rows.All(x=>x.Qualification==loadIdentity) &&
+            loadPage2.Rows.All(x=>x.Qualification==loadIdentity),
+            "120 committed periods read via bounded 100+20 keyset pages");
+        await Reject(async()=>{await loadStore.ReadPeriodsAsync(loadIdentity);},
+            "compatibility period read refuses unbounded 120-row history");
         return passed;
     }
 }
