@@ -98,6 +98,8 @@ internal static class MtConnectIngestionAcceptance
             CryptographicOperations.ZeroMemory(issued.Token);
             CryptographicOperations.ZeroMemory(issuedHash);
         }
+        count += await OperatorEvidenceHttpAcceptance.Run(target.ConnectionString,
+            target.InstallationId,site,machine,otherMachine,rootToken,Epoch);
         await Denied(()=>writer.ReadMtConnectEvidenceAsync(rootToken,site,machine,Stream),"administrator has no implicit raw-evidence read authority");await Denied(()=>writer.ReadMtConnectEvidenceAsync(token,site,otherMachine,Stream),"raw evidence read respects exact machine grant");
         var repeat=await writer.IngestMtConnectAsync(pair.Channel,request);var repeatedAgain=await writer.IngestMtConnectAsync(pair.Channel,request);Check(repeat.SequenceEqual(repeatedAgain)&&await Count("acquisition.MtConnectBatch")==1&&await Count("acquisition.MtConnectObservation")==2,"exact ingestion retry records one effect and returns saved receipt");
         await Conflict(()=>writer.IngestMtConnectAsync(pair.Channel,request with{FromSequence=101,RawDocument=Frame(101,1)}),"operation identity rejects changed request bytes");
