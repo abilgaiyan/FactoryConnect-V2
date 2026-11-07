@@ -58,6 +58,7 @@ public sealed partial class SqlSecurityAuthority
             await Authorize(c,t,actor,"configuration.activate",scope,final.Now,ct);
             if(final.Epoch!=command.ExpectedSecurityEpoch)throw new SecurityConflictException();
             if(until is {} expired&&expired<=final.Now)throw new SecurityDeniedException();
+            var operationalGeneration=await RequireMachineEnabled(c,t,command.SiteId,command.MachineId,final.Now,ct);
             await ValidateActivationPrerequisites(c,t,command,machine,from,until,final.Now,ct);
             await ValidatePinnedPolicies(c,t,root,machine,command.SiteId,from>final.Now?from:final.Now,ct);
             Guid? head=null;long generation=0;
@@ -70,18 +71,18 @@ public sealed partial class SqlSecurityAuthority
             await using(var q=Command(c,t,"SELECT 1 FROM configuration.ActivationRequest WHERE ActivationId=@activation"))
             {Add(q,("@activation",command.ActivationId));if(await q.ExecuteScalarAsync(ct) is not null)throw new SecurityConflictException();}
             var next=generation+1;
-            var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId=command.OperationId,activationId=command.ActivationId,activationGeneration=Decimal(next),status="pending-acknowledgement"});
+            var result=JsonSerializer.SerializeToUtf8Bytes(new{operationId=command.OperationId,activationId=command.ActivationId,activationGeneration=Decimal(next),operationalGeneration=Decimal(operationalGeneration),status="pending-acknowledgement"});
             await MachineAuthorityOperation(c,t,command.OperationId,actor,scope,bytes,result,"request-activation",command.Reason,ct);
             await Exec(c,t,"""
                 INSERT configuration.ActivationRequest(ActivationId,SiteId,MachineId,ActivationGeneration,PackageRevisionId,ContentHash,ReviewId,ApprovalDecision,
-                    RuntimeIdentityId,AssignmentId,AssignmentGeneration,CredentialGeneration,EffectiveFrom,EffectiveTo,SupersedesActivationId,ActorPrincipalId,OperationId)
-                VALUES(@activation,@site,@machine,@generation,@revision,@hash,@review,'approved',@runtime,@assignment,@assignmentGeneration,@credentialGeneration,@from,@until,@prior,@actor,@op);
+                    RuntimeIdentityId,AssignmentId,AssignmentGeneration,CredentialGeneration,EffectiveFrom,EffectiveTo,SupersedesActivationId,ActorPrincipalId,OperationId,OperationalGeneration)
+                VALUES(@activation,@site,@machine,@generation,@revision,@hash,@review,'approved',@runtime,@assignment,@assignmentGeneration,@credentialGeneration,@from,@until,@prior,@actor,@op,@operationalGeneration);
                 UPDATE configuration.MachineActivationRequestHead SET ActivationId=@activation,ActivationGeneration=@generation WHERE SiteId=@site AND MachineId=@machine;
                 IF @@ROWCOUNT=0 INSERT configuration.MachineActivationRequestHead(SiteId,MachineId,ActivationId,ActivationGeneration) VALUES(@site,@machine,@activation,@generation);
                 """,ct,("@activation",command.ActivationId),("@site",command.SiteId),("@machine",command.MachineId),("@generation",next),
                 ("@revision",command.PackageRevisionId),("@hash",hash),("@review",command.ApprovalReviewId),("@runtime",command.RuntimeIdentityId),
                 ("@assignment",command.AssignmentId),("@assignmentGeneration",command.AssignmentGeneration),("@credentialGeneration",command.CredentialGeneration),
-                ("@from",from),("@until",(object?)until??DBNull.Value),("@prior",(object?)head??DBNull.Value),("@actor",actor),("@op",command.OperationId));
+                ("@from",from),("@until",(object?)until??DBNull.Value),("@prior",(object?)head??DBNull.Value),("@actor",actor),("@op",command.OperationId),("@operationalGeneration",operationalGeneration));
             return result;
         },ct);
     }

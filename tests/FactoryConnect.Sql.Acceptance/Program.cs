@@ -121,6 +121,10 @@ try
     var acknowledgementTarget=target with {ConnectionString=acknowledgementDb.ConnectionString,Database=acknowledgementDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(acknowledgementTarget);
     passed += await ActivationAcknowledgementAcceptance.Run(acknowledgementTarget with{InitializeEmpty=false});
+    var operationalDb=await NewDatabase();
+    var operationalTarget=target with {ConnectionString=operationalDb.ConnectionString,Database=operationalDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(operationalTarget);
+    passed += await MachineOperationalAcceptance.Run(operationalTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);
