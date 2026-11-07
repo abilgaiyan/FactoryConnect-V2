@@ -134,10 +134,16 @@ internal static class ActivitySqlDurabilityAcceptance
         Check(pageTwo.Rows.Count==1 && pageTwo.Rows[0].Qualification==identity &&
             pageTwo.Rows[0].Period==finalPeriods[1],
             "second keyset page resumes without repeating the previous effect");
-        var pageThree=await restored.ReadPeriodPageAsync(identity,take:1,after:pageTwo.Next);
-        Check(pageThree.Rows.Count==Math.Min(1,finalPeriods.Count-2) &&
-            pageThree.Rows.All(x=>x.Qualification==identity),
-            "later keyset page retains exact qualification and bounded row count");
+        Check((pageTwo.Next is null)==(finalPeriods.Count==2),
+            "keyset page signals exhaustion exactly at the final committed effect");
+        if(pageTwo.Next is not null)
+        {
+            var pageThree=await restored.ReadPeriodPageAsync(identity,take:1,after:pageTwo.Next);
+            Check(pageThree.Rows.Count==1 && pageThree.Next is null &&
+                pageThree.Rows[0].Period==finalPeriods[2] &&
+                pageThree.Rows[0].Qualification==identity,
+                "third keyset page returns the winning concurrent effect without duplicates");
+        }
         await Reject(async()=>{await restored.ReadPeriodPageAsync(
             identity with {ContinuityIdentity="unqualified-change"});},
             "period read rejects different continuity identity");
@@ -147,8 +153,15 @@ internal static class ActivitySqlDurabilityAcceptance
         await Reject(async()=>{await restored.ReadPeriodsAsync(
             identity with {ContinuityIdentity="changed"});},
             "compatibility period read cannot bypass qualification validation");
-        await Reject(async()=>{await restored.ReadPeriodPageAsync(identity,take:101);},
-            "period page size is capped at 100 rows");
+        try
+        {
+            await restored.ReadPeriodPageAsync(identity,take:101);
+            throw new InvalidOperationException("Over-sized activity period page unexpectedly accepted.");
+        }
+        catch(ArgumentOutOfRangeException)
+        {
+            Check(true,"period page size is capped at 100 rows");
+        }
         return passed;
     }
 }
