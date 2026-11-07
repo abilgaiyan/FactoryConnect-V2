@@ -21,10 +21,10 @@ internal static class ActivityHistoryHttpAcceptance
     {
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
         {
-            if(assertion!="activity-http-proof")throw new SecurityDeniedException();
+            if(assertion is not ("activity-http-proof" or "activity-http-expiring"))throw new SecurityDeniedException();
             var now=DateTimeOffset.UtcNow;
             return Task.FromResult(new VerifiedHumanIdentity("https://certificate.fixture/tenant",subject,
-                Guid.NewGuid().ToString("N"),"activity-http-mfa",now.AddSeconds(-1),now.AddMinutes(3)));
+                Guid.NewGuid().ToString("N"),"activity-http-mfa",now.AddSeconds(-1),assertion=="activity-http-expiring"?now.AddSeconds(4):now.AddMinutes(3)));
         }
     }
     internal static async Task<int> Run(string sql,Guid installation,Guid site,Guid machine,Guid other,
@@ -90,7 +90,7 @@ internal static class ActivityHistoryHttpAcceptance
                 using var older=await Get(page+"?take=1&cursor="+Uri.EscapeDataString(cursor));
                 Check(discovery.IsSuccessStatusCode&&head.IsSuccessStatusCode&&older.IsSuccessStatusCode,"profiled discovery and keyset pages return verified publications");
                 return new[]{new ActivityHistoryMeasurementAcceptance.Span("http-history",start,DateTimeOffset.UtcNow-start,new Dictionary<string,object?>())};
-            },$"artifacts/ingestion/activity-http-profile-{before}.json");
+            },$"artifacts/ingestion/activity-http-profile-{before}.json","ClosedPeriod");
             var periodAccess=profile.Accesses.Where(x=>x.Table=="ClosedPeriod").ToArray();
             Check(profile.PlanEvents>0 && periodAccess.Length>0 &&
                 periodAccess.All(x=>x.ActualRowsRead.HasValue && x.ActualRowsRead<=10) &&
@@ -125,6 +125,39 @@ internal static class ActivityHistoryHttpAcceptance
             await SetCheckpoint(broken.ToJsonString());
             try { using var corrupt=await Get(list);Check(corrupt.StatusCode==HttpStatusCode.ServiceUnavailable,"checksum-consistent checkpoint forgery fails immutable publication ancestry"); }
             finally { await SetCheckpoint(cp); }
+
+            using(var expiringLogin=await http.PostAsync("/api/security/v2/human-sessions",new StringContent("activity-http-expiring")))
+            {
+                Check(expiringLogin.IsSuccessStatusCode,"post-wait expiry fixture begins with a valid human session");
+                using var expiringJson=JsonDocument.Parse(await expiringLogin.Content.ReadAsStringAsync());
+                var expiringBearer=expiringJson.RootElement.GetProperty("bearer").GetString()!;
+                var expires=expiringJson.RootElement.GetProperty("expiresAt").GetDateTimeOffset();
+                await using var holder=new SqlConnection(sql);await holder.OpenAsync();
+                await using var transaction=(SqlTransaction)await holder.BeginTransactionAsync();
+                await using(var gate=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=0; IF @r<0 THROW 51099,'Fixture gate unavailable.',1; SELECT @@SPID",holder,transaction))
+                {
+                    gate.Parameters.AddWithValue("@resource",SqlActivityProcessorStore.ProcessorLockResource(machine,mapping,"mtconnect:uuid:fixture-device"));
+                    var holderId=Convert.ToInt32(await gate.ExecuteScalarAsync());
+                    using var request=new HttpRequestMessage(HttpMethod.Get,page);
+                    request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",expiringBearer);
+                    var waiting=http.SendAsync(request);var waitObserved=false;
+                    try
+                    {
+                        var waitDeadline=Stopwatch.StartNew();
+                        while(waitDeadline.Elapsed<TimeSpan.FromSeconds(2))
+                        {
+                            if(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.dm_exec_requests r JOIN sys.dm_exec_sessions s ON s.session_id=r.session_id WHERE s.program_name=@app AND r.blocking_session_id=@holder AND r.wait_type LIKE 'LCK_M_%'",("@app",appName),("@holder",holderId)))>0){waitObserved=true;break;}
+                            await Task.Delay(20);
+                        }
+                        Check(waitObserved&&!waiting.IsCompleted && (DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!<expires,
+                            "currently eligible HTTP read genuinely waits behind the processor gate");
+                        while((DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!<=expires)await Task.Delay(20);
+                    }
+                    finally { await transaction.RollbackAsync(); }
+                    using var expired=await waiting;
+                    Check(expired.StatusCode==HttpStatusCode.Unauthorized,"session expiring during processor wait cannot release historical data");
+                }
+            }
 
             await authority.RevokeGrantAsync(admin,Guid.NewGuid(),grant,await epoch(),"activity read grant revoked");
             using(var revoked=await Get(page))Check(revoked.StatusCode==HttpStatusCode.Unauthorized,"grant revocation denies published activity reads");

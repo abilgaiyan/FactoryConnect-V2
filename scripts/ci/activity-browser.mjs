@@ -52,6 +52,11 @@ try {
   const second = await accepted();
   await mkdir('artifacts/ingestion', { recursive: true });
   await page.screenshot({ path: 'artifacts/ingestion/operator-activity.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const activityTable = page.getByRole('region', { name: 'Published activity period table', exact: true });
+  expect(await activityTable.evaluate(node => node.scrollWidth > node.clientWidth && getComputedStyle(node).overflowX === 'auto')).toBe(true);
+  await page.getByRole('region', { name: 'Published machine activity', exact: true }).screenshot({ path: 'artifacts/ingestion/operator-activity-mobile.png' });
+  await page.setViewportSize({ width: 1280, height: 720 });
   await stage('revoke-grant');
   const grantDenied = await page.evaluate(async ({ machine, bearer, mapping }) => (await fetch(`/api/commissioning/v2/machines/${machine}/activity/${mapping}`, { headers: { Authorization: 'Bearer ' + bearer } })).status,
     { machine: process.env.FC2_BROWSER_MACHINE, mapping: process.env.FC2_BROWSER_MAPPING, bearer: second });

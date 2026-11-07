@@ -70,8 +70,8 @@ function ActivityPeriods({ machineId, mappingId, baseAddress, bearer }: {
     {view.kind === "ready" && <>
       <p>Newest periods first. Times use your browser timezone. Continuity is qualified within accepted batches; unproven batch boundaries remain breaks.</p>
       {view.data.rows.length === 0 ? <p>No closed periods have been published for this history source.</p>
-        : <div className="activity-table-scroll" tabIndex={0} role="region" aria-label="Published activity period table"><table>
-          <thead><tr><th>Recorded interpretation</th><th>Started</th><th>Ended</th><th>Duration</th><th>Source values</th><th>Evidence</th></tr></thead>
+        : <div style={{ overflowX: "auto" }} tabIndex={0} role="region" aria-label="Published activity period table"><table style={{ minWidth: "62rem" }}>
+          <thead><tr><th>Recorded interpretation</th><th>Started</th><th>Ended</th><th style={{ whiteSpace: "nowrap" }}>Duration</th><th>Source values</th><th>Evidence</th></tr></thead>
           <tbody>{view.data.rows.map(row => <tr key={row.effectId}>
             <td>{row.state}</td><td><time dateTime={row.startedAt}>{new Date(row.startedAt).toLocaleString()}</time></td>
             <td><time dateTime={row.endedAt}>{new Date(row.endedAt).toLocaleString()}</time></td><td>{duration(row.durationTicks)}</td>
