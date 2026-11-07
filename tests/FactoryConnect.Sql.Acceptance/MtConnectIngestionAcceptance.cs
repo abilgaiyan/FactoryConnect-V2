@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using FactoryConnect.Sql;
 using FactoryConnect.Sql.Configuration;
+using FactoryConnect.Sql.ActivityProcessing;
 using FactoryConnect.Sql.Security;
 using Microsoft.Data.SqlClient;
 
@@ -68,6 +69,80 @@ internal static class MtConnectIngestionAcceptance
         var request=await Request(fetched);var epoch=await Epoch();await Transport(request);Check(await Epoch()==epoch,"ordinary ingestion commits without advancing security epoch");
         var first=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream);Check(first.Count==2&&first.Single(x=>x.Address=="Counter").RawValue==" 00042 "&&first.Select(x=>x.MappingId).Distinct().Count()==2,"protected read returns actual saved values with case-distinct mapping identities");
         Check(first.All(x=>x.BatchId==request.OperationId&&x.AcknowledgementId==ack.AcknowledgementId&&x.DocumentHash==Convert.ToHexString(SHA256.HashData(fetched.RawDocument)).ToLowerInvariant()),"saved values retain exact batch acknowledgement and raw-document provenance");
+        // The source reader must reject a projection mutated independently of
+        // immutable canonical/source document bytes. This intentional corruption
+        // is confined to the disposable SQL acceptance database and restored
+        // before the remaining ingestion authority tests.
+        var counterEvidence=first.Single(x=>x.Address=="Counter");
+        var counterSignal=new QualifiedActivitySignal(machine,Stream,
+            counterEvidence.MappingId,"Counter",
+            new Dictionary<string,ActivityState>(StringComparer.Ordinal)
+            {[" 00042 "]=ActivityState.Running});
+        var counterIdentity=ActivityQualificationIdentity.From(
+            counterSignal,"accepted-reader-test-only");
+        var acceptedReader=new SqlAcceptedActivityEvidenceReader(target.ConnectionString);
+        var verifiedCounter=await acceptedReader.ReadBoundedAsync(
+            site,counterIdentity,7,99,100);
+        Check(verifiedCounter.Count==1 &&
+            verifiedCounter[0].RawValue==counterEvidence.RawValue &&
+            verifiedCounter[0].BatchId==request.OperationId &&
+            verifiedCounter[0].AcknowledgementId==ack.AcknowledgementId,
+            "reader binds exact accepted projection to verified canonical source and owning batch");
+
+        async Task RejectTampered(string label,
+            ActivityQualificationIdentity? readIdentity=null)
+        {
+            try
+            {
+                await acceptedReader.ReadBoundedAsync(site,
+                    readIdentity??counterIdentity,7,99,100);
+            }
+            catch(InvalidDataException)
+            {
+                Check(true,label);
+                return;
+            }
+            throw new InvalidOperationException("Projection inconsistency was accepted: "+label);
+        }
+        const string sourceWhere="""
+            WHERE MachineId=@machine AND InstanceId=7 AND Sequence=100
+            """;
+        await Exec("DISABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+        try
+        {
+            await Exec("UPDATE acquisition.MtConnectObservation SET RawValue=N'FORGED' "+
+                sourceWhere,("@machine",machine));
+            await RejectTampered("modified raw value rejected against verified canonical source");
+            await Exec("UPDATE acquisition.MtConnectObservation SET RawValue=@value,Quality='unavailable' "+
+                sourceWhere,("@machine",machine),("@value",counterEvidence.RawValue));
+            await RejectTampered("modified quality rejected against verified source observation");
+            await Exec("UPDATE acquisition.MtConnectObservation SET Quality='source-reported',"+
+                "SourceTimestamp=N'2020-01-01T00:00:00Z' "+sourceWhere,("@machine",machine));
+            await RejectTampered("modified source timestamp rejected against verified source observation");
+            await Exec("UPDATE acquisition.MtConnectObservation SET SourceTimestamp=@stamp,"+
+                "ObservedAt=DATEADD(second,1,ObservedAt) "+sourceWhere,
+                ("@machine",machine),("@stamp",counterEvidence.SourceTimestamp));
+            await RejectTampered("modified observed instant rejected against verified source observation");
+            await Exec("UPDATE acquisition.MtConnectObservation SET ObservedAt=@observed,"+
+                "AddressBytes=0x636F756E746572 "+sourceWhere,
+                ("@machine",machine),("@observed",counterEvidence.ObservedAt));
+            await RejectTampered("changed projected address rejected against canonical identity",
+                counterIdentity with{SourceAddress="counter"});
+        }
+        finally
+        {
+            await Exec("UPDATE acquisition.MtConnectObservation SET RawValue=@value,"+
+                "Quality=@quality,SourceTimestamp=@stamp,ObservedAt=@observed,"+
+                "AddressBytes=0x436F756E746572 "+sourceWhere,
+                ("@machine",machine),("@value",counterEvidence.RawValue),
+                ("@quality",counterEvidence.Quality),
+                ("@stamp",counterEvidence.SourceTimestamp),
+                ("@observed",counterEvidence.ObservedAt));
+            await Exec("ENABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+        }
+        Check((await acceptedReader.ReadBoundedAsync(site,counterIdentity,7,99,100))
+            .Single().RawValue==counterEvidence.RawValue,
+            "disposable projection corruption fixture fully restored accepted evidence");
         // End-to-end SQL authority: a freshly verified human proof issues a one-use
         // bearer, and that session reads only the machine explicitly granted to it.
         var loginIdentity=new VerifiedHumanIdentity(Issuer,"certificate-manager",Guid.NewGuid().ToString("N"),
