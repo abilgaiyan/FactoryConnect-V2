@@ -129,6 +129,10 @@ try
     var safetyTarget=target with {ConnectionString=safetyDb.ConnectionString,Database=safetyDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(safetyTarget);
     passed += await SafetyRevocationAcceptance.Run(safetyTarget with{InitializeEmpty=false});
+    var rosterDb=await NewDatabase();
+    var rosterTarget=target with {ConnectionString=rosterDb.ConnectionString,Database=rosterDb.InitialCatalog,InstallationId=Guid.NewGuid()};
+    await installer.ApplyAsync(rosterTarget);
+    passed += await TrustedRosterAcceptance.Run(rosterTarget with{InitializeEmpty=false});
     var performanceDb=await NewDatabase();
     var performanceTarget=target with {ConnectionString=performanceDb.ConnectionString,Database=performanceDb.InitialCatalog,InstallationId=Guid.NewGuid()};
     await installer.ApplyAsync(performanceTarget);
