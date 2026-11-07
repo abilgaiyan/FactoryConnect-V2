@@ -85,11 +85,13 @@ internal static class ActivityHistoryMeasurementAcceptance
             var ordinary=trials.Where(x=>!x.Profiled).ToArray();
             Console.WriteLine($"MEASURE: activity depth={depth} retainedRows={retained} batches={batches} "+
                 $"medianMs={ordinary.Select(x=>x.ElapsedMs).Order().ElementAt(2):F2} "+
-                $"statementCount={profile.Statements.Count} logicalReads={profile.Statements.Sum(x=>x.LogicalReads)} "+
+                $"statementCount={profile.Statements.Count} logicalReads={profile.Commands.Sum(x=>x.LogicalReads)} "+
                 $"observationRowsRead={profile.Accesses.Where(x=>x.Table=="MtConnectObservation").Sum(x=>x.ActualRowsRead??0)}");
         }
         var ordinaryTrials=levels.SelectMany(x=>x.Trials).Where(x=>!x.Profiled).ToArray();
         long Trips(Trial trial,string operation,string tag)=>Convert.ToInt64(trial.Spans.Single(x=>x.Name==operation).Tags[tag]);
+        Check(levels.Select(x=>x.Profile.Commands.Count).Distinct().Count()==1,
+            "profiled SQL command count stays constant across increasing retained depths");
         Check(levels.Select(x=>x.Profile.Statements.Count).Distinct().Count()==1,
             "profiled SQL statement count stays constant across increasing retained depths");
         Check(ordinaryTrials.Select(x=>Trips(x,"activity.sql.apply","activity.sql.roundtrips")).Distinct().Count()==1 &&
@@ -150,14 +152,14 @@ internal static class ActivityHistoryMeasurementAcceptance
         // production latency/memory threshold or physical-completeness claim.
         var bounds=levels.Select(level=>new {
             level.AddedBatches,level.RetainedObservations,level.RetainedBatches,
-            statementCount=level.Profile.Statements.Count,
-            logicalReads=level.Profile.Statements.Sum(x=>x.LogicalReads),
+            statementCount=level.Profile.Statements.Count,commandCount=level.Profile.Commands.Count,
+            logicalReads=level.Profile.Commands.Sum(x=>x.LogicalReads),
             accesses=level.Profile.Accesses.GroupBy(x=>x.Table).Select(group=>new {
                 table=group.Key,operators=group.Count(),actualRows=group.Sum(x=>x.ActualRows),
                 actualRowsRead=group.Sum(x=>x.ActualRowsRead??0),
                 rowsReadCoverageComplete=group.All(x=>x.ActualRowsRead.HasValue || x.Executions==0)
             }).ToArray(),
-            stages=level.Profile.Statements.GroupBy(x=>x.Phase).Select(group=>new {
+            stages=level.Profile.Commands.GroupBy(x=>x.Phase).Select(group=>new {
                 phase=group.Key,statements=group.Count(),logicalReads=group.Sum(x=>x.LogicalReads),
                 rowsAffectedOrReturned=group.Sum(x=>x.RowsAffectedOrReturned),serverDurationMs=group.Sum(x=>x.DurationMs)
             }).ToArray(),

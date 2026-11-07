@@ -7,8 +7,8 @@ internal static class ActivityHistorySqlProfile
 {
     internal sealed record Access(string Phase,string Table,string? Index,string PhysicalOperator,
         long? ActualRowsRead,long ActualRows,long Executions);
-    internal sealed record Statement(string Phase,long LogicalReads,long PhysicalReads,long RowsAffectedOrReturned,double DurationMs);
-    internal sealed record Profile(IReadOnlyList<Statement> Statements,IReadOnlyList<Access> Accesses,
+    internal sealed record Statement(string EventName,string Phase,long LogicalReads,long PhysicalReads,long RowsAffectedOrReturned,double DurationMs);
+    internal sealed record Profile(IReadOnlyList<Statement> Commands,IReadOnlyList<Statement> Statements,IReadOnlyList<Access> Accesses,
         int PlanEvents,long DroppedEvents,bool Truncated,string RawEvidenceFile);
 
     internal static async Task<Profile> CaptureAsync(SqlConnection control,string application,
@@ -22,6 +22,15 @@ internal static class ActivityHistorySqlProfile
         await Exec($"""
             CREATE EVENT SESSION [{name}] ON SERVER
             ADD EVENT sqlserver.sql_statement_completed(
+                ACTION(sqlserver.client_app_name,sqlserver.session_id)
+                WHERE ([sqlserver].[client_app_name]=N'{application}')),
+            ADD EVENT sqlserver.sp_statement_completed(
+                ACTION(sqlserver.client_app_name,sqlserver.session_id)
+                WHERE ([sqlserver].[client_app_name]=N'{application}')),
+            ADD EVENT sqlserver.rpc_completed(
+                ACTION(sqlserver.client_app_name,sqlserver.session_id)
+                WHERE ([sqlserver].[client_app_name]=N'{application}')),
+            ADD EVENT sqlserver.sql_batch_completed(
                 ACTION(sqlserver.client_app_name,sqlserver.session_id)
                 WHERE ([sqlserver].[client_app_name]=N'{application}')),
             ADD EVENT sqlserver.query_post_execution_showplan(
@@ -51,11 +60,17 @@ internal static class ActivityHistorySqlProfile
                 dropped=Convert.ToInt64(r[0],CultureInfo.InvariantCulture);
                 xml=r.GetString(1);
             }
+            // Preserve failed captures too, before parsing/qualification can throw.
+            await File.WriteAllTextAsync(evidenceFile,System.Text.Json.JsonSerializer.Serialize(new {
+                schemaVersion=1,fixture=true,application,sqlExtendedEventsXml=xml,dropped,
+                qualification="raw capture; extraction/coverage validation not yet complete"
+            },new System.Text.Json.JsonSerializerOptions{WriteIndented=true}));
             var root=XDocument.Parse(xml).Root??throw new InvalidDataException("Empty activity SQL profile.");
             var truncated=(string?)root.Attribute("truncated")=="1";
             dropped+=Number((string?)root.Attribute("droppedCount"));
             if(dropped!=0 || truncated)
                 throw new InvalidDataException("Activity SQL profile dropped or truncated evidence.");
+            var commands=new List<Statement>();
             var statements=new List<Statement>();
             var accesses=new List<Access>();
             var plans=0;
@@ -65,12 +80,15 @@ internal static class ActivityHistorySqlProfile
                 var phase=spans.Where(span=>timestamp>=span.Start && timestamp<=span.Start+span.Duration)
                     .OrderBy(span=>span.Duration).Select(span=>span.Name).FirstOrDefault()??"outside-client-span";
                 string? Data(string field)=>item.Elements("data").SingleOrDefault(x=>(string?)x.Attribute("name")==field)?.Element("value")?.Value;
-                if((string?)item.Attribute("name")=="sql_statement_completed")
+                var eventName=(string?)item.Attribute("name");
+                if(eventName is "sql_statement_completed" or "sp_statement_completed" or "rpc_completed" or "sql_batch_completed")
                 {
                     if(Data("logical_reads") is null)
                         throw new InvalidDataException("SQL statement logical reads are missing from the profile.");
-                    statements.Add(new(phase,Number(Data("logical_reads")),Number(Data("physical_reads")),
-                        Number(Data("row_count")),Number(Data("duration"))/1000.0));
+                    var counter=new Statement(eventName,phase,Number(Data("logical_reads")),Number(Data("physical_reads")),
+                        Number(Data("row_count")),Number(Data("duration"))/1000.0);
+                    if(eventName is "rpc_completed" or "sql_batch_completed")commands.Add(counter);
+                    else statements.Add(counter);
                 }
                 else if((string?)item.Attribute("name")=="query_post_execution_showplan")
                 {
@@ -98,14 +116,15 @@ internal static class ActivityHistorySqlProfile
                     }
                 }
             }
-            if(statements.Count==0 || plans==0 || !accesses.Any(x=>x.Table=="MtConnectObservation" && x.ActualRowsRead>0))
-                throw new InvalidDataException("Activity SQL profile lacks statements or actual retained-row access evidence.");
+            if(commands.Count==0 || statements.Count==0 || plans==0 || !accesses.Any(x=>x.Table=="MtConnectObservation" && x.ActualRowsRead>0))
+                throw new InvalidDataException($"Activity SQL profile incomplete: commands={commands.Count}, statements={statements.Count}, plans={plans}, accesses={accesses.Count}, observationRowsReadCounters={accesses.Count(x=>x.Table=="MtConnectObservation" && x.ActualRowsRead>0)}.");
             await File.WriteAllTextAsync(evidenceFile,System.Text.Json.JsonSerializer.Serialize(new {
                 schemaVersion=1,fixture=true,application,sqlExtendedEventsXml=xml,
                 correlation="Server event UTC within the narrowest client diagnostic span; unmatched events are retained explicitly.",
-                statements,accesses,plans,dropped,truncated
+                logicalReadAggregation="RPC/language-batch command totals; nested statement counters retained separately, not added to command totals.",
+                commands,statements,accesses,plans,dropped,truncated
             },new System.Text.Json.JsonSerializerOptions{WriteIndented=true}));
-            return new(statements,accesses,plans,dropped,truncated,evidenceFile);
+            return new(commands,statements,accesses,plans,dropped,truncated,evidenceFile);
         }
         finally
         {
