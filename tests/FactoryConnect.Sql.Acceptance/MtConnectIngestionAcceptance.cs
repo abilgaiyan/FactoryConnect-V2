@@ -401,9 +401,11 @@ internal static class MtConnectIngestionAcceptance
         }
         Check((await atomicStore.ReadCheckpointAsync(trustedCandidate.Qualification))
             .NextGeneration==0 &&
-            (await atomicStore.ReadPeriodPageAsync(trustedCandidate.Qualification))
-                .Rows.Count==0,
-            "rejected historical interpretation leaves no activity effects");
+            Convert.ToInt32(await Scalar("""
+                SELECT COUNT(*) FROM activity.ClosedPeriod
+                WHERE MachineId=@machine AND MappingId=@mapping
+                """,("@machine",machine),("@mapping",currentActivity.Signal.MappingId)))==0,
+            "rejected historical interpretation leaves no activity checkpoint or effects");
         // A delayed source-to-checkpoint write cannot retain a mapping
         // eligibility decision made before a processor lock wait. Hold the
         // exact processor lock, race a new approved current head, then allow
