@@ -1,4 +1,4 @@
-namespace FactoryConnect.Sql.Activity;
+namespace FactoryConnect.Sql.ActivityProcessing;
 
 /// <summary>
 /// Domain-only interpretation of explicitly qualified state evidence. This type does
