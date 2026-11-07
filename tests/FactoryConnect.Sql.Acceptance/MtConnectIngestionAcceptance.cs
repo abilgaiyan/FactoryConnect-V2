@@ -361,7 +361,32 @@ internal static class MtConnectIngestionAcceptance
             await Exec("DROP TRIGGER security.Fixture_IngestBarrier");
         }
         (package,review)=await Package();activation=await Intent();ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
-        agent.Reply=(from,count)=>(200,Frame(from,count),null);var timer=Stopwatch.StartNew();var bulkFrame=await client.AcquireAsync(agent.Endpoint,Device,context.Cursor!.NextSequence,1000);var bulk=new MtConnectIngestionRequest(Guid.NewGuid(),site,machine,context.AcknowledgementId,Stream,context.Cursor.BatchId,context.Cursor.InstanceId,context.Cursor.NextSequence,bulkFrame.RawDocument);await Transport(bulk);timer.Stop();var trace=activities.Last(x=>x.GetTagItem("security.acquisition.ingest") is true&&x.GetTagItem("security.result")?.ToString()=="completed");var trips=Convert.ToInt64(trace.GetTagItem("security.sql.roundtrips"));Check(trips<=30&&timer.Elapsed<TimeSpan.FromSeconds(5),"1000-observation HTTP/TLS/SQL slice uses bounded full-transaction roundtrips and latency");Console.WriteLine($"MEASURE: MTConnect ingestion observations=1000 elapsedMs={timer.Elapsed.TotalMilliseconds:F2} roundtrips={trips}");
+        agent.Reply=(from,count)=>(200,Frame(from,count,activity:true),null);var timer=Stopwatch.StartNew();var bulkFrame=await client.AcquireAsync(agent.Endpoint,Device,context.Cursor!.NextSequence,1000);var bulk=new MtConnectIngestionRequest(Guid.NewGuid(),site,machine,context.AcknowledgementId,Stream,context.Cursor.BatchId,context.Cursor.InstanceId,context.Cursor.NextSequence,bulkFrame.RawDocument);await Transport(bulk);timer.Stop();var trace=activities.Last(x=>x.GetTagItem("security.acquisition.ingest") is true&&x.GetTagItem("security.result")?.ToString()=="completed");var trips=Convert.ToInt64(trace.GetTagItem("security.sql.roundtrips"));Check(trips<=30&&timer.Elapsed<TimeSpan.FromSeconds(5),"1000-observation HTTP/TLS/SQL slice uses bounded full-transaction roundtrips and latency");Console.WriteLine($"MEASURE: MTConnect ingestion observations=1000 elapsedMs={timer.Elapsed.TotalMilliseconds:F2} roundtrips={trips}");
+        var currentActivity=await mappingResolver.ResolveAsync(site,machine,
+            package.Machines[0].Signals.Single(x=>x.SemanticKey=="machine-activity").MappingId,
+            Stream);
+        var firstBulk=bulkFrame.Observations[0].Sequence;
+        var activityObserved=await acceptedReader.ReadBoundedAsync(site,
+            ActivityQualificationIdentity.From(currentActivity.Signal,"discovery-not-continuity"),
+            bulkFrame.InstanceId,firstBulk,firstBulk+3,100);
+        Check(activityObserved.Count==2 &&
+            activityObserved[0].RawValue=="ACTIVE" &&
+            activityObserved[1].RawValue=="READY" &&
+            activityObserved.All(x=>x.BatchId==bulk.OperationId),
+            "approved execution-state signal resolves two actual immutable accepted observations");
+        var trustedCandidate=AcceptedActivityContinuityQualifier.Qualify(
+            currentActivity,activityObserved);
+        var interpretedCandidate=ActivityCheckpointEvaluator.Advance(
+            currentActivity.Signal,trustedCandidate.Qualification,
+            ActivityCheckpointEvaluator.Initial(trustedCandidate.Qualification),
+            trustedCandidate.Samples);
+        Check(trustedCandidate.ProvenInternalLinks==1 &&
+            !trustedCandidate.Samples[0].ContinuityFromPrevious &&
+            trustedCandidate.Samples[1].ContinuityFromPrevious &&
+            interpretedCandidate.ClosedPeriods.Count==1 &&
+            interpretedCandidate.ClosedPeriods[0].State==ActivityState.Running &&
+            interpretedCandidate.ClosedPeriods[0].DurationTicks==TimeSpan.FromSeconds(2).Ticks,
+            "actual accepted activity signals receive conservative same-batch proof without checkpoint publication");
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch
         // transfers and hashes its source document only once, not 100 times.
@@ -424,9 +449,33 @@ internal static class MtConnectIngestionAcceptance
         async Task<bool> Race(MtConnectIngestionRequest r){try{await writer.IngestMtConnectAsync(pair.Channel,r);return true;}catch(SecurityConflictException){return false;}}
         async Task Conflict(Func<Task> action,string name){try{await action();}catch(SecurityConflictException){Check(true,name);return;}throw new InvalidOperationException(name);}
         async Task<long> Count(string table)=>Convert.ToInt64(await Scalar("SELECT COUNT_BIG(*) FROM "+table));
-        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false)
+        byte[] Frame(ulong from,int count,ulong instance=7,ulong first=100,string device=Device,bool changed=false,bool activity=false)
         {
-            var xml=new XElement("MTConnectStreams",new XElement("Header",new XAttribute("instanceId",instance),new XAttribute("firstSequence",first),new XAttribute("lastSequence",from+(ulong)count-1),new XAttribute("nextSequence",from+(ulong)count)),new XElement("Streams",new XElement("DeviceStream",new XAttribute("uuid",device),new XElement("ComponentStream",new XElement("Samples",Enumerable.Range(0,count).Select(i=>{var sequence=from+(ulong)i;return new XElement("PartCount",new XAttribute("dataItemId",sequence%2==0?"Counter":"counter"),new XAttribute("timestamp",stamp),new XAttribute("sequence",sequence),changed&&sequence==100?"999":sequence==100?" 00042 ":sequence==102?"UNAVAILABLE":sequence.ToString(CultureInfo.InvariantCulture));}))))));return Encoding.UTF8.GetBytes(xml.ToString(SaveOptions.DisableFormatting));
+            var samples=Enumerable.Range(0,count).Where(i=>!activity||i is not (1 or 3))
+                .Select(i=>{
+                    var sequence=from+(ulong)i;
+                    return new XElement("PartCount",
+                        new XAttribute("dataItemId",sequence%2==0?"Counter":"counter"),
+                        new XAttribute("timestamp",stamp),new XAttribute("sequence",sequence),
+                        changed&&sequence==100?"999":sequence==100?" 00042 ":
+                        sequence==102?"UNAVAILABLE":sequence.ToString(CultureInfo.InvariantCulture));
+                });
+            var component=new XElement("ComponentStream",new XElement("Samples",samples));
+            if(activity)
+            {
+                component.Add(new XElement("Events",new[]{1,3}.Where(i=>i<count).Select(i=>
+                    new XElement("Execution",new XAttribute("dataItemId","execution"),
+                        new XAttribute("timestamp",now.AddSeconds(i).ToString("O",CultureInfo.InvariantCulture)),
+                        new XAttribute("sequence",from+(ulong)i),i==1?"ACTIVE":"READY"))));
+            }
+            var xml=new XElement("MTConnectStreams",
+                new XElement("Header",new XAttribute("instanceId",instance),
+                    new XAttribute("firstSequence",first),
+                    new XAttribute("lastSequence",from+(ulong)count-1),
+                    new XAttribute("nextSequence",from+(ulong)count)),
+                new XElement("Streams",new XElement("DeviceStream",
+                    new XAttribute("uuid",device),component)));
+            return Encoding.UTF8.GetBytes(xml.ToString(SaveOptions.DisableFormatting));
         }
         async Task<MtConnectIngestionRequest> Request(MtConnectSampleFrame frame){var current=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);var from=frame.Observations.Count>0?frame.Observations[0].Sequence:current.Cursor?.NextSequence??frame.FirstSequence;return new(Guid.NewGuid(),site,machine,current.AcknowledgementId,Stream,current.Cursor?.BatchId,current.Cursor?.InstanceId,from,frame.RawDocument);}
         async Task<byte[]> Transport(MtConnectIngestionRequest request)
