@@ -86,6 +86,41 @@ internal static class MtConnectIngestionAcceptance
             Check(permittedMachines.Count==1&&permittedMachines[0].SiteId==site
                 &&permittedMachines[0].MachineId==machine,
                 "verified human sees only currently authorized machine in bounded operator roster");
+            // Sparse-access performance regression: one machine grant among 1,200
+            // unrelated same-site machines must cost one inventory command, not
+            // proportional discovery pages. This runs on disposable SQL only.
+            await Exec("""
+                INSERT [master].Machine(MachineId,SiteId,DisplayName)
+                SELECT TOP (1200) NEWID(),@site,N'Sparse discovery fixture'
+                FROM sys.all_objects a CROSS JOIN sys.all_objects b;
+                """,("@site",site));
+            Check(Convert.ToInt32(await Scalar(
+                "SELECT COUNT(*) FROM [master].Machine WHERE SiteId=@site AND DisplayName=N'Sparse discovery fixture'",
+                ("@site",site)))==1200,"sparse fixture retains 1200 unauthorized same-site machines");
+            var sparseActivities=new List<Activity>();
+            using(var sparseListener=new ActivityListener
+            {
+                ShouldListenTo=s=>s.Name=="FactoryConnect.V2.Security",
+                Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped=a=>{lock(sparseActivities)sparseActivities.Add(a);}
+            })
+            {
+                ActivitySource.AddActivityListener(sparseListener);
+                var sparseClock=Stopwatch.StartNew();
+                var sparse=await writer.ReadOperatorEvidenceMachinesAsync(issuedHash,site);
+                sparseClock.Stop();
+                Check(sparse.Count==1&&sparse[0].MachineId==machine,
+                    "one-machine operator does not discover 1200 unauthorized same-site machines");
+                Activity[] observed;
+                lock(sparseActivities)observed=sparseActivities
+                    .Where(a=>a.OperationName=="security.transaction").ToArray();
+                Check(observed.Length==1&&observed[0].GetTagItem("security.sql.roundtrips") is not null
+                    &&Convert.ToInt64(observed[0].GetTagItem("security.sql.roundtrips"))<=12,
+                    "sparse one-machine discovery SQL roundtrips are independent of site size");
+                Console.WriteLine($"MEASURE: operator sparse siteMachines=1202 visible=1 elapsedMs={sparseClock.Elapsed.TotalMilliseconds:F2} sqlRoundtrips={Convert.ToInt64(observed.Single().GetTagItem("security.sql.roundtrips"))}");
+            }
+            await Exec("DELETE [master].Machine WHERE SiteId=@site AND DisplayName=N'Sparse discovery fixture'",
+                ("@site",site));
             // A full 100-machine visible roster must stay query-bounded. Historical
             // revoked grants must not consume the visible-machine limit.
             var rosterMachines=Enumerable.Range(0,98).Select(_=>Guid.NewGuid()).ToArray();
