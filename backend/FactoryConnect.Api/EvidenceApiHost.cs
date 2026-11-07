@@ -160,6 +160,8 @@ app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/evidence", async (
     finally { CryptographicOperations.ZeroMemory(sessionHash); }
 });
 
+app.MapActivityHistory();
+
 app.MapMethods("/api/{**path}", ["GET", "POST"], NotReady);
 app.MapFallbackToFile("index.html");
 return app;

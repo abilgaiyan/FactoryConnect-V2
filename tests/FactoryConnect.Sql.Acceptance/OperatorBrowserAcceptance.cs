@@ -24,7 +24,7 @@ internal static class OperatorBrowserAcceptance
 {
     sealed record Login(string Redirect,string State,string Nonce,string Challenge,string Client);
     internal static async Task<int> Run(string sql,Guid installation,Guid site,Guid machine,
-        byte[] adminToken,Func<Task<long>> epoch)
+        byte[] adminToken,Func<Task<long>> epoch,Guid? activityMapping=null)
     {
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(120));
         var ct=deadline.Token;
@@ -52,7 +52,8 @@ internal static class OperatorBrowserAcceptance
             var password=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             var pending=new ConcurrentDictionary<string,Login>();
             var codes=new ConcurrentDictionary<string,Login>();
-            var mode="bad-audience";
+            var mode=activityMapping.HasValue?"valid":"bad-audience";
+            var subject=activityMapping.HasValue?"activity-browser-operator":"browser-operator";
             var callback="";
             const string issuer="https://certificate.fixture/tenant";
             var providerAddress="";
@@ -97,7 +98,7 @@ internal static class OperatorBrowserAcceptance
                     return Results.Unauthorized();
                 var now=DateTimeOffset.UtcNow;
                 var token=new JwtSecurityToken(mode=="bad-issuer"?"https://wrong-issuer.invalid":issuer,mode=="bad-audience"?"wrong-client":login.Client,
-                    [new("sub","browser-operator"),new("nonce",mode=="bad-nonce"?"incorrect-nonce":login.Nonce),new("jti",Guid.NewGuid().ToString("N")),
+                    [new("sub",subject),new("nonce",mode=="bad-nonce"?"incorrect-nonce":login.Nonce),new("jti",Guid.NewGuid().ToString("N")),
                      new("iat",(mode=="expired"?now.AddMinutes(-10):now).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),System.Security.Claims.ClaimValueTypes.Integer64)],
                     (mode=="expired"?now.AddMinutes(-10):now.AddSeconds(-1)).UtcDateTime,(mode=="expired"?now.AddMinutes(-5):now.AddMinutes(3)).UtcDateTime,new SigningCredentials(mode=="bad-signature"?new RsaSecurityKey(wrongSigningKey){KeyId="browser-fixture-key"}:securityKey,SecurityAlgorithms.RsaSha256));
                 return Results.Json(new{access_token="unused-fixture-access-token",token_type="Bearer",expires_in=180,id_token=new JwtSecurityTokenHandler().WriteToken(token)});
@@ -105,7 +106,7 @@ internal static class OperatorBrowserAcceptance
             await provider.StartAsync(ct);providerAddress=provider.Urls.Single();
             var authority=new SqlSecurityAuthority(sql,installation);
             var principal=Guid.NewGuid();
-            await authority.EnrollHumanAsync(adminToken,new(Guid.NewGuid(),principal,issuer,"browser-operator",await epoch(),"enroll isolated browser operator"));
+            await authority.EnrollHumanAsync(adminToken,new(Guid.NewGuid(),principal,issuer,subject,await epoch(),"enroll isolated browser operator"));
             await using var connection=new SqlConnection(sql);await connection.OpenAsync(ct);
             await using var parentCommand=new SqlCommand("SELECT g.GrantId FROM security.PermissionGrant g JOIN security.SessionAuthority s ON s.PrincipalId=g.GranteeId WHERE s.TokenHash=@token AND g.Permission='commissioning.read'",connection);
             parentCommand.Parameters.AddWithValue("@token",adminToken);
@@ -126,10 +127,11 @@ internal static class OperatorBrowserAcceptance
                     ["Identity:Authority"]=issuer,["Identity:ClientId"]="fc2-browser",["Identity:ClientSecret"]=clientSecret});
             }, Path.GetFullPath("dist"));
             await api.StartAsync(ct);var address=api.Urls.Single();callback=address+"/signin-oidc";
-            var info=new ProcessStartInfo("node","scripts/ci/operator-browser.mjs"){
+            var info=new ProcessStartInfo("node",activityMapping.HasValue?"scripts/ci/activity-browser.mjs":"scripts/ci/operator-browser.mjs"){
                 RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,UseShellExecute=false};
             info.Environment["FC2_BROWSER_URL"]=address;
             info.Environment["FC2_BROWSER_MACHINE"]=machine.ToString();
+            info.Environment["FC2_BROWSER_MAPPING"]=activityMapping?.ToString();
             info.Environment["FC2_BROWSER_PASSWORD"]=password;
             info.Environment["FC2_BROWSER_SPKI"]=Convert.ToBase64String(SHA256.HashData(serverKey.ExportSubjectPublicKeyInfo()));
             using var child=Process.Start(info)!;
@@ -160,7 +162,7 @@ internal static class OperatorBrowserAcceptance
                     await child.StandardInput.WriteLineAsync("continue");await child.StandardInput.FlushAsync(ct);
                 }
                 await child.WaitForExitAsync(ct);
-                if(child.ExitCode!=0||stages!=8)throw new InvalidOperationException("Browser acceptance failed: "+await errors);
+                if(child.ExitCode!=0||stages!=(activityMapping.HasValue?3:8))throw new InvalidOperationException("Browser acceptance failed: "+await errors);
                 return stages;
             }
             finally{if(!child.HasExited)child.Kill(true);}

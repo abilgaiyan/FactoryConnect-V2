@@ -82,3 +82,17 @@ Finish the evidence-processing PR before developer-machine setup. The remaining 
 `5a7fa67a` passed [CI #42404994189](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42404994189): all three jobs, 188 dedicated performance-run checks, 1,126 full SQL checks without skips, and unchanged crash/corruption/replay coverage. Six cached/refreshed plans at 35/147/1,043 retained batches used seeks and 12 batch rows read, with 212 observation rows read per tail cut. The updated 1,031-period oracle matched. An isolated 640-cut worker plateaued near 1.55 MiB live managed memory and 123 MiB working set after warmup, without ingestion/profiler retention. The two scoped performance gates are accepted; detailed data and limitations are in the implementation contract.
 
 This evidence-processing slice is qualified for final-head CI/review and squash merge through PR #34. Developer-machine setup follows completion of that PR. Activity API/authenticated UI, production worker hosting, stronger cross-batch acquisition assurance and production commissioning remain separate roadmap increments; none is enabled by this merge.
+
+## FC2-034 merged; FC2-035 operator history delivery
+
+PR #34 squash merged at `f81837b1`. Final CI #42405857037 passed backend/dashboard,
+1,126 full SQL checks without skips and 188 performance-run checks. The evidence
+processing slice is closed; production worker hosting and commissioning remain open.
+
+The next authorized increment is [FC2-035 operator activity history](../implementation/FC2-035-operator-activity-history.md):
+read-only HTTPS pages of committed periods, existing OIDC/machine authority,
+immutable publication verification, bounded keyset navigation and actual browser
+acceptance. Its CI qualification is pending. No HTTP-triggered processing or
+production enablement is introduced. After operator delivery, continue the roadmap
+with explicit worker hosting qualification, production quantity inputs and
+incremental shift metrics; local developer setup proceeds separately with the user.

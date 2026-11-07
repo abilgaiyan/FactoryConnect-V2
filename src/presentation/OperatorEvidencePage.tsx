@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { readOperatorEvidenceMachines, type OperatorEvidenceMachine } from "../api/evidence/operator-evidence-machines-client.ts";
+import { PublishedMachineActivity } from "./PublishedMachineActivity.tsx";
 import { RetainedMachineEvidence } from "./RetainedMachineEvidence.tsx";
 
 export function OperatorEvidencePage({
@@ -42,8 +43,10 @@ export function OperatorEvidencePage({
           <option value="">Select machine</option>
           {visible.machines.map(m => <option key={m.machineId} value={m.machineId}>{m.displayName} ({m.machineId})</option>)}
         </select>
-        {machine && <RetainedMachineEvidence key={machine.machineId} machineId={machine.machineId}
-          baseAddress={baseAddress} sessionBearer={visible.bearer} />}
+        {machine && <div key={machine.machineId}>
+          <PublishedMachineActivity machineId={machine.machineId} baseAddress={baseAddress} sessionBearer={visible.bearer} />
+          <RetainedMachineEvidence machineId={machine.machineId} baseAddress={baseAddress} sessionBearer={visible.bearer} />
+        </div>}
       </>)}
   </section>;
 }

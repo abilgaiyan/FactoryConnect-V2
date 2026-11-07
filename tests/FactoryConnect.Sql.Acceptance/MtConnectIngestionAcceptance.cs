@@ -481,6 +481,8 @@ internal static class MtConnectIngestionAcceptance
             JsonSerializer.Serialize(persisted.Rows[0].Period)==JsonSerializer.Serialize(committed.NewPeriods[0]) &&
             await Count("activity.ProcessorOperation")==1,
             "eligible ingestion commits exact qualified period checkpoint and replay receipt once");
+        if(Environment.GetEnvironmentVariable("FC2_BROWSER_ACCEPTANCE")=="1")
+            count+=await OperatorBrowserAcceptance.Run(target.ConnectionString,target.InstallationId,site,machine,rootToken,Epoch,currentActivity.Signal.MappingId);
         // A new accepted batch is processed in two cuts by reconstructed stores.
         // Its first sample must not bridge the prior batch; its second cut may
         // link to the verified predecessor in that same immutable document.
@@ -637,6 +639,8 @@ internal static class MtConnectIngestionAcceptance
             site,machine,currentActivity.Signal.MappingId,Stream,continuationFrame.InstanceId,
             continuationFrom+1,continuationFrom+3,2)).Replayed,
             "continued source cut replays its immutable receipt without duplicate effects");
+        count+=await ActivityHistoryHttpAcceptance.Run(target.ConnectionString,target.InstallationId,site,machine,otherMachine,
+            currentActivity.Signal.MappingId,rootToken,Epoch);
         // Seed original HTTP/mTLS-accepted source documents before child lifetimes.
         async Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>> ProcessSource(
             int seconds,bool repeated=false)
@@ -678,6 +682,8 @@ internal static class MtConnectIngestionAcceptance
             count+=await ActivityHistoryMeasurementAcceptance.RunAsync(target,site,currentActivity,
                 eligibleCut.Qualification,processPending,HistorySource);
             count+=await ActivityWorkerMemoryAcceptance.RunAsync(target,site,eligibleCut.Qualification,HistorySource);
+            count+=await ActivityHistoryHttpAcceptance.Run(target.ConnectionString,target.InstallationId,site,machine,otherMachine,
+                currentActivity.Signal.MappingId,rootToken,Epoch);
         }
         var latest=await writer.ReadMtConnectEvidenceAsync(token,site,machine,Stream,100);Check(latest.Count==100,"latest accepted evidence read is explicitly bounded");
         // An accepted 100-observation read sharing one acquisition batch

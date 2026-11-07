@@ -134,7 +134,7 @@ public sealed class SqlActivityProcessorStore(string connectionString)
             acceptedThrough=accepted?.ThroughSequence
         });
         var requestHash=SHA256.HashData(request);
-        var resource=$"fc2:activity:{identity.MachineId:N}:{identity.MappingId:N}:{Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(identity.StreamKey)))}";
+        var resource=ProcessorLockResource(identity.MachineId,identity.MappingId,identity.StreamKey);
         await using var c=new SqlConnection(connectionString);
         if(activity is not null)c.StatisticsEnabled=true;
         await c.OpenAsync(ct);
@@ -729,7 +729,10 @@ public sealed class SqlActivityProcessorStore(string connectionString)
     private static byte[] QualificationHash(ActivityQualificationIdentity identity)
         => SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(identity));
 
-    private static Guid PeriodEffect(ActivityQualificationIdentity identity,ClosedActivityPeriod period)
+    internal static string ProcessorLockResource(Guid machine,Guid mapping,string stream)
+        => $"fc2:activity:{machine:N}:{mapping:N}:{Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(stream)))}";
+
+    internal static Guid PeriodEffect(ActivityQualificationIdentity identity,ClosedActivityPeriod period)
     {
         var bytes=JsonSerializer.SerializeToUtf8Bytes(new {
             identity,period.InstanceId,period.StartSequence,period.EndSequence
