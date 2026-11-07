@@ -3,8 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Xml;
-using System.Xml.Linq;
+using FactoryConnect.Protocols.MTConnect;
 using Microsoft.Data.SqlClient;
 
 namespace FactoryConnect.Sql.ActivityProcessing;
@@ -78,8 +77,7 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                 DecimalParam(command,"@after",afterSequence);
                 DecimalParam(command,"@through",throughSequence);
                 command.Parameters.Add("@take",SqlDbType.Int).Value=take+1;
-                await using var reader=await command.ExecuteReaderAsync(
-                    CommandBehavior.SequentialAccess,ct);
+                await using var reader=await command.ExecuteReaderAsync(ct);
                 while(await reader.ReadAsync(ct))
                 {
                     if(pending.Count==take)
@@ -114,7 +112,7 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                     // independently verified immutable XML document below.
                     ValidateCanonical(canonical,sequence,identity.SourceAddress,rawValue);
                     pending.Add(new(site,machine,instance,sequence,batchId,
-                        mapping,observed,rawValue,quality,timestamp,
+                        mapping,observed,rawValue,quality,timestamp,canonical,
                         Convert.ToHexString(hash)));
                 }
             }
@@ -134,8 +132,7 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                             WITH(BatchId uniqueidentifier '$'))
                     """,connection,tx);
                 command.Parameters.Add("@batchIds",SqlDbType.NVarChar,-1).Value=idsJson;
-                await using var reader=await command.ExecuteReaderAsync(
-                    CommandBehavior.SequentialAccess,ct);
+                await using var reader=await command.ExecuteReaderAsync(ct);
                 while(await reader.ReadAsync(ct))
                 {
                     var batchId=reader.GetGuid(0);
@@ -155,8 +152,20 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                        instance!=instanceId||from>next||first>from||
                        !CryptographicOperations.FixedTimeEquals(SHA256.HashData(raw),hash))
                         throw new InvalidDataException("Accepted batch scope, frontier or digest mismatch.");
+                    // The existing bounded MTConnect parser is the canonical
+                    // authority for source fields. Parse each distinct, verified
+                    // batch once, then reuse its indexed observations for this cut.
+                    const string prefix="mtconnect:uuid:";
+                    if(!identity.StreamKey.StartsWith(prefix,StringComparison.Ordinal))
+                        throw new InvalidDataException("Unsupported accepted source stream.");
+                    var device=identity.StreamKey[prefix.Length..];
+                    var parsed=MtConnectSampleParser.Parse(raw,device,from);
+                    if(parsed.InstanceId!=instance || parsed.FirstSequence!=first ||
+                       parsed.NextSequence!=next)
+                        throw new InvalidDataException("Retained batch headers disagree with verified document.");
+                    var bySequence=parsed.Observations.ToDictionary(x=>x.Sequence);
                     if(!batches.TryAdd(batchId,new(batchId,acknowledgementId,instance,
-                        from,next,first,raw,Convert.ToHexString(hash))))
+                        from,next,first,bySequence,Convert.ToHexString(hash))))
                         throw new InvalidDataException("Duplicate accepted batch identity.");
                 }
                 if(batches.Count!=batchIds.Length)
@@ -169,9 +178,17 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                    projected.Sequence<batch.From||projected.Sequence>=batch.Next||
                    projected.InstanceId!=batch.Instance)
                     throw new InvalidDataException("Accepted batch cannot authorize observation frontier.");
-                ValidateAgainstDocument(batch.RawDocument,identity.StreamKey,
-                    projected.Sequence,identity.SourceAddress,projected.ObservedAt,
-                    projected.RawValue,projected.Quality,projected.SourceTimestamp);
+                if(!batch.BySequence.TryGetValue(projected.Sequence,out var source) ||
+                   !string.Equals(source.DataItemId,identity.SourceAddress,StringComparison.Ordinal) ||
+                   !string.Equals(source.RawValue,projected.RawValue,StringComparison.Ordinal) ||
+                   !string.Equals(source.Quality,projected.Quality,StringComparison.Ordinal) ||
+                   !string.Equals(source.SourceTimestamp,projected.SourceTimestamp,StringComparison.Ordinal) ||
+                   source.Timestamp!=projected.ObservedAt ||
+                   !ExactUtf8.GetBytes(source.CanonicalJson).AsSpan()
+                       .SequenceEqual(projected.CanonicalBytes) ||
+                   !string.Equals(source.ContentHash,projected.CanonicalSha256,StringComparison.Ordinal))
+                    throw new InvalidDataException(
+                        "Accepted observation projection disagrees with authenticated source document.");
                 rows.Add(new(projected.SiteId,projected.MachineId,identity.StreamKey,
                     projected.MappingId,identity.SourceAddress,projected.InstanceId,
                     projected.Sequence,projected.BatchId,batch.AcknowledgementId,
@@ -192,9 +209,10 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
     private sealed record ObservationProjection(
         Guid SiteId,Guid MachineId,ulong InstanceId,ulong Sequence,Guid BatchId,
         Guid MappingId,DateTimeOffset ObservedAt,string RawValue,string Quality,
-        string SourceTimestamp,string CanonicalSha256);
+        string SourceTimestamp,byte[] CanonicalBytes,string CanonicalSha256);
     private sealed record VerifiedBatch(Guid BatchId,Guid AcknowledgementId,
-        ulong Instance,ulong From,ulong Next,ulong First,byte[] RawDocument,
+        ulong Instance,ulong From,ulong Next,ulong First,
+        IReadOnlyDictionary<ulong,MtConnectSampleObservation> BySequence,
         string DocumentSha256);
 
     private static void ValidateCanonical(
@@ -227,48 +245,6 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
         }
     }
 
-    private static void ValidateAgainstDocument(
-        byte[] raw,string stream,ulong sequence,string address,
-        DateTimeOffset observed,string rawValue,string quality,string sourceTimestamp)
-    {
-        // The document is already SHA-verified. Its source header supplies the
-        // trusted instance/window; the original element supplies timestamp and
-        // exact quality semantics missing from canonical observation JSON.
-        try
-        {
-            using var input=new MemoryStream(raw,false);
-            using var xml=XmlReader.Create(input,new XmlReaderSettings{
-                DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null,
-                MaxCharactersInDocument=1048576});
-            var document=XDocument.Load(xml);
-            var device=stream.StartsWith("mtconnect:uuid:",StringComparison.Ordinal)
-                ?stream["mtconnect:uuid:".Length..]:throw new InvalidDataException(
-                    "Unsupported exact MTConnect stream.");
-            var devices=document.Descendants().Where(x=>x.Name.LocalName=="DeviceStream").ToArray();
-            if(devices.Length!=1||
-               !string.Equals((string?)devices[0].Attribute("uuid"),device,
-                   StringComparison.Ordinal))
-                throw new InvalidDataException("Source document device differs from projection.");
-            var matches=devices[0].Descendants()
-                .Where(x=>(string?)x.Attribute("sequence")==
-                    sequence.ToString(CultureInfo.InvariantCulture)).Take(2).ToArray();
-            if(matches.Length!=1||!string.Equals(
-                   (string?)matches[0].Attribute("dataItemId"),address,
-                   StringComparison.Ordinal)||
-               !string.Equals(matches[0].Value,rawValue,StringComparison.Ordinal)||
-               !string.Equals((string?)matches[0].Attribute("timestamp"),
-                   sourceTimestamp,StringComparison.Ordinal))
-                throw new InvalidDataException("Accepted source projection differs from verified document.");
-            var parsed=XmlConvert.ToDateTimeOffset(sourceTimestamp).ToUniversalTime();
-            if(parsed!=observed||observed.Offset!=TimeSpan.Zero||
-               quality!=(rawValue=="UNAVAILABLE"?"unavailable":"source-reported"))
-                throw new InvalidDataException("Accepted timestamp or quality differs from verified source.");
-        }
-        catch(Exception ex) when(ex is XmlException or FormatException)
-        {
-            throw new InvalidDataException("Invalid retained MTConnect document or timestamp.",ex);
-        }
-    }
     private static void DecimalParam(SqlCommand command,string name,ulong value)
     {
         var parameter=command.Parameters.Add(name,SqlDbType.Decimal);
