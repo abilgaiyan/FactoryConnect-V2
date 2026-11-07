@@ -29,6 +29,7 @@ try {
   async function accepted() {
     await login();
     await page.getByLabel('Authorized machine', { exact: true }).selectOption(process.env.FC2_BROWSER_MACHINE);
+    await expect(page.getByText(/^No published activity history for this machine/)).toBeVisible();
     await expect(page.locator('tbody code').filter({ hasText: '00042' })).toHaveText(' 00042 ');
     await expect(page.locator('details').first()).toContainText('Source document SHA-256');
     const session = await page.evaluate(async () => (await fetch('/api/security/v2/session')).json());

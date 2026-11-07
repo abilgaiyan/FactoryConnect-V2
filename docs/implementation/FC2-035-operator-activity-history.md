@@ -59,9 +59,11 @@ Discovery never loads all historical periods. No migration is needed.
 
 Local validation includes build, lint, frontend contract/mounted tests and pure
 backend checks. New disposable-SQL HTTP acceptance exercises authorized pages,
-keyset continuation, wrong-machine denial, cursor scope rejection, exact values,
+keyset continuation including an oldest-history cursor, wrong-machine denial, cursor scope rejection, exact values,
 period/ancestry corruption, aggregate byte rejection, revocation and unchanged
-checkpoint/receipt counts. It also runs after the large-history fixture.
+checkpoint/receipt counts. A controlled separate connection holds the processor
+gate while a currently valid short-lived human session expires; SQL blocking
+evidence must prove a genuine wait before release and denial. It also runs after the large-history fixture.
 
 The Chromium fixture reuses the test-only signed OIDC code/PKCE provider over real
 HTTPS and actual SQL. It renders an accepted-source period, source values and

@@ -82,12 +82,29 @@ internal static class ActivityHistoryHttpAcceptance
             using var secondJson=JsonDocument.Parse(await second.Content.ReadAsStringAsync());
             Check(second.StatusCode==HttpStatusCode.OK && secondJson.RootElement.GetProperty("rows")[0].GetProperty("effectId").GetGuid()!=row.GetProperty("effectId").GetGuid(),
                 "keyset continuation returns a distinct older exact period");
+            string deepCursor;
+            await using(var deep=new SqlCommand("SELECT EffectId,StartedAt,InstanceId,StartSequence FROM activity.ClosedPeriod WHERE MachineId=@machine AND MappingId=@mapping ORDER BY StartedAt,InstanceId,StartSequence,EffectId OFFSET 1 ROWS FETCH NEXT 1 ROWS ONLY",c))
+            {
+                // A real old position simulates a cursor obtained by earlier bounded browsing.
+                deep.Parameters.AddWithValue("@machine",machine);deep.Parameters.AddWithValue("@mapping",mapping);
+                await using var r=await deep.ExecuteReaderAsync();
+                Check(await r.ReadAsync(),"history fixture has a real deep keyset position");
+                deepCursor=Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new {
+                    MachineId=machine,StreamKey="mtconnect:uuid:fixture-device",MappingId=mapping,
+                    Qualification=sj.RootElement.GetProperty("series")[0].GetProperty("qualificationSha256").GetString(),
+                    StartedAt=r.GetDateTimeOffset(1).ToString("O",System.Globalization.CultureInfo.InvariantCulture),
+                    InstanceId=r.GetDecimal(2).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    StartSequence=r.GetDecimal(3).ToString(System.Globalization.CultureInfo.InvariantCulture),EffectId=r.GetGuid(0)
+                })).TrimEnd('=').Replace('+','-').Replace('/','_');
+            }
             Directory.CreateDirectory("artifacts/ingestion");
             var profile=await ActivityHistorySqlProfile.CaptureAsync(c,appName,async()=> {
                 var start=DateTimeOffset.UtcNow;
                 using var discovery=await Get(list);
                 using var head=await Get(page+"?take=1");
-                using var older=await Get(page+"?take=1&cursor="+Uri.EscapeDataString(cursor));
+                using var older=await Get(page+"?take=1&cursor="+Uri.EscapeDataString(deepCursor));
+                using var deepResult=JsonDocument.Parse(await older.Content.ReadAsStringAsync());
+                Check(deepResult.RootElement.GetProperty("rows").GetArrayLength()==1 && deepResult.RootElement.GetProperty("nextCursor").ValueKind==JsonValueKind.Null,"deep keyset read returns the oldest exact retained publication");
                 Check(discovery.IsSuccessStatusCode&&head.IsSuccessStatusCode&&older.IsSuccessStatusCode,"profiled discovery and keyset pages return verified publications");
                 return new[]{new ActivityHistoryMeasurementAcceptance.Span("http-history",start,DateTimeOffset.UtcNow-start,new Dictionary<string,object?>())};
             },$"artifacts/ingestion/activity-http-profile-{before}.json","ClosedPeriod");
