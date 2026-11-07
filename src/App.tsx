@@ -51,6 +51,7 @@ export function App({ runtime }: AppProps) {
     configuration: runtime.configuration,
     reportingClient: runtime.reportingClient,
     currentStateClient: runtime.currentStateClient,
+    ...(runtime.now ? { now: runtime.now } : {}),
   };
   useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); }, [runtime.evidenceSession]);
   const returnToOverview = overviewReturn(window.location.search, runtime.configuration.sources);
