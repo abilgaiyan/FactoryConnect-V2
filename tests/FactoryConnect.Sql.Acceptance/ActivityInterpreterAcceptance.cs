@@ -160,6 +160,24 @@ internal static class ActivityInterpreterAcceptance
         Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
             firstPart.Checkpoint,[Sample(102,10,"READY")]),
             "equal-timestamp contradiction across batch restart is rejected");
+        // Regression: a persisted open anchor at sequence 100 must never
+        // survive a later last-consumed sample that declares a continuity break.
+        // Roundtrip through the persisted JSON shape to exercise restart input.
+        var brokenCheckpoint=firstPart.Checkpoint with {
+            LastConsumedSample=Sample(101,10,"ACTIVE",continuous:false)
+        };
+        var brokenJson=System.Text.Json.JsonSerializer.Serialize(brokenCheckpoint);
+        var brokenRestored=System.Text.Json.JsonSerializer.Deserialize<ActivityProcessorCheckpoint>(brokenJson)!;
+        Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
+            brokenRestored,[Sample(102,20,"READY")]),
+            "reconstructed checkpoint cannot bridge a last-sample continuity break");
+        Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
+            brokenRestored,[]),
+            "even an empty resumed batch rejects an invalid open continuity chain");
+        var singleSampleCheckpoint=ActivityCheckpointEvaluator.Advance(configured,identity,
+            initial,[Sample(100,0,"ACTIVE",continuous:false)]);
+        Check(singleSampleCheckpoint.Checkpoint.OpenAnchor==singleSampleCheckpoint.Checkpoint.LastConsumedSample,
+            "initial open anchor may be the same source sample with no predecessor continuity");
         Reject(()=>ActivityCheckpointEvaluator.Advance(configured,identity,
             firstPart.Checkpoint with { LastConsumedSample=Sample(101,10,"READY") },
             [Sample(102,20,"READY")]),
