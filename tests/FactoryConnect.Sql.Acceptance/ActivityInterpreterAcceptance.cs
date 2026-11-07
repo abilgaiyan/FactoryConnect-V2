@@ -6,7 +6,9 @@ internal static class ActivityInterpreterAcceptance
     {
         var count=0;
         var mapping=Guid.NewGuid();
-        var configured=new QualifiedActivitySignal(mapping,"execution",
+        var machineId=Guid.NewGuid();
+        const string streamKey="mtconnect:uuid:activity-fixture";
+        var configured=new QualifiedActivitySignal(machineId,streamKey,mapping,"execution",
             new Dictionary<string,ActivityState>(StringComparer.Ordinal)
             {
                 ["ACTIVE"]=ActivityState.Running,
@@ -17,7 +19,7 @@ internal static class ActivityInterpreterAcceptance
         ActivityInputSample Sample(ulong sequence,int seconds,string value,
             bool continuous=true,ulong instance=7,string quality="source-reported",
             Guid? map=null,string address="execution")
-            => new(map??mapping,address,instance,sequence,from.AddSeconds(seconds),
+            => new(machineId,streamKey,map??mapping,address,instance,sequence,from.AddSeconds(seconds),
                 value,quality,continuous);
         void Check(bool condition,string label)
         {
@@ -69,7 +71,7 @@ internal static class ActivityInterpreterAcceptance
             reset.ClosedPeriods[0].State==ActivityState.Idle,
             "instance change fences old state");
 
-        var counters=new QualifiedActivitySignal(mapping,"Counter",
+        var counters=new QualifiedActivitySignal(machineId,streamKey,mapping,"Counter",
             new Dictionary<string,ActivityState>(StringComparer.Ordinal)
             {["ACTIVE"]=ActivityState.Running});
         Check(MachineActivityInterpreter.Evaluate(counters,
@@ -93,6 +95,18 @@ internal static class ActivityInterpreterAcceptance
             [Sample(100,0,"ACTIVE",address:"Execution")]),
             "case-folded address cannot substitute exact identity");
 
+        Reject(()=>MachineActivityInterpreter.Evaluate(configured,
+            [Sample(100,0,"ACTIVE") with { MachineId=Guid.NewGuid() }]),
+            "different machine cannot share state history");
+        Reject(()=>MachineActivityInterpreter.Evaluate(configured,
+            [Sample(100,0,"ACTIVE") with { StreamKey="mtconnect:uuid:other" }]),
+            "different stream cannot share state history");
+        var caseInsensitive=new QualifiedActivitySignal(machineId,streamKey,mapping,"execution",
+            new Dictionary<string,ActivityState>(StringComparer.OrdinalIgnoreCase)
+            {["ACTIVE"]=ActivityState.Running});
+        Check(MachineActivityInterpreter.Evaluate(caseInsensitive,
+            [Sample(100,0,"active"),Sample(101,5,"ACTIVE")]).UnqualifiedSamples==1,
+            "case-insensitive caller mapping never changes exact raw-value interpretation");
         Check(MachineActivityInterpreter.Evaluate(configured,[]).ClosedPeriods.Count==0,
             "no retained evidence produces no invented activity");
 
