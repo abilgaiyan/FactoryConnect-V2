@@ -42,7 +42,7 @@ test("authority failure does not display cached values", async t => {
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
   globalThis.fetch = async () => new Response("", { status: 503 });
-  const h = await mountInDom(React.createElement(RetainedMachineEvidence, { machineId, baseAddress: "https://localhost/", sessionBearer: "fixture-session" }));
+  const h = await mountInDom(React.createElement(RetainedMachineEvidence, { machineId, baseAddress: "https://localhost/", sessionBearer: "fixture-session" }), "https://localhost/");
   t.after(() => h.dispose());
   assert.match(h.document.querySelector("[role=alert]").textContent, /unavailable/);
   assert.equal(h.document.querySelector("tbody"), null);
