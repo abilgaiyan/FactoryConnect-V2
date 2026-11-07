@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { CommissioningPage } from "./presentation/CommissioningPage.tsx";
+import { issueHumanSession, HumanSessionFailure } from "./api/security/human-session-client.ts";
 import { OperatorEvidencePage } from "./presentation/OperatorEvidencePage.tsx";
 import { RetainedMachineEvidence } from "./presentation/RetainedMachineEvidence.tsx";
 import { overviewReturn } from "./routing/overview-return.ts";
@@ -50,6 +51,32 @@ export function App({ runtime }: AppProps) {
   const { route, navigate } = useApplicationRouter();
   const [evidenceSession, setEvidenceSession] = useState(runtime.evidenceSession ?? null);
   const [sessionClock, setSessionClock] = useState(() => Date.now());
+  const [loginStatus, setLoginStatus] = useState<"idle" | "submitting" | "denied" | "unavailable" | "failed">("idle");
+  const [loginAssertion, setLoginAssertion] = useState("");
+  const [loginController, setLoginController] = useState<AbortController | null>(null);
+  useEffect(() => () => loginController?.abort(), [loginController]);
+  async function establishEvidenceSession(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loginStatus === "submitting" || !loginAssertion.trim()) return;
+    const proof = loginAssertion;
+    setLoginAssertion("");
+    const controller = new AbortController();
+    setLoginController(controller);
+    setLoginStatus("submitting");
+    try {
+      const issued = await issueHumanSession(window.location.origin + "/", proof, controller.signal);
+      if (!controller.signal.aborted) {
+        setEvidenceSession({ bearer: issued.bearer, expiresAt: issued.expiresAt });
+        setSessionClock(Date.now());
+        setLoginStatus("idle");
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) setLoginStatus(error instanceof HumanSessionFailure
+        ? error.status === 401 ? "denied" : error.status === 503 ? "unavailable" : "failed"
+        : "failed");
+    } finally { setLoginController(null); }
+  }
+
   const validEvidenceSession = evidenceSession && Number.isFinite(Date.parse(evidenceSession.expiresAt))
     && Date.parse(evidenceSession.expiresAt) > sessionClock ? evidenceSession : null;
   useEffect(() => {
@@ -84,6 +111,15 @@ export function App({ runtime }: AppProps) {
           ))].map(label => <span key={label}>{label}</span>)}
         </div>
         {validEvidenceSession && <button type="button" onClick={() => setEvidenceSession(null)}>End evidence session</button>}
+        {!validEvidenceSession && <form onSubmit={establishEvidenceSession} aria-label="Trusted operator login">
+          <label htmlFor="trusted-login-proof">One-use trusted identity assertion</label>
+          <input id="trusted-login-proof" type="password" autoComplete="off"
+            value={loginAssertion} onChange={event => setLoginAssertion(event.currentTarget.value)} />
+          <button type="submit" disabled={!loginAssertion.trim() || loginStatus === "submitting"}>Establish evidence session</button>
+          {loginStatus === "denied" && <p role="alert">The trusted identity assertion was denied.</p>}
+          {loginStatus === "unavailable" && <p role="alert">The trusted identity verifier is not configured or unavailable.</p>}
+          {loginStatus === "failed" && <p role="alert">Evidence sign-in failed.</p>}
+        </form>}
         <nav aria-label="Dashboard">
           {SupervisorWorkspace && <ApplicationLink href="/supervisor-preview" navigate={navigate} current={route.kind === "supervisorPreview"}>Supervisor desk preview</ApplicationLink>}
           <ApplicationLink href="/operator-evidence" navigate={navigate} current={route.kind === "operatorEvidence"}>Operator evidence</ApplicationLink>{" "}
