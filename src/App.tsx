@@ -66,9 +66,9 @@ export function App({ runtime }: AppProps) {
     currentStateClient: runtime.currentStateClient,
     ...(runtime.now ? { now: runtime.now } : {}),
   }), [runtime.configuration, runtime.reportingClient, runtime.currentStateClient, runtime.now]);
-  const routedRuntime = useMemo(() => evidenceSession
-    ? { ...publicRuntime, evidenceSession }
-    : publicRuntime, [publicRuntime, evidenceSession]);
+  const routedRuntime = useMemo(() => validEvidenceSession
+    ? { ...publicRuntime, evidenceSession: validEvidenceSession }
+    : publicRuntime, [publicRuntime, validEvidenceSession]);
   useEffect(() => { setEvidenceSession(runtime.evidenceSession ?? null); setSessionClock(Date.now()); }, [runtime.evidenceSession]);
   const returnToOverview = overviewReturn(window.location.search, runtime.configuration.sources);
 
@@ -96,7 +96,7 @@ export function App({ runtime }: AppProps) {
       </header>
       <main id="main-content">
         {returnToOverview && <ApplicationLink href={returnToOverview} navigate={navigate}>Back to selected overview</ApplicationLink>}
-        <RouteView route={route} navigate={navigate} runtime={validEvidenceSession ? { ...publicRuntime, evidenceSession: validEvidenceSession } : publicRuntime} />
+        <RouteView route={route} navigate={navigate} runtime={routedRuntime} />
       </main>
     </div>
   );
