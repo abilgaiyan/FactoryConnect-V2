@@ -45,7 +45,7 @@ test("authorized machine selection shows retained SQL-shaped values, then sessio
           batchId: "batch-7", acknowledgementId: "ack-7", documentHash: "hash-7" }] });
     if (String(url).endsWith(`/machines/${machineId}/activity`))
       return Response.json({ machineId, siteId, streamKey: "mtconnect:uuid:fixture", evidenceKind: "historical-derived-activity",
-        currentConnectivity: null, verification: "immutable-publication-receipts", continuity: "same-batch-only-not-physical-completeness",
+        currentConnectivity: null, verification: "immutable-publication-receipts", continuity: "publication-profile-not-yet-verified",
         status: "no-published-history", series: [] });
     throw Error("Unexpected request: " + url);
   };
