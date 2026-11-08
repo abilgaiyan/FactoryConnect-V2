@@ -389,6 +389,29 @@ internal static class ActivityPublicationAcceptance
                 }
                 finally {await aggregateTx.RollbackAsync();}
             }
+            // Gate 5: malformed batch inputs must fail before any SQL query executes.
+            var batchedVerifier=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetMethod(
+                "VerifyActivityPublicationReceiptsAsync",BindingFlags.NonPublic|BindingFlags.Static)
+                ?? throw new InvalidOperationException("Batched publication verifier missing.");
+            var batchedInputType=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetNestedType(
+                "PublicationReadInput",BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("Batched publication input type missing.");
+            var repeatedInputs=Array.CreateInstance(batchedInputType,2);
+            for(var index=0;index<2;index++)
+                repeatedInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                    latestOperation,identity,null),index);
+            await using(var duplicateConnection=new SqlConnection(target.ConnectionString))
+            {
+                await duplicateConnection.OpenAsync();
+                await using var duplicateTx=(SqlTransaction)await duplicateConnection.BeginTransactionAsync(IsolationLevel.Serializable);
+                try
+                {
+                    await Reject(async()=>await ((Task)batchedVerifier.Invoke(null,new object[]{
+                        duplicateConnection,duplicateTx,repeatedInputs,CancellationToken.None})!),
+                        "Gate 5 rejects duplicate operation IDs in a bounded batch");
+                }
+                finally {await duplicateTx.RollbackAsync();}
+            }
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
