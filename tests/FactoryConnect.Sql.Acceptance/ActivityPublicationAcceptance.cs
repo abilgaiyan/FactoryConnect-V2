@@ -412,6 +412,35 @@ internal static class ActivityPublicationAcceptance
                 }
                 finally {await duplicateTx.RollbackAsync();}
             }
+            // Gate 2: malformed, foreign-scope and oversized cursors fail closed.
+            var cursorDecoder=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetMethod(
+                "DecodeCursor",BindingFlags.NonPublic|BindingFlags.Static)
+                ?? throw new InvalidOperationException("Activity history cursor decoder missing.");
+            void RejectCursor(string value,Guid machine,Guid mapping,string label)
+            {
+                try
+                {
+                    cursorDecoder.Invoke(null,new object?[]{value,machine,identity.StreamKey,mapping,
+                        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(identity)))});
+                }
+                catch(TargetInvocationException e)when(e.InnerException is ArgumentException)
+                {
+                    Check(true,label);
+                    return;
+                }
+                throw new InvalidOperationException("Invalid history cursor was accepted: "+label);
+            }
+            RejectCursor("not-a-valid-base64-cursor!",scope.MachineId,scope.MappingId,
+                "Gate 2 rejects malformed base64 history cursor");
+            var foreignCursor=Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new {
+                MachineId=Guid.NewGuid(),StreamKey=identity.StreamKey,MappingId=scope.MappingId,
+                Qualification=Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(identity))),
+                StartedAt=DateTimeOffset.UtcNow.ToString("O"),InstanceId="1",
+                StartSequence="1",EffectId=Guid.NewGuid()}));
+            RejectCursor(foreignCursor,scope.MachineId,scope.MappingId,
+                "Gate 2 rejects foreign-machine history cursor");
+            RejectCursor(foreignCursor,scope.MachineId,Guid.NewGuid(),
+                "Gate 2 rejects foreign-mapping history cursor");
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
