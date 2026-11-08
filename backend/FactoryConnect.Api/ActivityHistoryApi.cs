@@ -8,8 +8,8 @@ internal static class ActivityHistoryApi
     internal static void MapActivityHistory(this WebApplication app)
     {
         app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/activity",async(
-            Guid machineId,HttpContext http,IConfiguration config,CancellationToken ct)=>
-            await Read(http,config,async(authority,token,site,stream)=> {
+            Guid machineId,HttpContext http,IConfiguration config,ILoggerFactory loggerFactory,CancellationToken ct)=>
+            await Read(http,config,loggerFactory.CreateLogger("FactoryConnect.ActivityHistory.Integrity"),async(authority,token,site,stream)=> {
                 var series=await authority.ReadActivitySeriesAsync(token,site,machineId,stream,ct);
                 return Results.Ok(new { machineId,siteId=site,streamKey=stream,
                     evidenceKind="historical-derived-activity",currentConnectivity=(string?)null,
@@ -17,8 +17,8 @@ internal static class ActivityHistoryApi
                     status=series.Count==0?"no-published-history":"published-history",series });
             }));
         app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/activity/{mappingId:guid}",async(
-            Guid machineId,Guid mappingId,HttpContext http,IConfiguration config,CancellationToken ct)=>
-            await Read(http,config,async(authority,token,site,stream)=> {
+            Guid machineId,Guid mappingId,HttpContext http,IConfiguration config,ILoggerFactory loggerFactory,CancellationToken ct)=>
+            await Read(http,config,loggerFactory.CreateLogger("FactoryConnect.ActivityHistory.Integrity"),async(authority,token,site,stream)=> {
                 var take=20;
                 if(http.Request.Query.TryGetValue("take",out var value) &&
                     (value.Count!=1 || !int.TryParse(value[0],out take) || take is <1 or >100))
@@ -36,7 +36,7 @@ internal static class ActivityHistoryApi
                     page.Series,page.Rows,page.NextCursor });
             }));
     }
-    private static async Task<IResult> Read(HttpContext http,IConfiguration config,
+    private static async Task<IResult> Read(HttpContext http,IConfiguration config,ILogger logger,
         Func<SqlSecurityAuthority,byte[],Guid,string,Task<IResult>> read)
     {
         http.Response.Headers.CacheControl="no-store";
@@ -58,6 +58,12 @@ internal static class ActivityHistoryApi
         catch(SecurityDeniedException){return Results.Unauthorized();}
         catch(KeyNotFoundException){return Results.NotFound(new { error="No published activity series" });}
         catch(ArgumentException){return Results.BadRequest(new { error="Invalid activity page or cursor" });}
+        catch(InvalidDataException error)
+        {
+            logger.LogError(error,"Activity history integrity verification rejected read. Path={Path} TraceId={TraceId}",
+                http.Request.Path,http.TraceIdentifier);
+            return Results.Problem(statusCode:503,title:"Activity history integrity verification failed");
+        }
         catch(OperationCanceledException)when(http.RequestAborted.IsCancellationRequested){throw;}
         catch(Exception){return Results.Problem(statusCode:503,title:"Activity history authority is unavailable");}
         finally { CryptographicOperations.ZeroMemory(hash); }
