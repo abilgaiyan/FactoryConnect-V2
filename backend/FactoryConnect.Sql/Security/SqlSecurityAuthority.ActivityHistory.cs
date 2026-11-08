@@ -184,6 +184,7 @@ public sealed partial class SqlSecurityAuthority
         q.Parameters["@stream"].Size=512;
         q.Parameters["@mapping"].SqlDbType=SqlDbType.UniqueIdentifier;
         var result=new List<StoredActivity>();
+        var sourceOperations=new List<(Guid OperationId,ActivityQualificationIdentity Qualification)>();
         await using var r=await q.ExecuteReaderAsync(ct);
         while(await r.ReadAsync(ct))
         {
@@ -201,6 +202,7 @@ public sealed partial class SqlSecurityAuthority
             if(receipt is null || receipt.Replayed || receipt.Checkpoint!=cp || source.OperationId!=r.GetGuid(5) ||
                 receipt.Checkpoint.NextGeneration!=(ulong)r.GetInt64(6))
                 throw new InvalidDataException("Activity checkpoint differs from its publication receipt.");
+            sourceOperations.Add((source.OperationId,cp.Qualification));
             if(cp.LastConsumedSample is null)
             {
                 if(source.LastObservation is not null || source.FrontierBatch is null || cp.OpenAnchor is not null || cp.OpenState is not null || receipt.NewPeriods.Count!=0)
@@ -210,6 +212,9 @@ public sealed partial class SqlSecurityAuthority
             result.Add(new(cp,new(cp.Qualification.MappingId,cp.Qualification.SourceAddress,Convert.ToHexString((byte[])r[1]),
                 cp.NextGeneration.ToString(CultureInfo.InvariantCulture),cp.LastConsumedSample.ObservedAt,source.PackageRevisionId,source.AcknowledgementId)));
         }
+        await r.DisposeAsync();
+        foreach(var sourceOperation in sourceOperations)
+            await VerifyActivityPublicationReceiptAsync(c,t,sourceOperation.OperationId,sourceOperation.Qualification,ct);
         return result;
     }
     private static void Number(SqlCommand q,string name,ulong? value)
