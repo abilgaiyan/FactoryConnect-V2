@@ -22,7 +22,7 @@ internal static class ActivityBoundaryAcceptance
             var id=Guid.NewGuid();var elements=string.Join("",new[]{sequence}.Concat(additional).Select(s=>$"<Execution dataItemId=\"execution\" sequence=\"{s}\" timestamp=\"{time.AddSeconds((long)s):O}\">{value}</Execution>"));
             var raw=Encoding.UTF8.GetBytes($"<MTConnectStreams><Header instanceId=\"{instance}\" firstSequence=\"1\" lastSequence=\"{next-1}\" nextSequence=\"{next}\"/><Streams><DeviceStream uuid=\"boundary\"><ComponentStream><Events>{elements}</Events></ComponentStream></DeviceStream></Streams></MTConnectStreams>");
             var frame=MtConnectSampleParser.Parse(raw,"boundary",from);var source=frame.Observations.Single(x=>x.Sequence==sequence);var hash=Convert.ToHexString(SHA256.HashData(raw));
-            var bytes=JsonSerializer.SerializeToUtf8Bytes(new{version=1,action="ingest-mtconnect",OperationId=id,SiteId=site,MachineId=machine,AcknowledgementId=ack,
+            var bytes=JsonSerializer.SerializeToUtf8Bytes(new{version=1,action="ingest-mtconnect",SiteId=site,MachineId=machine,AcknowledgementId=ack,
                 StreamKey=signal.StreamKey,ExpectedBatchId=predecessor,expectedInstance=predecessor is null?null:instance.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 from=from.ToString(System.Globalization.CultureInfo.InvariantCulture),documentHash=hash});
             return (new(site,machine,signal.StreamKey,mapping,"execution",instance,sequence,id,ack,source.Timestamp,value,source.Quality,source.SourceTimestamp,source.ContentHash,hash),
@@ -37,7 +37,10 @@ internal static class ActivityBoundaryAcceptance
         {var node=JsonNode.Parse(right.Batch.Request)!;node[property]=value;var bytes=Encoding.UTF8.GetBytes(node.ToJsonString());return right.Batch with{Request=bytes,RequestHash=SHA256.HashData(bytes)};}
         Check(Assess().RetainedLink && right.Row.Sequence!=left.Row.Sequence+1,"exact ingestion ancestry qualifies nonadjacent signal sequences without an adjacency assumption");
         Check(!Assess(Change("ExpectedBatchId",JsonValue.Create(Guid.NewGuid()))).RetainedLink,"genuine-looking unrelated predecessor cannot join batches");
-        Check(!Assess(Change("ExpectedBatchId",null)).RetainedLink,"bootstrap receipt cannot establish predecessor continuity");
+        var bootstrap=Make(102,104,103,"READY",null);
+        Check(!AcceptedActivityBoundaryVerifier.Assess(approved,left.Row,bootstrap.Row,left.Batch,bootstrap.Batch).RetainedLink,"bootstrap receipt cannot establish predecessor continuity");
+        Reject(()=>Assess(Change("ExpectedBatchId",null)),"incomplete predecessor identity rejects");
+        Reject(()=>Assess(Change("OperationId",JsonValue.Create(right.Row.BatchId))),"operation identity belongs to the immutable SQL key, not an invented JSON field");
         Check(!Assess(Change("expectedInstance",JsonValue.Create("8"))).RetainedLink,"different expected instance fences retained boundary");
         Reject(()=>Assess(Change("AcknowledgementId",JsonValue.Create(Guid.NewGuid()))),"checksum-consistent receipt acknowledgement mismatch rejects");
         Reject(()=>Assess(Change("documentHash",JsonValue.Create(new string('B',64)))),"receipt must bind exact source document hash");

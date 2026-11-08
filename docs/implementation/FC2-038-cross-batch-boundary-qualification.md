@@ -8,8 +8,10 @@ CI qualification and review disposition are tracked in the associated PR.
 
 Sequence adjacency alone establishes no continuity. The existing immutable ingestion
 request records the exact expected predecessor batch and source instance. Its request
-hash and canonical request bytes bind operation, site, machine, acknowledgement,
-stream, requested from-sequence and original document hash. No ingestion schema or
+hash and canonical request bytes bind site, machine, acknowledgement, stream,
+requested from-sequence and original document hash. Operation identity is bound by
+the immutable SQL key joined to the exact batch, not an OperationId JSON property.
+No ingestion schema or
 ingestion authorization behavior needs changing to inspect this evidence.
 
 The internal `AssessRetainedBoundaryAsync` primitive acquires security Shared,

@@ -69,8 +69,9 @@ internal static class AcceptedActivityBoundaryVerifier
             var predecessor=root.GetProperty("ExpectedBatchId").ValueKind==JsonValueKind.Null ? (Guid?)null : root.GetProperty("ExpectedBatchId").GetGuid();
             var instanceText=root.GetProperty("expectedInstance").GetString();
             ulong? instance=instanceText is null ? null : ulong.Parse(instanceText,NumberStyles.None,CultureInfo.InvariantCulture);
+            if((predecessor is null)!=(instance is null))throw new InvalidDataException("Incomplete ingestion predecessor identity.");
             var expected=JsonSerializer.SerializeToUtf8Bytes(new {
-                version=1,action="ingest-mtconnect",OperationId=h.BatchId,SiteId=row.SiteId,MachineId=row.MachineId,
+                version=1,action="ingest-mtconnect",SiteId=row.SiteId,MachineId=row.MachineId,
                 AcknowledgementId=h.AcknowledgementId,StreamKey=row.StreamKey,ExpectedBatchId=predecessor,
                 expectedInstance=instance?.ToString(CultureInfo.InvariantCulture),from=h.FromSequence.ToString(CultureInfo.InvariantCulture),documentHash=h.DocumentSha256
             });
