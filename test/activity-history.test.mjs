@@ -9,7 +9,7 @@ const {readActivityHistory}=await vite.ssrLoadModule('/src/api/evidence/activity
 const {PublishedMachineActivity}=await vite.ssrLoadModule('/src/presentation/PublishedMachineActivity.tsx');
 const machine='11111111-1111-1111-1111-111111111111', mapping='22222222-2222-2222-2222-222222222222';
 const other='33333333-3333-3333-3333-333333333333', base='https://localhost/';
-const envelope={machineId:machine,siteId:other,streamKey:'mtconnect:fixture',evidenceKind:'historical-derived-activity',currentConnectivity:null,verification:'immutable-publication-receipts',continuity:'same-batch-only-not-physical-completeness'};
+const envelope={machineId:machine,siteId:other,streamKey:'mtconnect:fixture',evidenceKind:'historical-derived-activity',currentConnectivity:null,verification:'immutable-publication-receipts',continuity:'publication-profile-not-yet-verified'};
 const series={mappingId:mapping,sourceAddress:'execution',qualificationSha256:'A'.repeat(64),generation:'18446744073709551615',lastObservedAt:'2026-11-07T10:00:00Z',packageRevisionId:other,acknowledgementId:other};
 const row={effectId:other,publicationOperationId:other,state:'Running',startedAt:'2026-11-07T09:00:00Z',endedAt:'2026-11-07T09:00:01Z',durationTicks:'10000000',instanceId:'18446744073709551615',startSequence:'18446744073709551614',endSequence:'18446744073709551615',startRawValue:'ACTIVE',endRawValue:'READY'};
 const page={...envelope,series,rows:[row],nextCursor:'older-cut'};
