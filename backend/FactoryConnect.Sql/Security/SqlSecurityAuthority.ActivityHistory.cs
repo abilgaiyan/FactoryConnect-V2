@@ -77,6 +77,7 @@ public sealed partial class SqlSecurityAuthority
             Number(q,"@sequence",after is null?null:ulong.Parse(after.StartSequence,CultureInfo.InvariantCulture));
             var rows=new List<(PublishedActivityPeriod Row,ClosedActivityPeriod Period)>();
             var receipts=new Dictionary<Guid,ActivityDurableResult>();
+            var receiptPayloads=new Dictionary<Guid,byte[]>();
             await using(var r=await q.ExecuteReaderAsync(ct))
             {
                 while(await r.ReadAsync(ct))
@@ -100,17 +101,19 @@ public sealed partial class SqlSecurityAuthority
                 await r.NextResultAsync(ct);
                 while(await r.ReadAsync(ct))
                 {
-                    var receipt=JsonSerializer.Deserialize<ActivityDurableResult>((byte[])r[2])
+                    var resultPayload=(byte[])r[2];
+                    var receipt=JsonSerializer.Deserialize<ActivityDurableResult>(resultPayload)
                         ?? throw new InvalidDataException("Published operation result missing.");
                     if(receipt.Replayed || receipt.Checkpoint.Qualification!=identity ||
                         receipt.Checkpoint.AcceptedSource?.OperationId!=r.GetGuid(0) ||
                         receipt.Checkpoint.NextGeneration!=(ulong)r.GetInt64(1) || receipt.NewPeriods.Count>1000)
                         throw new InvalidDataException("Published operation ancestry mismatch.");
                     receipts.Add(r.GetGuid(0),receipt);
+                    receiptPayloads.Add(r.GetGuid(0),resultPayload);
                 }
             }
             foreach(var receiptId in receipts.Keys)
-                await VerifyActivityPublicationReceiptAsync(c,t,receiptId,identity,ct);
+                await VerifyActivityPublicationReceiptCoreAsync(c,t,receiptId,identity,receiptPayloads[receiptId],ct);
             foreach(var item in rows)
                 if(!receipts.TryGetValue(item.Row.PublicationOperationId,out var receipt) ||
                     receipt.NewPeriods.Count(x=>x==item.Period)!=1)
@@ -182,7 +185,7 @@ public sealed partial class SqlSecurityAuthority
         q.Parameters["@stream"].Size=512;
         q.Parameters["@mapping"].SqlDbType=SqlDbType.UniqueIdentifier;
         var result=new List<StoredActivity>();
-        var sourceOperations=new List<(Guid OperationId,ActivityQualificationIdentity Qualification)>();
+        var sourceOperations=new List<(Guid OperationId,ActivityQualificationIdentity Qualification,byte[] ResultBytes)>();
         await using var r=await q.ExecuteReaderAsync(ct);
         while(await r.ReadAsync(ct))
         {
@@ -200,7 +203,7 @@ public sealed partial class SqlSecurityAuthority
             if(receipt is null || receipt.Replayed || receipt.Checkpoint!=cp || source.OperationId!=r.GetGuid(5) ||
                 receipt.Checkpoint.NextGeneration!=(ulong)r.GetInt64(6))
                 throw new InvalidDataException("Activity checkpoint differs from its publication receipt.");
-            sourceOperations.Add((source.OperationId,cp.Qualification));
+            sourceOperations.Add((source.OperationId,cp.Qualification,(byte[])r[7]));
             if(cp.LastConsumedSample is null)
             {
                 if(source.LastObservation is not null || source.FrontierBatch is null || cp.OpenAnchor is not null || cp.OpenState is not null || receipt.NewPeriods.Count!=0)
@@ -212,7 +215,7 @@ public sealed partial class SqlSecurityAuthority
         }
         await r.DisposeAsync();
         foreach(var sourceOperation in sourceOperations)
-            await VerifyActivityPublicationReceiptAsync(c,t,sourceOperation.OperationId,sourceOperation.Qualification,ct);
+            await VerifyActivityPublicationReceiptCoreAsync(c,t,sourceOperation.OperationId,sourceOperation.Qualification,sourceOperation.ResultBytes,ct);
         return result;
     }
     private static void Number(SqlCommand q,string name,ulong? value)
