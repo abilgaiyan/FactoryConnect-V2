@@ -1,6 +1,14 @@
 # FC2-040 — Activity publication read compatibility
 
-Status: draft implementation review. No production enablement.
+Status: draft implementation with passing CI at 9af1b99; not merge-qualified. No production enablement.
+
+## Implemented scope and explicit deferrals
+
+- The SQL history reader verifies version-4 publication receipt identity, ancestry and retained witness hashes, while preserving legacy receipt reads and fail-closed malformed-receipt handling.
+- The HTTP contract retains the pre-existing `same-batch-only-not-physical-completeness` continuity literal for compatibility. This is a conservative legacy-level label, **not** an assertion that version-4 cross-batch proofs are absent; per-publication/per-period profile and verification metadata are **deferred** and must not be inferred from the page-level literal.
+- **Not yet qualified:** bounded batched receipt verification, request-byte memory and roundtrip budgets, HTTP version-4 end-to-end fixtures and measured Gate 5 comparison against the 17-roundtrip baseline. The PR remains draft until these are implemented or explicitly accepted as separate follow-up gates.
+- Corruption fixtures are disposable SQL only; they do not authorize production deployment.
+
 
 ## Ownership
 
