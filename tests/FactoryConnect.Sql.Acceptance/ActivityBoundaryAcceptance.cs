@@ -84,6 +84,17 @@ internal static class ActivityBoundaryAcceptance
         {
             Check(true,"unknown continuity policy fails closed");
         }
+        var witness=Assess();
+        var manifest=AcceptedActivityBoundaryManifest.Fingerprint([witness]);
+        Check(manifest.Length==64 && manifest==AcceptedActivityBoundaryManifest.Fingerprint([witness]),
+            "qualified retained witness has deterministic proof-manifest digest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([Assess(Change("ExpectedBatchId",JsonValue.Create(Guid.NewGuid())))]),
+            "negative ancestry assessment cannot enter a publication manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            SuccessorRequestSha256="NOT-A-DIGEST"}]),
+            "malformed receipt fingerprint cannot enter a publication manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness,witness]),
+            "reordered or repeated witnesses cannot form a valid manifest");
         var cut=AcceptedActivityContinuityQualifier.Qualify(approved,[left.Row,right.Row]);
         Check(!cut.Samples[1].ContinuityFromPrevious && cut.UnprovenBoundaryLinks==1,"candidate proof does not enable cross-batch publication or change policy identity");
         return count;
