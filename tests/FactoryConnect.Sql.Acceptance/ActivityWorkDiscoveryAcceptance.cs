@@ -26,10 +26,17 @@ internal static class ActivityWorkDiscoveryAcceptance
             return spans;
         },"artifacts/performance/activity-worker-discovery.json");
         var source=profile.Accesses.Where(x=>x.Table=="MtConnectObservation").ToArray();
-        Check(source.Length>0 && source.All(x=>x.ActualRowsRead.HasValue&&x.ActualRowsRead<=4) &&
-            source.Any(x=>x.Index=="[IX_MtConnectObservation_ActivityNext]"&&x.PhysicalOperator.Contains("Seek",StringComparison.Ordinal)),
-            "deep worker discovery uses bounded exact-signal seeks and bounded predecessor checks");
-        Console.WriteLine($"MEASURE: worker discovery observation rows read={source.Sum(x=>x.ActualRowsRead)}, command logical reads={profile.Commands.Sum(x=>x.LogicalReads)}");
+        var probes=source.Where(x=>x.Index=="[IX_MtConnectObservation_ActivityNext]").ToArray();
+        var populated=probes.Where(x=>x.ActualRows>0).ToArray();
+        Check(populated.Length==2 && populated.All(x=>x.ActualRowsRead==2 && x.LogicalReads.HasValue),
+            "nonempty exact-signal probes have measured two-row access counters");
+        var probeReads=populated.Max(x=>x.LogicalReads!.Value);
+        Check(source.Length>0 && source.All(x=>x.ActualRowsRead is {} read ? read<=4 :
+                x.Index=="[IX_MtConnectObservation_ActivityNext]" && x.PhysicalOperator=="Index Seek" &&
+                x.ActualRows==0 && x.Executions==1 && x.LogicalReads is {} logical && logical<=probeReads+1) &&
+            probes.All(x=>x.PhysicalOperator=="Index Seek"),
+            "deep discovery is bounded; an omitted empty-seek row counter requires bounded measured logical reads");
+        Console.WriteLine($"MEASURE: worker discovery reported observation rows read={source.Sum(x=>x.ActualRowsRead)}, unavailable row counters={source.Count(x=>x.ActualRowsRead is null)}, command logical reads={profile.Commands.Sum(x=>x.LogicalReads)}");
         return checks;
         void Check(bool result,string label){if(!result)throw new InvalidOperationException("Activity work discovery: "+label);checks++;Console.WriteLine("PASS: "+label);}
     }
