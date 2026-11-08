@@ -1,5 +1,6 @@
 -- Legacy receipts retain NULL ResultHash and their original replay contract.
 ALTER TABLE activity.ProcessorOperation ADD ResultHash binary(32) NULL;
+GO
 ALTER TABLE activity.ProcessorOperation ADD CONSTRAINT CK_ActivityOperationResultHash
     CHECK(ResultHash IS NULL OR ResultHash=HASHBYTES('SHA2_256',ResultBytes));
 ALTER TABLE activity.ProcessorOperation ADD CONSTRAINT UQ_ActivityPublicationReceipt
