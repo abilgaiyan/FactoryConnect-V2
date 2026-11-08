@@ -16,7 +16,7 @@ if(args is ["--activity-memory-child"])
 
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
-var activityPure=ActivityInterpreterAcceptance.PureChecks();
+var activityPure=ActivityInterpreterAcceptance.PureChecks()+ActivityBoundaryAcceptance.PureChecks();
 var bootstrapPure=activityPure+(args is ["--ingestion-only"] or ["--host-only"] or ["--activity-history-only"] or ["--activity-host-only"] or ["--activity-host-quiet-only"] ? 0 : await RuntimeMtlsTransportAcceptance.Run()+RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks());
 if(args is ["--pure-only"]) { Console.WriteLine($"PASS: {canonicalPassed+bootstrapPure} pure acceptance checks."); return; }
 var admin = Environment.GetEnvironmentVariable("FC2_TEST_SQL")
