@@ -15,6 +15,13 @@ public sealed partial class SqlSecurityAuthority
         Guid operationId,ActivityQualificationIdentity identity,CancellationToken ct)
     {
         await using var q=Command(c,t,"""
+            IF EXISTS(
+                SELECT 1 FROM activity.ProcessorOperation o WITH(HOLDLOCK)
+                WHERE o.OperationId=@op AND o.MachineId=@machine
+                    AND o.StreamKeyBytes=@stream AND o.MappingId=@mapping
+                    AND (DATALENGTH(o.RequestBytes)>8388608 OR DATALENGTH(o.ResultBytes)>8388608
+                        OR CONVERT(bigint,DATALENGTH(o.RequestBytes))+CONVERT(bigint,DATALENGTH(o.ResultBytes))>8388608))
+                THROW 51091,'Activity publication receipt exceeds byte budget.',1;
             SELECT o.RequestBytes,o.RequestHash,o.ResultBytes,o.ResultHash,
                 a.Generation,a.ProofHash,a.ParentOperationId,a.ParentGeneration,
                 a.ParentRequestHash,a.ParentResultHash,a.ParentProofHash
