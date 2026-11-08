@@ -332,6 +332,63 @@ internal static class ActivityPublicationAcceptance
                 }
                 finally {await oversizedTx.RollbackAsync();}
             }
+            // Gate 5 negative fixture: two individually legal receipts exceed the
+            // aggregate budget before the verifier can materialize their payloads.
+            await using(var aggregate=new SqlConnection(target.ConnectionString))
+            {
+                await aggregate.OpenAsync();
+                await using var aggregateTx=(SqlTransaction)await aggregate.BeginTransactionAsync(IsolationLevel.Serializable);
+                try
+                {
+                    var operationIds=new List<Guid>();
+                    await using(var ids=new SqlCommand("""
+                        SELECT TOP (2) OperationId
+                        FROM activity.ProcessorOperation
+                        WHERE MachineId=@machine AND MappingId=@mapping
+                        ORDER BY AppliedGeneration DESC
+                        """,aggregate,aggregateTx))
+                    {
+                        ids.Parameters.AddWithValue("@machine",scope.MachineId);
+                        ids.Parameters.AddWithValue("@mapping",scope.MappingId);
+                        await using var reader=await ids.ExecuteReaderAsync();
+                        while(await reader.ReadAsync())operationIds.Add(reader.GetGuid(0));
+                    }
+                    Check(operationIds.Count==2,"Gate 5 aggregate fixture has two distinct published operations");
+                    await using(var mutate=new SqlCommand("""
+                        ALTER TABLE activity.ProcessorOperation NOCHECK CONSTRAINT CK_ActivityOperationRequestHash;
+                        DISABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation;
+                        UPDATE activity.ProcessorOperation
+                        SET RequestBytes=CONVERT(varbinary(max),REPLICATE(CONVERT(varchar(max),'X'),5000000))
+                        WHERE OperationId IN (@first,@second);
+                        """,aggregate,aggregateTx))
+                    {
+                        mutate.Parameters.AddWithValue("@first",operationIds[0]);
+                        mutate.Parameters.AddWithValue("@second",operationIds[1]);
+                        await mutate.ExecuteNonQueryAsync();
+                    }
+                    var authorityType=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority);
+                    var inputType=authorityType.GetNestedType("PublicationReadInput",BindingFlags.NonPublic)
+                        ?? throw new InvalidOperationException("Batched receipt input type missing.");
+                    var batchMethod=authorityType.GetMethod("VerifyActivityPublicationReceiptsAsync",
+                        BindingFlags.NonPublic|BindingFlags.Static)
+                        ?? throw new InvalidOperationException("Batched receipt verifier missing.");
+                    var inputs=Array.CreateInstance(inputType,2);
+                    for(var index=0;index<2;index++)
+                        inputs.SetValue(Activator.CreateInstance(inputType,
+                            operationIds[index],identity,null),index);
+                    try
+                    {
+                        await ((Task)batchMethod.Invoke(null,new object[]{
+                            aggregate,aggregateTx,inputs,CancellationToken.None})!);
+                        throw new InvalidOperationException("Aggregate publication byte budget was bypassed.");
+                    }
+                    catch(SqlException e)when(e.Number==51091)
+                    {
+                        Check(true,"Gate 5 rejects aggregate receipt payload over 8 MiB before materialization");
+                    }
+                }
+                finally {await aggregateTx.RollbackAsync();}
+            }
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
