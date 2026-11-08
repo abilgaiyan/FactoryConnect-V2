@@ -23,7 +23,6 @@ public static class AcceptedActivityContinuityQualifier
     // reinterpret a legacy checkpoint or silently adopt its operation receipts.
     internal const string LegacyProfile="retained-batch-continuity-v1";
     internal const string TransactionBoundProfile="retained-cross-batch-receipt-v1";
-    private const string Profile=LegacyProfile;
 
     public static QualifiedActivityCut Qualify(
         ApprovedActivitySignal approved,
@@ -74,8 +73,8 @@ public static class AcceptedActivityContinuityQualifier
         }
         return new(qualification,samples.AsReadOnly(),Assurance,linked,held);
     }
-    internal static ActivityQualificationIdentity QualificationFor(ApprovedActivitySignal approved)
-        => QualificationForProfile(approved,Profile);
+    internal static ActivityQualificationIdentity QualificationFor(ApprovedActivitySignal approved,string profile=LegacyProfile)
+        => QualificationForProfile(approved,profile);
 
     // Identity construction only. This does not authorize publication or
     // upgrade an existing checkpoint; writer-side proof and replay gates remain

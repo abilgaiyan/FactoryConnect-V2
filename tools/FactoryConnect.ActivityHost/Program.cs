@@ -70,12 +70,13 @@ finally { Report(new{status="stopped",processId=Environment.ProcessId}); }
 
 internal sealed record ActivityHostOptions(int Version,Guid InstallationId,Guid SiteId,Guid MachineId,
     Guid MappingId,string StreamKey,string InstanceId,string BootstrapAfterSequence,string SqlConnectionString,
-    int CutSize=100,int PollIntervalMilliseconds=250,int OperationTimeoutSeconds=15)
+    int CutSize=100,int PollIntervalMilliseconds=250,int OperationTimeoutSeconds=15,string PublicationProfile=ActivityPublicationPolicy.Legacy)
 {
     internal ActivityWorkerScope Validate()
     {
         var sql=new SqlConnectionStringBuilder(SqlConnectionString);
-        if(Version!=1 || new[]{InstallationId,SiteId,MachineId,MappingId}.Any(x=>x==Guid.Empty) ||
+        if(!((Version==1 && PublicationProfile==ActivityPublicationPolicy.Legacy) || (Version==2 && PublicationProfile==ActivityPublicationPolicy.CrossBatch)) ||
+            new[]{InstallationId,SiteId,MachineId,MappingId}.Any(x=>x==Guid.Empty) ||
             string.IsNullOrEmpty(StreamKey) || !StreamKey.StartsWith("mtconnect:uuid:",StringComparison.Ordinal) || StreamKey.Length=="mtconnect:uuid:".Length ||
             new UTF8Encoding(false,true).GetByteCount(StreamKey)>512 ||
             string.IsNullOrWhiteSpace(sql.DataSource) || string.IsNullOrWhiteSpace(sql.InitialCatalog) ||
@@ -89,6 +90,6 @@ internal sealed record ActivityHostOptions(int Version,Guid InstallationId,Guid 
             return n;
         }
         var after=Number(BootstrapAfterSequence);if(after==ulong.MaxValue)throw new InvalidDataException("Bootstrap frontier cannot advance.");
-        return new(InstallationId,SiteId,MachineId,MappingId,StreamKey,Number(InstanceId),after);
+        return new(InstallationId,SiteId,MachineId,MappingId,StreamKey,Number(InstanceId),after,PublicationProfile);
     }
 }

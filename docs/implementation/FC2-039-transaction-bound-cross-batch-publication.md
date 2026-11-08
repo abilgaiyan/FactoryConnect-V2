@@ -111,3 +111,62 @@ The implementation is not complete in this review. Production commissioning,
 physical sensor completeness, quantity/OEE processing and UI work remain
 out of scope. A documentation-only change cannot qualify cross-batch
 publication.
+
+## Publishing implementation under qualification
+
+The completion increment wires the new profile into the existing `ApplyCoreAsync`
+SERIALIZABLE transaction. The public worker scope explicitly selects
+`retained-cross-batch-receipt-v1`; legacy remains the default. Shipped host config
+version 2 requires that exact profile; version 1 remains legacy. An existing scope's
+checkpoint cannot be silently upgraded or downgraded. Legacy v2/v3 request bytes
+are unchanged. New requests are version 4, with profile, exact cut, predecessor
+operation/request digest, verified receipt/document witnesses and proof SHA-256.
+
+After the security Shared, machine Shared and processor Exclusive gates, the writer
+re-resolves mapping authority and verifies the complete selected batch-ID set and
+projected observations. It loads original documents and immutable ingestion requests
+by exact indexed identity, verifies request scope/actor, hashes, canonical receipt
+format, parsed MTConnect headers and exact-address observation completeness. Batch
+coverage must be contiguous and nonoverlapping, with exact direct ingestion predecessor
+and source-instance links. A caller-supplied assessment is never an input.
+
+Continuity flags are reconstructed inside that transaction. Direct observed batch
+links may preserve the original anchor; intervening quiet batches do not silently
+connect state intervals. The original anchor document/receipt witness remains pinned
+across repeated states. Open-anchor provenance is relaxed only for this explicit
+profile with an immutable proof-bearing predecessor receipt; legacy guards remain.
+The proof JSON, explicit SHA-256, parent proof/request identity, source frontier,
+checkpoint, output and operation receipt are committed by the original atomic writer.
+
+Replay reconstructs the proof against the immutable predecessor generation rather
+than using a newer current head. It returns the original saved result without
+rewinding later progress. Conflicting request bytes or changed provenance reject.
+A new publication still checks the current checkpoint/generation under the processor
+lock. Two processes selecting the same work serialize to one operation and exact
+receipt replay.
+
+Current-cut loading is set-based and bounded to 100 batches. Resume revalidates the
+last committed cut witnesses and original open-anchor receipt, plus the exact parent
+operation/proof hash; it does not reconstruct an unbounded historical prefix. Batch
+loads are bounded to 202 distinct identities and 8 MiB of document/request metadata
+per load; original 100-observation and source-byte bounds remain. These are bounds,
+not fleet capacity or a production latency SLO. Historical proof ancestry is committed
+transitively through immutable parent operation hashes; this is not a recursive audit
+of every historical source document on every poll.
+
+`--activity-publication-only` adds an isolated disposable-SQL fixture with actual
+HTTP/mTLS-ingested source observations and whole OS child processes. It exercises:
+original-anchor continuation across three acquisition batches; pre-commit rollback;
+commit-before-response termination and exact replay; interruption during an observed
+SQL receipt-read wait; later-batch concurrent writer processes and restart; legacy
+checkpoint rejection and independent-machine progress; source/receipt corruption,
+post-preflight projection mutation, mapping/instance changes, authority expiry after
+an observed processor wait and committed approval withdrawal. The shipped version-2
+host drains 101 quiet batches in bounded cuts, with no fabricated interval or surviving
+anchor. Evidence is written to `artifacts/ingestion/activity-publication.json` with
+process identities and measured writer diagnostics.
+
+All implementation acceptance remains pending until the actual final-head CI and
+review are recorded in PR #39. This section does not declare any failing or unrun
+gate closed. Operator-screen acceptance follows this completed publishing boundary;
+quantity/OEE work and production commissioning remain separate.

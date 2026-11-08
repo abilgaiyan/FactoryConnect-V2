@@ -23,7 +23,7 @@ internal static class MtConnectIngestionAcceptance
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
             => assertion=="sql-evidence-proof" ? Task.FromResult(identity) : throw new SecurityDeniedException();
     }
-    internal static async Task<int> Run(InstallationTarget target,bool measureActivityHistory=false,bool workerHosting=false,bool quietBootstrap=false)
+    internal static async Task<int> Run(InstallationTarget target,bool measureActivityHistory=false,bool workerHosting=false,bool quietBootstrap=false,bool transactionPublication=false)
     {
         var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
         var now=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!;
@@ -415,6 +415,57 @@ internal static class MtConnectIngestionAcceptance
         await service.AcknowledgeActivationAsync(pair.Channel,ack);
         currentActivity=await mappingResolver.ResolveAsync(site,machine,
             currentActivity.Signal.MappingId,Stream);
+        if(transactionPublication)
+        {
+            var publicationDeadline=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(DATEADD(second,8,SYSUTCDATETIME()),'+00:00')"))!;
+            activation=await Intent(until:publicationDeadline);ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);
+            var expiring=await mappingResolver.ResolveAsync(site,machine,currentActivity.Signal.MappingId,Stream);
+            var early=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+            var begin=early.Cursor!.NextSequence;agent.Reply=(position,size)=>(200,Frame(position,size),null);
+            var expiredFrame=await client.AcquireAsync(agent.Endpoint,Device,begin,2);await Transport(await Request(expiredFrame));
+            var expiredScope=new ActivityWorkerScope(target.InstallationId,site,machine,currentActivity.Signal.MappingId,Stream,expiredFrame.InstanceId,begin-1,ActivityPublicationPolicy.CrossBatch);
+            count+=await ActivityHostAcceptance.ExpiringEmptyCut(target,expiredScope,(await atomicStore.DiscoverAcceptedWorkAsync(expiredScope,2)).Candidate!,publicationDeadline);
+            activation=await Intent();ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);
+            currentActivity=await mappingResolver.ResolveAsync(site,machine,currentActivity.Signal.MappingId,Stream);
+            var start=(await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream)).Cursor!.NextSequence;
+            var publicationScope=new ActivityWorkerScope(target.InstallationId,site,machine,currentActivity.Signal.MappingId,Stream,7,start-1,ActivityPublicationPolicy.CrossBatch);
+            async Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>> Source(int seconds,bool repeated,bool quiet)
+            {
+                var contextNow=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+                var position=contextNow.Cursor!.NextSequence;
+                agent.Reply=(position,size)=>(200,Frame(position,size,activity:!quiet,activityStart:currentActivity.EffectiveFrom.AddSeconds(seconds),activityRepeats:repeated),null);
+                var frame=await client.AcquireAsync(agent.Endpoint,Device,position,quiet?2:4);await Transport(await Request(frame));
+                return await acceptedReader.ReadBoundedAsync(site,ActivityQualificationIdentity.From(currentActivity.Signal,"publication-fixture-read"),frame.InstanceId,position-1,frame.NextSequence-1,100);
+            }
+            async Task<ActivityWorkCandidate> OtherWork()
+            {
+                var originalMachine=machine;var originalAssignment=assignment;
+                try
+                {
+                    machine=otherMachine;assignment=Guid.NewGuid();
+                    foreach(var permission in new[]{"runtime.assign","configuration.activate","machine.enable","commissioning.read"})await Grant(proposer,permission,AuthorizationScope.Machine(site,machine));
+                    await Grant(approver,"machine.enable",AuthorizationScope.Machine(site,machine));
+                    await service.AssignRuntimeAsync(token,new(Guid.NewGuid(),assignment,site,machine,f.Payload.RuntimeIdentityId,1,now.AddMinutes(-5),null,0,null,await Epoch(),"independent activity fixture"));
+                    var enablingOther=new MachineEnableProposalRequest(Guid.NewGuid(),Guid.NewGuid(),site,machine,null,0,await Epoch(),now.AddMinutes(10),"independent machine enable");
+                    await service.ProposeMachineEnableAsync(token,enablingOther);await service.ApproveMachineEnableAsync(reviewToken,Guid.NewGuid(),enablingOther.ProposalId,Guid.NewGuid(),site,machine,await Epoch(),"independent machine review");
+                    var otherActivation=await Intent();await service.AcknowledgeActivationAsync(pair.Channel,Ack(otherActivation,1));
+                    var otherMapping=package.Machines.Single(x=>x.MachineId==machine).Signals.Single(x=>x.SemanticKey=="machine-activity").MappingId;
+                    var otherApproved=await mappingResolver.ResolveAsync(site,machine,otherMapping,Stream);
+                    agent.Reply=(position,size)=>(200,Frame(position,size,activity:true,activityStart:otherApproved.EffectiveFrom.AddSeconds(10)),null);
+                    var frame=await client.AcquireAsync(agent.Endpoint,Device,100,4);await Transport(await Request(frame));
+                    var scope=new ActivityWorkerScope(target.InstallationId,site,machine,otherMapping,Stream,frame.InstanceId,99);
+                    var first=(await atomicStore.DiscoverAcceptedWorkAsync(scope,1)).Candidate!;await atomicStore.ApplyAcceptedWorkAsync(first);
+                    var legacy=await atomicStore.ReadCheckpointAsync(first.Qualification);
+                    try{await atomicStore.DiscoverAcceptedWorkAsync(scope with{PublicationProfile=ActivityPublicationPolicy.CrossBatch},1);throw new InvalidOperationException("Legacy adoption succeeded.");}
+                    catch(InvalidDataException){Check(await atomicStore.ReadCheckpointAsync(first.Qualification)==legacy,"new policy rejects a real legacy checkpoint without changing it");}
+                    return (await atomicStore.DiscoverAcceptedWorkAsync(scope,1)).Candidate!;
+                }
+                finally {machine=originalMachine;assignment=originalAssignment;}
+            }
+            count+=await ActivityPublicationAcceptance.Run(target,publicationScope,currentActivity,Source,OtherWork,
+                async()=>{await enabling.WithdrawConfigurationApprovalAsync(reviewToken,await Withdrawal());});
+            return count;
+        }
         if(quietBootstrap)
         {
             var emptyDeadline=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(DATEADD(second,8,SYSUTCDATETIME()),'+00:00')"))!;
@@ -946,7 +997,7 @@ internal static class MtConnectIngestionAcceptance
             var timezone=Guid.NewGuid();var schedule=Guid.NewGuid();var breaks=Guid.NewGuid();var bytes=Encoding.UTF8.GetBytes("{}");var hash=SHA256.HashData(bytes);
             await Exec("INSERT configuration.SiteTimezoneRevision(TimezoneRevisionId,SiteId,IanaZoneId,TzdbRelease,ResolverVersion,GapPolicy,FoldPolicy,RulesBytes,RulesSha256,CanonicalBytes,ContentHash) VALUES(@timezone,@site,N'Etc/UTC','fixture','fixture','reject','reject',@bytes,@hash,@bytes,@hash); INSERT configuration.SharedScheduleRevision VALUES(@schedule,@site,@bytes,@hash); INSERT configuration.SharedBreakPolicyRevision VALUES(@break,@site,@bytes,@hash);",("@timezone",timezone),("@schedule",schedule),("@break",breaks),("@site",site),("@bytes",bytes),("@hash",hash));
             var machines=new List<MachineConfiguration>();
-            for(var i=0;i<size;i++){var id=i==0?machine:Guid.NewGuid();if(i>0)await Exec("INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(@machine,@site,N'Batch fixture')",("@machine",id),("@site",site));machines.Add(new(id,line,now.AddMinutes(-5),null,new(schedule,hash),new(breaks,hash),[new(Guid.NewGuid(),"counter-upper","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("Counter"),"identity-v1"),new(Guid.NewGuid(),"counter-lower","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("counter"),"identity-v1"),new(Guid.NewGuid(),"machine-activity","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("execution"),"activity-state-v1|ACTIVE=Running|READY=Idle")],["counter-reading"]));}
+            for(var i=0;i<(transactionPublication && size==1?2:size);i++){var id=i==0?machine:transactionPublication && size==1?otherMachine:Guid.NewGuid();if(i>0 && id!=otherMachine)await Exec("INSERT [master].Machine(MachineId,SiteId,DisplayName) VALUES(@machine,@site,N'Batch fixture')",("@machine",id),("@site",site));machines.Add(new(id,line,now.AddMinutes(-5),null,new(schedule,hash),new(breaks,hash),[new(Guid.NewGuid(),"counter-upper","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("Counter"),"identity-v1"),new(Guid.NewGuid(),"counter-lower","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("counter"),"identity-v1"),new(Guid.NewGuid(),"machine-activity","mtconnect",Stream,"utf-8",Encoding.UTF8.GetBytes("execution"),"activity-state-v1|ACTIVE=Running|READY=Idle")],["counter-reading"]));}
             var package=new PackageDefinition(Guid.NewGuid(),Guid.NewGuid(),1,site,new(timezone,hash),machines);
             await service.SubmitConfigurationAsync(token,Guid.NewGuid(),package,await Epoch(),"operational fixture package");var review=Guid.NewGuid();await service.ReviewConfigurationAsync(reviewToken,new(Guid.NewGuid(),review,site,package.RevisionId,PackageCanonicalizer.Hash(package),true,await Epoch(),"independent package review"));return(package,review);
         }

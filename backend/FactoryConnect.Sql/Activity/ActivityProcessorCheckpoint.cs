@@ -43,7 +43,7 @@ public sealed record ActivityAcceptedFrontier(
     Guid AcknowledgementId,string PackageSha256,
     SqlAcceptedActivityEvidenceReader.AcceptedRow? LastObservation,
     SqlAcceptedActivityEvidenceReader.AcceptedRow? OpenAnchorObservation,Guid SiteId=default,
-    SqlAcceptedActivityEvidenceReader.BatchProof? FrontierBatch=null);
+    SqlAcceptedActivityEvidenceReader.BatchProof? FrontierBatch=null,string? PublicationAncestryJson=null,string? PublicationProofSha256=null);
 
 public sealed record ActivityProcessorCheckpoint(
     ActivityQualificationIdentity Qualification,

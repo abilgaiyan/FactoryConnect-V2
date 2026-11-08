@@ -180,3 +180,14 @@ This is qualification groundwork, not sustained cross-batch activity publication
 Existing policy, checkpoint/request identities, quiet-window anchor breaks and
 runtime output remain unchanged. Next is a versioned writer-bound proof with durable
 restart/replay qualification before any stronger continuity policy is enabled.
+
+## FC2-039 transaction-bound publication completion
+
+Draft PR #39 extends the existing atomic writer with an explicit receipt-bound
+cross-batch profile, version-4 operation fingerprints, persisted proof/anchor ancestry
+and whole-process SQL acceptance. Legacy profiles remain isolated. The dedicated
+fixture covers observed cross-batch output, rollback/replay/concurrent writers,
+provenance/eligibility failures, independent-machine progress and 101 quiet batches.
+Final executable qualification and merge disposition remain tracked in PR #39.
+Do not infer readiness from the earlier standalone manifest fixtures. After the
+publication/restart gates pass, continue operator-screen acceptance before OEE work.

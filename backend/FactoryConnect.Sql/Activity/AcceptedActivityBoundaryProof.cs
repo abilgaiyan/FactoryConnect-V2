@@ -109,21 +109,30 @@ internal static class AcceptedActivityBoundaryVerifier
     private static (MtConnectSampleFrame Frame,Guid? Predecessor,ulong? Instance) Verify(
         ApprovedActivitySignal approved,SqlAcceptedActivityEvidenceReader.AcceptedRow row,ActivityBoundaryBatch batch)
     {
-        var h=batch.Header;
-        if(batch.RuntimeIdentityId==Guid.Empty || batch.Request.Length is <1 or >16384 ||
-            h.BatchId!=row.BatchId || h.AcknowledgementId!=approved.AcknowledgementId || h.InstanceId!=row.InstanceId ||
-            h.DocumentSha256!=row.DocumentSha256 || h.DocumentSha256!=Convert.ToHexString(SHA256.HashData(batch.Document)) ||
-            !CryptographicOperations.FixedTimeEquals(SHA256.HashData(batch.Request),batch.RequestHash))
-            throw new InvalidDataException("Retained boundary batch or ingestion receipt integrity differs.");
-        const string prefix="mtconnect:uuid:";
-        if(!row.StreamKey.StartsWith(prefix,StringComparison.Ordinal))throw new InvalidDataException("Exact MTConnect stream required.");
-        var frame=MtConnectSampleParser.Parse(batch.Document,row.StreamKey[prefix.Length..],h.FromSequence);
-        if(frame.InstanceId!=h.InstanceId || frame.FirstSequence!=h.FirstAvailableSequence || frame.NextSequence!=h.NextSequence)
-            throw new InvalidDataException("Boundary source headers differ from retained batch.");
-        var source=frame.Observations.SingleOrDefault(x=>x.Sequence==row.Sequence);
+        var result=VerifyReceipt(row.SiteId,row.MachineId,row.StreamKey,batch);
+        if(batch.Header.BatchId!=row.BatchId || batch.Header.AcknowledgementId!=approved.AcknowledgementId ||
+            batch.Header.InstanceId!=row.InstanceId || batch.Header.DocumentSha256!=row.DocumentSha256)
+            throw new InvalidDataException("Retained endpoint batch identity differs.");
+        var source=result.Frame.Observations.SingleOrDefault(x=>x.Sequence==row.Sequence);
         if(source is null || source.DataItemId!=row.Address || source.RawValue!=row.RawValue || source.Quality!=row.Quality ||
             source.SourceTimestamp!=row.SourceTimestamp || source.Timestamp!=row.ObservedAt || source.ContentHash!=row.CanonicalSha256)
             throw new InvalidDataException("Boundary endpoint differs from verified source document.");
+        return result;
+    }
+
+    internal static (MtConnectSampleFrame Frame,Guid? Predecessor,ulong? Instance) VerifyReceipt(
+        Guid site,Guid machine,string stream,ActivityBoundaryBatch batch)
+    {
+        var h=batch.Header;
+        if(batch.RuntimeIdentityId==Guid.Empty || batch.Request.Length is <1 or >16384 ||
+            h.DocumentSha256!=Convert.ToHexString(SHA256.HashData(batch.Document)) ||
+            !CryptographicOperations.FixedTimeEquals(SHA256.HashData(batch.Request),batch.RequestHash))
+            throw new InvalidDataException("Retained batch or ingestion receipt integrity differs.");
+        const string prefix="mtconnect:uuid:";
+        if(!stream.StartsWith(prefix,StringComparison.Ordinal))throw new InvalidDataException("Exact MTConnect stream required.");
+        var frame=MtConnectSampleParser.Parse(batch.Document,stream[prefix.Length..],h.FromSequence);
+        if(frame.InstanceId!=h.InstanceId || frame.FirstSequence!=h.FirstAvailableSequence || frame.NextSequence!=h.NextSequence)
+            throw new InvalidDataException("Boundary source headers differ from retained batch.");
         try
         {
             using var document=JsonDocument.Parse(batch.Request);var root=document.RootElement;
@@ -132,8 +141,8 @@ internal static class AcceptedActivityBoundaryVerifier
             ulong? instance=instanceText is null ? null : ulong.Parse(instanceText,NumberStyles.None,CultureInfo.InvariantCulture);
             if((predecessor is null)!=(instance is null))throw new InvalidDataException("Incomplete ingestion predecessor identity.");
             var expected=JsonSerializer.SerializeToUtf8Bytes(new {
-                version=1,action="ingest-mtconnect",SiteId=row.SiteId,MachineId=row.MachineId,
-                AcknowledgementId=h.AcknowledgementId,StreamKey=row.StreamKey,ExpectedBatchId=predecessor,
+                version=1,action="ingest-mtconnect",SiteId=site,MachineId=machine,
+                AcknowledgementId=h.AcknowledgementId,StreamKey=stream,ExpectedBatchId=predecessor,
                 expectedInstance=instance?.ToString(CultureInfo.InvariantCulture),from=h.FromSequence.ToString(CultureInfo.InvariantCulture),documentHash=h.DocumentSha256
             });
             if(!expected.AsSpan().SequenceEqual(batch.Request))throw new InvalidDataException("Boundary receipt does not bind exact batch scope and document.");

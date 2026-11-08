@@ -9,7 +9,7 @@ using Microsoft.Data.SqlClient;
 namespace FactoryConnect.Sql.ActivityProcessing;
 
 public sealed record ActivityWorkerScope(Guid InstallationId,Guid SiteId,Guid MachineId,
-    Guid MappingId,string StreamKey,ulong InstanceId,ulong BootstrapAfterSequence);
+    Guid MappingId,string StreamKey,ulong InstanceId,ulong BootstrapAfterSequence,string PublicationProfile=ActivityPublicationPolicy.Legacy);
 public sealed record ActivityWorkCandidate(Guid OperationId,ActivityWorkerScope Scope,
     ActivityQualificationIdentity Qualification,ulong ExpectedGeneration,ulong AfterSequence,ulong ThroughSequence,bool IsEmpty=false);
 public sealed record ActivityWorkDiscovery(ulong Generation,ulong AfterSequence,ulong? AcceptedThrough,
@@ -22,6 +22,7 @@ public sealed partial class SqlActivityProcessorStore
     public async Task<ActivityWorkDiscovery> DiscoverAcceptedWorkAsync(ActivityWorkerScope scope,int take=100,CancellationToken ct=default)
     {
         ArgumentNullException.ThrowIfNull(scope);
+        ActivityPublicationPolicy.Validate(scope.PublicationProfile);
         if(new[]{scope.InstallationId,scope.SiteId,scope.MachineId,scope.MappingId}.Any(x=>x==Guid.Empty) ||
             string.IsNullOrWhiteSpace(scope.StreamKey) || !scope.StreamKey.StartsWith("mtconnect:uuid:",StringComparison.Ordinal) || scope.StreamKey.Length=="mtconnect:uuid:".Length ||
             Utf8.GetByteCount(scope.StreamKey)>512 || scope.BootstrapAfterSequence==ulong.MaxValue || take is <1 or >100)
@@ -48,7 +49,7 @@ public sealed partial class SqlActivityProcessorStore
             }
             var approved=await new SqlApprovedActivityMappingResolver(connectionString,scope.InstallationId)
                 .ResolveInTransactionAsync(c,t,scope.SiteId,scope.MachineId,scope.MappingId,scope.StreamKey,ct);
-            var identity=AcceptedActivityContinuityQualifier.QualificationFor(approved);
+            var identity=AcceptedActivityContinuityQualifier.QualificationFor(approved,scope.PublicationProfile);
             var checkpoint=ActivityCheckpointEvaluator.Initial(identity);
             await using(var q=new SqlCommand("""
                 IF EXISTS(SELECT 1 FROM activity.ProcessorCheckpoint WITH(HOLDLOCK)
@@ -108,13 +109,13 @@ public sealed partial class SqlActivityProcessorStore
                 await using(var budget=new SqlCommand("IF EXISTS(SELECT 1 FROM activity.ProcessorOperation WHERE OperationId=@op AND DATALENGTH(ResultBytes)>8388608) THROW 51092,'Worker ancestry exceeds byte bound.',1;",c,t))
                 {budget.Parameters.AddWithValue("@op",predecessor.OperationId);await budget.ExecuteNonQueryAsync(ct);}
                 await VerifyPredecessorAsync(c,t,identity,checkpoint,new(scope.SiteId,scope.InstallationId,approved,
-                    Array.Empty<SqlAcceptedActivityEvidenceReader.AcceptedRow>(),scope.InstanceId,after,after,"[]"),ct);
+                    Array.Empty<SqlAcceptedActivityEvidenceReader.AcceptedRow>(),scope.InstanceId,after,after,"[]",PublicationProfile:scope.PublicationProfile),ct);
             }
             else
             {
                 // Check bootstrap even for an empty poll: no caller-selected later start.
                 await VerifyPredecessorAsync(c,t,identity,checkpoint,new(scope.SiteId,scope.InstallationId,approved,
-                    Array.Empty<SqlAcceptedActivityEvidenceReader.AcceptedRow>(),scope.InstanceId,after,after,"[]"),ct);
+                    Array.Empty<SqlAcceptedActivityEvidenceReader.AcceptedRow>(),scope.InstanceId,after,after,"[]",PublicationProfile:scope.PublicationProfile),ct);
             }
             if(after==acceptedThrough.Value)
             {await t.CommitAsync(ct);return new(checkpoint.NextGeneration,after,acceptedThrough,null);}

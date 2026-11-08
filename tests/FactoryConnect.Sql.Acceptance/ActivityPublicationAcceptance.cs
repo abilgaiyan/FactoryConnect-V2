@@ -1,0 +1,217 @@
+using System.Data;
+using System.Diagnostics;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using FactoryConnect.Sql;
+using FactoryConnect.Sql.ActivityProcessing;
+using FactoryConnect.Sql.Configuration;
+using Microsoft.Data.SqlClient;
+
+internal static class ActivityPublicationAcceptance
+{
+    internal sealed record Input(string ConnectionString,ActivityWorkCandidate Work,bool PauseBeforeResponse);
+    internal sealed record Event(int ProcessId,string Status,ActivityDurableResult? Result=null,string? Error=null,Dictionary<string,object?>? Metrics=null,int? SqlNumber=null,string? Reason=null);
+    private sealed record Child(Process Process,string App,Task<string> Errors);
+    internal static async Task<int> ChildMain()
+    {
+        try
+        {
+            var input=JsonSerializer.Deserialize<Input>((await Console.In.ReadLineAsync())!)!;
+            RequireDisposable(new SqlConnectionStringBuilder(input.ConnectionString).InitialCatalog);
+            var metrics=new Dictionary<string,object?>();
+            using var listener=new ActivityListener{ShouldListenTo=s=>s.Name=="FactoryConnect.V2.Activity",Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped=a=>{if(a.OperationName=="activity.sql.apply")foreach(var tag in a.TagObjects)metrics[tag.Key]=tag.Value;}};
+            ActivitySource.AddActivityListener(listener);
+            await Console.Out.WriteLineAsync(JsonSerializer.Serialize(new Event(Environment.ProcessId,"started")));await Console.Out.FlushAsync();
+            var result=await new SqlActivityProcessorStore(input.ConnectionString).ApplyAcceptedWorkAsync(input.Work);
+            if(input.PauseBeforeResponse)await Console.In.ReadLineAsync();
+            await Console.Out.WriteLineAsync(JsonSerializer.Serialize(new Event(Environment.ProcessId,"committed",result,Metrics:metrics)));await Console.Out.FlushAsync();return 0;
+        }
+        catch(Exception error)
+        {await Console.Out.WriteLineAsync(JsonSerializer.Serialize(new Event(Environment.ProcessId,"held",Error:error.GetType().Name,
+            SqlNumber:(error as SqlException)?.Number,Reason:error is InvalidDataException?error.Message:null)));return 20;}
+    }
+    internal static async Task<int> Run(InstallationTarget target,ActivityWorkerScope scope,ApprovedActivitySignal approved,
+        Func<int,bool,bool,Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>>> ingest,
+        Func<Task<ActivityWorkCandidate>> independent,Func<Task> revoke)
+    {
+        RequireDisposable(target.Database);var checks=0;var children=new List<Child>();var events=new List<Event>();
+        var store=new SqlActivityProcessorStore(target.ConnectionString);var identity=AcceptedActivityContinuityQualifier.QualificationFor(approved,scope.PublicationProfile);
+        await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
+        async Task<object?> Scalar(string sql,params (string,object)[] args)
+        {await using var q=new SqlCommand(sql,c);foreach(var(n,v)in args)q.Parameters.AddWithValue(n,v);return await q.ExecuteScalarAsync();}
+        async Task<string> Snapshot()=>JsonSerializer.Serialize(new{
+            checkpoint=await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@m AND MappingId=@s",("@m",scope.MachineId),("@s",scope.MappingId)),
+            periods=await Scalar("SELECT COUNT(*) FROM activity.ClosedPeriod WHERE MachineId=@m",("@m",scope.MachineId)),
+            receipts=await Scalar("SELECT COUNT(*) FROM activity.ProcessorOperation WHERE MachineId=@m",("@m",scope.MachineId))});
+        void Check(bool pass,string name){if(!pass)throw new InvalidOperationException(name);checks++;Console.WriteLine("PASS: publication "+name);}
+        async Task Reject(Func<Task> action,string name)
+        {try{await action();}catch(Exception e)when(e is InvalidDataException or InvalidOperationException or SqlException or FactoryConnect.Sql.Security.SecurityDeniedException)
+            {if(e is InvalidOperationException && e.Message=="negative fixture did not reject")throw;Check(true,name);return;}throw new InvalidOperationException("negative fixture did not reject");}
+        async Task<ActivityWorkCandidate> Work(int take=100)=>(await store.DiscoverAcceptedWorkAsync(scope,take)).Candidate??throw new InvalidOperationException("Missing publication candidate.");
+        async Task Wait(Func<Task<bool>> probe,string label)
+        {var clock=Stopwatch.StartNew();while(clock.Elapsed<TimeSpan.FromSeconds(12)){if(await probe())return;await Task.Delay(20);}throw new InvalidOperationException("Timed out: "+label);}
+        async Task<Child> Start(ActivityWorkCandidate work,bool pause=false)
+        {
+            var app="fc2-publish-child-"+Guid.NewGuid().ToString("N");var cs=new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName=app};
+            var info=new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")??"dotnet"){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
+            info.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);info.ArgumentList.Add("--publication-child");
+            var p=Process.Start(info)!;var child=new Child(p,app,p.StandardError.ReadToEndAsync());children.Add(child);
+            await p.StandardInput.WriteLineAsync(JsonSerializer.Serialize(new Input(cs.ConnectionString,work,pause)));await p.StandardInput.FlushAsync();
+            var started=await Read(child);Check(started.Status=="started","new OS process starts with explicit publication work");return child;
+        }
+        async Task<Event> Read(Child child)
+        {var line=await child.Process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));var e=line is null?null:JsonSerializer.Deserialize<Event>(line);
+            if(e is null || e.ProcessId!=child.Process.Id)throw new InvalidOperationException("No process-bound publication event.");
+            if(e.Status=="held")Console.WriteLine("HOLD: publication child "+JsonSerializer.Serialize(e));events.Add(e);return e;}
+        async Task<ActivityDurableResult> Committed(Child child)
+        {var e=await Read(child);await child.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));Check(e.Status=="committed" && e.Result is not null && child.Process.ExitCode==0,"child commits or retrieves exact immutable publication");return e.Result!;}
+        async Task Kill(Child child)
+        {Check(!child.Process.HasExited,"terminate a live publishing process");child.Process.Kill(true);await child.Process.WaitForExitAsync();}
+        async Task Drain(Child child)=>await Wait(async()=>Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE program_name=@app",("@app",child.App)))==0,"terminated SQL sessions drain");
+        async Task<(SqlConnection,SqlTransaction)> Gate(string resource)
+        {var holder=new SqlConnection(target.ConnectionString);await holder.OpenAsync();var tx=(SqlTransaction)await holder.BeginTransactionAsync();await using var q=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=@rsc,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=0; IF @r<0 THROW 51098,'Fixture gate unavailable.',1;",holder,tx);q.Parameters.AddWithValue("@rsc",resource);await q.ExecuteNonQueryAsync();return(holder,tx);}
+        async Task WaitProcessor(Child child)=>await Wait(async()=>Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id=l.request_session_id WHERE s.program_name=@app AND l.resource_type='APPLICATION' AND l.request_status='WAIT' AND l.request_mode='X'",("@app",child.App)))==1,"publication passed preflight and waits on processor");
+        try
+        {
+            var opening=await ingest(10,true,false);var first=await Work();
+            var firstChild=await Start(first,pause:true);
+            await Wait(async()=>Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM activity.ProcessorOperation WHERE OperationId=@op",("@op",first.OperationId)))==1,"commit before response");
+            var cp=await store.ReadCheckpointAsync(identity);
+            Check(cp.NextGeneration==1 && cp.OpenAnchor?.Sequence==opening[0].Sequence && cp.AcceptedSource?.PublicationAncestryJson is not null,"parent observes durable new-policy proof and original anchor before response");
+            await Kill(firstChild);await Drain(firstChild);var firstReplay=await Committed(await Start(first));
+            Check(firstReplay.Replayed && firstReplay.Checkpoint==cp,"post-commit pre-response death replays exactly");
+            var other=await independent();var second=await ingest(20,true,false);var secondWork=await Work();
+            var machineGate=SqlActivityProcessorStore.ProcessorLockResource(scope.MachineId,scope.MappingId,scope.StreamKey);
+            var (holder,tx)=await Gate(machineGate);Child secondChild;
+            await using(holder)await using(tx)
+            {
+                secondChild=await Start(secondWork);await WaitProcessor(secondChild);
+                var otherResult=await store.ApplyAcceptedWorkAsync(other).WaitAsync(TimeSpan.FromSeconds(8));
+                Check(otherResult.Checkpoint.Qualification.MachineId!=scope.MachineId && otherResult.NewPeriods.Count==1 && (await store.ReadCheckpointAsync(identity))==cp,
+                    "independent eligible machine publishes while this processor waits");await tx.RollbackAsync();
+            }
+            var continued=await Committed(secondChild);
+            Check(continued.NewPeriods.Count==0 && continued.Checkpoint.OpenAnchor?.Sequence==opening[0].Sequence &&
+                continued.Checkpoint.LastConsumedSample?.Sequence==second[^1].Sequence,"new process preserves original anchor across a verified acquisition boundary");
+            var closing=await ingest(30,false,false);var close=await Work();var beforeClose=await Snapshot();
+            await Reject(()=>store.ApplyAcceptedWorkAsync(close with{Scope=scope with{InstanceId=scope.InstanceId+1}}),"changed source instance rejects");
+            await Reject(()=>store.ApplyAcceptedWorkAsync(close with{Scope=scope with{MappingId=Guid.NewGuid()}}),"changed mapping rejects");
+            var originalRequest=(byte[])(await Scalar("SELECT RequestBytes FROM security.SecurityOperation WHERE OperationId=@op",("@op",closing[0].BatchId)))!;
+            await Scalar("DISABLE TRIGGER security.TR_Operation_Immutable ON security.SecurityOperation");
+            try
+            {
+                var node=JsonNode.Parse(originalRequest)!;node["ExpectedBatchId"]=Guid.NewGuid();var altered=Encoding.UTF8.GetBytes(node.ToJsonString());
+                await Scalar("UPDATE security.SecurityOperation SET RequestBytes=@b,RequestHash=HASHBYTES('SHA2_256',@b) WHERE OperationId=@op",("@b",altered),("@op",closing[0].BatchId));
+                await Reject(()=>store.ApplyAcceptedWorkAsync(close),"checksum-consistent unrelated ingestion predecessor cannot publish");
+                await Scalar("UPDATE security.SecurityOperation SET RequestBytes=@b,RequestHash=HASHBYTES('SHA2_256',@b),ScopeKind='S',MachineId=NULL WHERE OperationId=@op",("@b",originalRequest),("@op",closing[0].BatchId));
+                await Reject(()=>store.ApplyAcceptedWorkAsync(close),"missing exact-scope immutable ingestion receipt rejects");
+            }
+            finally
+            {await Scalar("UPDATE security.SecurityOperation SET RequestBytes=@b,RequestHash=HASHBYTES('SHA2_256',@b),ScopeKind='M',MachineId=@m WHERE OperationId=@op",("@b",originalRequest),("@m",scope.MachineId),("@op",closing[0].BatchId));await Scalar("ENABLE TRIGGER security.TR_Operation_Immutable ON security.SecurityOperation");}
+            var raw=(byte[])(await Scalar("SELECT RawDocument FROM acquisition.MtConnectBatch WHERE BatchId=@op",("@op",closing[0].BatchId)))!;
+            await Scalar("DISABLE TRIGGER acquisition.TR_MtConnectBatch_Immutable ON acquisition.MtConnectBatch");
+            try
+            {
+                var changed=Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(raw).Replace("ACTIVE","ALTERED",StringComparison.Ordinal));
+                await Scalar("UPDATE acquisition.MtConnectBatch SET RawDocument=@b,DocumentHash=HASHBYTES('SHA2_256',@b) WHERE BatchId=@op",("@b",changed),("@op",closing[0].BatchId));
+                await Reject(()=>store.ApplyAcceptedWorkAsync(close),"altered original document with consistent SQL hash rejects");
+            }
+            finally
+            {await Scalar("UPDATE acquisition.MtConnectBatch SET RawDocument=@b,DocumentHash=HASHBYTES('SHA2_256',@b) WHERE BatchId=@op",("@b",raw),("@op",closing[0].BatchId));await Scalar("ENABLE TRIGGER acquisition.TR_MtConnectBatch_Immutable ON acquisition.MtConnectBatch");}
+            Check(await Snapshot()==beforeClose,"all provenance negatives leave checkpoint periods and operation receipts unchanged");
+            var (mutationHolder,mutationTx)=await Gate(machineGate);
+            await using(mutationHolder)await using(mutationTx)
+            {
+                var waiting=await Start(close);await WaitProcessor(waiting);
+                await Scalar("DISABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+                try
+                {
+                    await Scalar("UPDATE acquisition.MtConnectObservation SET RawValue=N'changed-after-preflight' WHERE MachineId=@m AND InstanceId=@instance AND Sequence=@sequence",
+                        ("@m",scope.MachineId),("@instance",(decimal)scope.InstanceId),("@sequence",(decimal)closing[0].Sequence));
+                    await mutationTx.RollbackAsync();var held=await Read(waiting);await waiting.Process.WaitForExitAsync();
+                    Check(held.Status=="held" && waiting.Process.ExitCode==20,"projection changed after observed processor wait rejects inside publisher");
+                }
+                finally
+                {
+                    if(!waiting.Process.HasExited){waiting.Process.Kill(true);await waiting.Process.WaitForExitAsync();}
+                    await Scalar("UPDATE acquisition.MtConnectObservation SET RawValue=@value WHERE MachineId=@m AND InstanceId=@instance AND Sequence=@sequence",
+                        ("@value",closing[0].RawValue),("@m",scope.MachineId),("@instance",(decimal)scope.InstanceId),("@sequence",(decimal)closing[0].Sequence));
+                    await Scalar("ENABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
+                }
+            }
+            Check(await Snapshot()==beforeClose,"post-wait source rejection publishes no partial effects");
+            var barrier="fc2-publish-before-"+Guid.NewGuid().ToString("N");
+            await Scalar($"CREATE TRIGGER activity.Fixture_PublicationCommit ON activity.ClosedPeriod AFTER INSERT AS BEGIN DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=N'{barrier}',@LockMode='Shared',@LockOwner='Transaction',@LockTimeout=30000; IF @r<0 THROW 51098,'Fixture gate unavailable.',1; END");
+            Child blocked;
+            try
+            {
+                var (gate,transaction)=await Gate(barrier);await using(gate)await using(transaction)
+                {
+                    blocked=await Start(close);await Wait(async()=>Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id=l.request_session_id WHERE s.program_name=@app AND l.resource_type='APPLICATION' AND l.request_status='WAIT' AND l.request_mode='S'",("@app",blocked.App)))==1,"period insertion before atomic commit");
+                    await Kill(blocked);await transaction.RollbackAsync();
+                }
+                await Drain(blocked);Check(await Snapshot()==beforeClose,"pre-commit process death rolls back checkpoint proof receipts and periods together");
+            }
+            finally {await Scalar("DROP TRIGGER IF EXISTS activity.Fixture_PublicationCommit");}
+            var committedNoResponse=await Start(close,pause:true);
+            await Wait(async()=>Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM activity.ProcessorOperation WHERE OperationId=@op",("@op",close.OperationId)))==1,"cross-batch commit before response");
+            var closed=await store.ReadCheckpointAsync(identity);await Kill(committedNoResponse);await Drain(committedNoResponse);
+            var result=await Committed(await Start(close));
+            var exact=new ClosedActivityPeriod(scope.MachineId,scope.StreamKey,scope.MappingId,ActivityState.Running,opening[0].ObservedAt,closing[^1].ObservedAt,
+                closing[^1].ObservedAt.UtcTicks-opening[0].ObservedAt.UtcTicks,scope.InstanceId,opening[0].Sequence,closing[^1].Sequence,"ACTIVE","READY");
+            Check(result.Replayed && result.Checkpoint==closed && result.NewPeriods.Count==1 && result.NewPeriods[0]==exact &&
+                (await store.ReadPeriodPageAsync(identity)).Rows.Count==1,"verified state spans three acquisition batches and process lifetimes as exactly one durable period");
+            await Reject(()=>store.ApplyAcceptedWorkAsync(close with{ThroughSequence=closing[0].Sequence}),"changed request cannot reuse committed operation identity");
+            await Reject(()=>store.ApplyAcceptedWorkAsync(close with{OperationId=Guid.NewGuid()}),"different operation cannot publish an already-consumed generation");
+            var beforeReplay=await Snapshot();
+            await using(var replayHolder=new SqlConnection(target.ConnectionString))
+            {
+                await replayHolder.OpenAsync();await using var replayTx=(SqlTransaction)await replayHolder.BeginTransactionAsync();
+                int session;await using(var q=new SqlCommand("SELECT @@SPID; SELECT RequestHash FROM activity.ProcessorOperation WITH(ROWLOCK,XLOCK,HOLDLOCK) WHERE OperationId=@op",replayHolder,replayTx))
+                {q.Parameters.AddWithValue("@op",close.OperationId);await using var r=await q.ExecuteReaderAsync();await r.ReadAsync();session=r.GetInt16(0);await r.NextResultAsync();await r.ReadAsync();}
+                var retry=await Start(close);
+                await Wait(async()=>Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.dm_exec_requests r JOIN sys.dm_exec_sessions s ON s.session_id=r.session_id CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) text WHERE s.program_name=@app AND r.blocking_session_id=@holder AND r.wait_type LIKE 'LCK%' AND text.text LIKE '%SELECT RequestHash,RequestBytes,ResultBytes FROM activity.ProcessorOperation%'",("@app",retry.App),("@holder",session)))==1,"exact replay receipt retrieval is genuinely waiting");
+                await Kill(retry);await replayTx.RollbackAsync();await Drain(retry);
+            }
+            Check(await Snapshot()==beforeReplay,"termination during exact receipt replay leaves durable history unchanged");
+            var later=await ingest(40,false,false);var laterWork=await Work();
+            var (raceHolder,raceTx)=await Gate(machineGate);Child contenderOne;Child contenderTwo;
+            await using(raceHolder)await using(raceTx)
+            {
+                contenderOne=await Start(laterWork,pause:true);contenderTwo=await Start(laterWork);
+                await WaitProcessor(contenderOne);await WaitProcessor(contenderTwo);await raceTx.RollbackAsync();
+            }
+            await Committed(contenderTwo);await Kill(contenderOne);await Drain(contenderOne);
+            var laterReplay=await Committed(await Start(laterWork));
+            Check(laterReplay.Replayed && Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM activity.ProcessorOperation WHERE OperationId=@op",("@op",laterWork.OperationId)))==1,
+                "two actual concurrent writer processes serialize to one operation and restart replays after later-batch termination");
+            var latest=await store.ReadCheckpointAsync(identity);var afterLater=await Snapshot();var old=await Committed(await Start(close));
+            Check(old.Replayed && old.Checkpoint==closed && await Snapshot()==afterLater,"historical cross-batch replay after later input returns original receipt without rewinding current checkpoint");
+            await Reject(()=>store.DiscoverAcceptedWorkAsync(scope with{PublicationProfile=ActivityPublicationPolicy.Legacy}),"legacy worker cannot adopt new-policy checkpoint");
+            var countBefore=(await store.ReadPeriodPageAsync(identity)).Rows.Count;
+            for(var i=0;i<101;i++)await ingest(0,false,true);
+            var quietOne=await Work();await ActivityHostAcceptance.DrainPublication(target,scope,2);var quietResult=await store.ApplyAcceptedWorkAsync(quietOne);
+            var quietCheckpoint=await store.ReadCheckpointAsync(identity);
+            Check(quietOne.IsEmpty && quietResult.Replayed && quietResult.NewPeriods.Count==0 && quietCheckpoint.OpenAnchor is null &&
+                (await store.ReadPeriodPageAsync(identity)).Rows.Count==countBefore && (await store.DiscoverAcceptedWorkAsync(scope)).Candidate is null,
+                "101 verified quiet batches advance two bounded proof-bearing cuts without fabricated periods or retained anchor");
+            var afterQuiet=await ingest(60,false,false);await Committed(await Start(await Work()));
+            var page=await store.ReadPeriodPageAsync(identity);Check(!page.Rows.Any(x=>x.Period.StartSequence==later[^1].Sequence && x.Period.EndSequence==afterQuiet[0].Sequence),"quiet history never silently bridges old and new state observations");
+            var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
+            await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
+            Check(await Snapshot()==beforeRevocation,"revocation denial advances no checkpoint receipt or period");
+            Check(children.Select(x=>x.Process.Id).Distinct().Count()==children.Count && children.Count>=10,"restart qualification uses distinct actual OS process lifetimes");
+            Directory.CreateDirectory("artifacts/ingestion");await File.WriteAllTextAsync("artifacts/ingestion/activity-publication.json",JsonSerializer.Serialize(new{
+                profile=scope.PublicationProfile,checks,processIds=children.Select(x=>x.Process.Id),events,exactPeriod=exact,physicalCompleteness=false},new JsonSerializerOptions{WriteIndented=true}));
+            return checks;
+        }
+        finally
+        {foreach(var child in children){if(!child.Process.HasExited){child.Process.Kill(true);await child.Process.WaitForExitAsync();}await child.Errors;child.Process.Dispose();}}
+    }
+    private static void RequireDisposable(string name)
+    {if(!System.Text.RegularExpressions.Regex.IsMatch(name,"^FactoryConnect_V2_Test_[a-fA-F0-9]{32}$"))throw new InvalidOperationException("Generated disposable database required.");}
+}

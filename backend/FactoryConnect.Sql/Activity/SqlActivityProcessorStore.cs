@@ -71,7 +71,9 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         Guid SiteId,Guid InstallationId,ApprovedActivitySignal Approved,
         IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> Rows,
         ulong InstanceId,ulong AfterSequence,ulong ThroughSequence,string ProofJson,
-        IReadOnlyList<SqlAcceptedActivityEvidenceReader.BatchProof>? EmptyBatches=null);
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.BatchProof>? EmptyBatches=null,
+        string PublicationProfile=ActivityPublicationPolicy.Legacy,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.BatchProof>? PublicationBatches=null);
 
     /// <summary>
     /// Evidence-bound write candidate. Rechecks the active approved mapping and
@@ -112,6 +114,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
     public async Task<ActivityDurableResult> ApplyAcceptedWorkAsync(ActivityWorkCandidate work,CancellationToken ct=default)
     {
         ArgumentNullException.ThrowIfNull(work);
+        ActivityPublicationPolicy.Validate(work.Scope.PublicationProfile);
+        if(work.Scope.PublicationProfile==ActivityPublicationPolicy.CrossBatch)return await ApplyPublicationWorkAsync(work,false,ct);
         if(!work.IsEmpty)return await ApplyAcceptedAsync(work.OperationId,work.Scope.InstallationId,work.Scope.SiteId,
             work.Scope.MachineId,work.Scope.MappingId,work.Scope.StreamKey,work.Scope.InstanceId,
             work.AfterSequence,work.ThroughSequence,work.ExpectedGeneration,ct:ct);
@@ -151,15 +155,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
            expectedGeneration>long.MaxValue-1 ||
            identity!=ActivityQualificationIdentity.From(signal,identity.ContinuityIdentity))
             throw new ArgumentException("Exact bounded activity operation required.");
-        // Until transaction-bound cross-batch verification, versioned receipts
-        // and restart qualification are implemented, the accepted-source writer
-        // is intentionally restricted to its original continuity policy.
-        // This prevents an internal caller from selecting the new qualification
-        // identity while still publishing with legacy same-batch semantics.
-        if(accepted is not null &&
-           identity!=AcceptedActivityContinuityQualifier.QualificationFor(accepted.Approved))
-            throw new InvalidDataException(
-                "Accepted activity publication requires the enabled legacy continuity policy.");
+        if(accepted is not null && identity!=AcceptedActivityContinuityQualifier.QualificationFor(accepted.Approved,accepted.PublicationProfile))
+            throw new InvalidDataException("Accepted publication policy and qualification disagree.");
         using var activity=Diagnostics.StartActivity("activity.sql.apply",ActivityKind.Internal);
         var started=Stopwatch.GetTimestamp();
         var insertElapsed=TimeSpan.Zero;
@@ -179,6 +176,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             acceptedThrough=accepted?.ThroughSequence
         });
         var requestHash=SHA256.HashData(request);
+        string? publicationProof=null;
+        ActivityInputSample[]? publicationSamples=null;
         var resource=ProcessorLockResource(identity.MachineId,identity.MappingId,identity.StreamKey);
         await using var c=new SqlConnection(connectionString);
         if(activity is not null)c.StatisticsEnabled=true;
@@ -244,6 +243,24 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                 if(accepted.EmptyBatches is null)ValidateInterpretationPeriod(current,accepted.Rows);
                 if(accepted.EmptyBatches is not null)await VerifyEmptySourceInTransactionAsync(c,t,identity,accepted,ct);
                 else await VerifyAcceptedSourceInTransactionAsync(c,t,identity,accepted,ct);
+                if(accepted.PublicationProfile==ActivityPublicationPolicy.CrossBatch)
+                {
+                    var parent=await LoadPublicationParentAsync(c,t,identity,expectedGeneration,ct);
+                    await VerifyPredecessorAsync(c,t,identity,parent.Checkpoint,accepted,ct);
+                    var verified=await BuildPublicationProofAsync(c,t,identity,accepted,parent,savedSamples,ct);
+                    publicationProof=verified.Proof;publicationSamples=verified.Samples;
+                    activity?.SetTag("activity.publication.profile",accepted.PublicationProfile);
+                    activity?.SetTag("activity.publication.source.batches",accepted.PublicationBatches!.Count);
+                    request=JsonSerializer.SerializeToUtf8Bytes(new {
+                        version=4,profile=ActivityPublicationPolicy.CrossBatch,operationId,identity,expectedGeneration,
+                        acceptedInstallation=accepted.InstallationId,acceptedSite=accepted.SiteId,
+                        acceptedInstance=accepted.InstanceId,acceptedAfter=accepted.AfterSequence,acceptedThrough=accepted.ThroughSequence,
+                        samples=publicationSamples,acceptedSourceProof=accepted.ProofJson,publicationProof,
+                        publicationProofSha256=Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(publicationProof)))
+                    });
+                    requestHash=SHA256.HashData(request);
+                }
+
             }
             // Load exact operation receipt before checking expected generation:
             // an identical retry returns the original committed result.
@@ -292,12 +309,12 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             }
             if(checkpoint.NextGeneration!=expectedGeneration)
                 throw new InvalidOperationException("Stale activity processor generation.");
-            var evaluationSamples=savedSamples.ToArray();
+            var evaluationSamples=publicationSamples??savedSamples.ToArray();
             if(accepted is not null)
             {
                 using(Diagnostics.StartActivity("activity.sql.predecessor.verify",ActivityKind.Internal))
                     await VerifyPredecessorAsync(c,t,identity,checkpoint,accepted,ct);
-                if(accepted.EmptyBatches is null)
+                if(accepted.EmptyBatches is null && accepted.PublicationProfile==ActivityPublicationPolicy.Legacy)
                 {
                 var prior=checkpoint.AcceptedSource?.LastObservation;
                 var first=accepted.Rows[0];
@@ -337,6 +354,11 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                         accepted.Approved.PackageSha256,accepted.Rows[^1],anchorRow) } };
                 }
             }
+            if(publicationProof is not null)
+                evaluated=evaluated with {Checkpoint=evaluated.Checkpoint with {
+                    AcceptedSource=evaluated.Checkpoint.AcceptedSource! with {PublicationAncestryJson=publicationProof,
+                        PublicationProofSha256=Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(publicationProof)))}
+                }};
             using var publication=Diagnostics.StartActivity("activity.sql.publish",ActivityKind.Internal);
             var resultBytes=JsonSerializer.SerializeToUtf8Bytes(
                 new ActivityDurableResult(evaluated.Checkpoint,evaluated.ClosedPeriods,false));
@@ -677,6 +699,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         }
         if(frontier.FrontierBatch is {} endBatch)
             await VerifyFrontierBatchAsync(c,t,identity,binding.SiteId,frontier,endBatch,ct);
+        if(binding.PublicationProfile==ActivityPublicationPolicy.CrossBatch)
+            await VerifyPublicationCheckpointAsync(c,t,identity,checkpoint,binding,ct);
         if(frontier.LastObservation is null)
         {
             if(checkpoint.OpenAnchor is not null || checkpoint.OpenState is not null || frontier.OpenAnchorObservation is not null)
@@ -688,8 +712,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         {
             var anchor=frontier.OpenAnchorObservation
                 ?? throw new InvalidDataException("Accepted open anchor provenance is missing.");
-            if(anchor.BatchId!=frontier.LastObservation.BatchId ||
-               anchor.DocumentSha256!=frontier.LastObservation.DocumentSha256 ||
+            if((binding.PublicationProfile==ActivityPublicationPolicy.Legacy &&
+                (anchor.BatchId!=frontier.LastObservation.BatchId || anchor.DocumentSha256!=frontier.LastObservation.DocumentSha256)) ||
                anchor.Sequence>frontier.LastObservation.Sequence)
                 throw new InvalidDataException("Accepted open anchor crosses an unqualified batch boundary.");
             await Verify(anchor,checkpoint.OpenAnchor);
