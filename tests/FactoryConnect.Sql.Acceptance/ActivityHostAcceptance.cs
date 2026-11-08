@@ -149,10 +149,10 @@ internal static class ActivityHostAcceptance
         Check(candidate.IsEmpty,"quiet bootstrap proposes proof-bearing progress without an observation");
         checks+=await RejectChangedEmptyProjection(target,scope,candidate);
         var first=await Start(target,scope,1);
-        try { var committed=await Until(first,"committed");Check(committed.GetProperty("verifiedNoStateCut").GetBoolean() && committed.GetProperty("periods").GetInt32()==0,"fresh OS process commits only a verified no-state frontier");await Until(first,"idle");await Stop(first); }
+        try { var committed=await Until(first,"committed");var next=await Until(first,"committed");Check(committed.GetProperty("verifiedNoStateCut").GetBoolean() && next.GetProperty("verifiedNoStateCut").GetBoolean() && committed.GetProperty("periods").GetInt32()==0 && next.GetProperty("periods").GetInt32()==0,"fresh OS process commits two bounded no-state frontiers across 101 quiet batches");await Until(first,"idle");await Stop(first); }
         finally { await Dispose(first); }
         var empty=await store.ReadCheckpointAsync(identity);
-        Check(empty.NextGeneration==1 && empty.LastConsumedSample is null && empty.OpenAnchor is null && empty.OpenState is null &&
+        Check(empty.NextGeneration==2 && empty.LastConsumedSample is null && empty.OpenAnchor is null && empty.OpenState is null &&
             empty.AcceptedSource?.LastObservation is null && empty.AcceptedSource?.FrontierBatch is not null,
             "quiet bootstrap stores explicit absence instead of a fabricated sample or anchor");
         Check(await publishedSeriesCount()==0,"authorized history remains no-published-history before an actual activity observation");
@@ -162,7 +162,7 @@ internal static class ActivityHostAcceptance
         try { await Until(second,"committed");await Until(second,"committed");await Until(second,"committed");await Until(second,"idle");await Stop(second); }
         finally { await Dispose(second); }
         var result=await store.ReadCheckpointAsync(identity);var page=await store.ReadPeriodPageAsync(identity,100);
-        Check(result.NextGeneration==4 && page.Rows.Count==1 && page.Rows[0].Period.StartSequence==rows[0].Sequence &&
+        Check(result.NextGeneration==5 && page.Rows.Count==1 && page.Rows[0].Period.StartSequence==rows[0].Sequence &&
             page.Rows[0].Period.EndSequence==rows[2].Sequence && page.Rows[0].Period.DurationTicks==rows[2].ObservedAt.UtcTicks-rows[0].ObservedAt.UtcTicks,
             "a new process preserves the first real anchor across repeated state and publishes one exact interval");
         Check(await publishedSeriesCount()==1,"authorized history discovers the actual observation-backed publication");

@@ -431,6 +431,11 @@ internal static class MtConnectIngestionAcceptance
             var quiet=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
             var from=quiet.Cursor!.NextSequence;agent.Reply=(position,size)=>(200,Frame(position,size),null);
             var quietFrame=await client.AcquireAsync(agent.Endpoint,Device,from,2);await Transport(await Request(quietFrame));
+            for(var quietIndex=0;quietIndex<100;quietIndex++)
+            {
+                var additional=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+                var extra=await client.AcquireAsync(agent.Endpoint,Device,additional.Cursor!.NextSequence,2);await Transport(await Request(extra));
+            }
             var scope=new ActivityWorkerScope(target.InstallationId,site,machine,currentActivity.Signal.MappingId,Stream,quietFrame.InstanceId,from-1);
             count+=await ActivityHostAcceptance.QuietBootstrap(target,scope,AcceptedActivityContinuityQualifier.QualificationFor(currentActivity),async()=> {
                 var next=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);

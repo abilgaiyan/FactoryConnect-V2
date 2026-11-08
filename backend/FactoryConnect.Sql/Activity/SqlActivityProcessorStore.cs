@@ -159,6 +159,7 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         var savedSamples=samples.ToArray();
         var request=accepted?.EmptyBatches is {} emptyProof?JsonSerializer.SerializeToUtf8Bytes(new {
             version=3,kind="verified-no-state-cut-v1",operationId,identity,expectedGeneration,
+            acceptedInstallation=accepted.InstallationId,acceptedSite=accepted.SiteId,
             acceptedInstance=accepted.InstanceId,acceptedAfter=accepted.AfterSequence,
             acceptedThrough=accepted.ThroughSequence,batches=emptyProof.OrderBy(x=>x.BatchId).ToArray()
         }):JsonSerializer.SerializeToUtf8Bytes(new {
