@@ -63,6 +63,27 @@ internal static class ActivityBoundaryAcceptance
         var changedInstance=Make(102,104,103,"READY",left.Row.BatchId,8);
         Check(!AcceptedActivityBoundaryVerifier.Assess(approved,left.Row,changedInstance.Row,left.Batch,changedInstance.Batch).RetainedLink,"source-instance change is explicit even with exact predecessor ID");
         Check(!Assess(right.Batch with{RuntimeIdentityId=Guid.NewGuid()}).RetainedLink,"runtime identity change remains a break");
+        var legacyIdentity=AcceptedActivityContinuityQualifier.QualificationFor(approved);
+        var explicitLegacy=AcceptedActivityContinuityQualifier.QualificationForProfile(
+            approved,AcceptedActivityContinuityQualifier.LegacyProfile);
+        var crossBatchIdentity=AcceptedActivityContinuityQualifier.QualificationForProfile(
+            approved,AcceptedActivityContinuityQualifier.TransactionBoundProfile);
+        Check(legacyIdentity==explicitLegacy,
+            "explicit legacy profile preserves existing checkpoint identity");
+        Check(crossBatchIdentity!=legacyIdentity &&
+              crossBatchIdentity.MachineId==legacyIdentity.MachineId &&
+              crossBatchIdentity.MappingId==legacyIdentity.MappingId &&
+              crossBatchIdentity.ExactValueMapSha256==legacyIdentity.ExactValueMapSha256,
+            "new cross-batch policy isolates qualification without changing mapping scope");
+        try
+        {
+            _=AcceptedActivityContinuityQualifier.QualificationForProfile(approved,"unrecognized-profile");
+            throw new InvalidOperationException("Unknown continuity profile was accepted.");
+        }
+        catch(ArgumentOutOfRangeException)
+        {
+            Check(true,"unknown continuity policy fails closed");
+        }
         var cut=AcceptedActivityContinuityQualifier.Qualify(approved,[left.Row,right.Row]);
         Check(!cut.Samples[1].ContinuityFromPrevious && cut.UnprovenBoundaryLinks==1,"candidate proof does not enable cross-batch publication or change policy identity");
         return count;
