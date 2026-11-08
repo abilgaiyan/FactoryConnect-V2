@@ -13,7 +13,7 @@ internal static class ActivityHistoryApi
                 var series=await authority.ReadActivitySeriesAsync(token,site,machineId,stream,ct);
                 return Results.Ok(new { machineId,siteId=site,streamKey=stream,
                     evidenceKind="historical-derived-activity",currentConnectivity=(string?)null,
-                    verification="immutable-publication-receipts",continuity="same-batch-only-not-physical-completeness",
+                    verification="immutable-publication-receipts",continuity="publication-profile-not-yet-verified",
                     status=series.Count==0?"no-published-history":"published-history",series });
             }));
         app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/activity/{mappingId:guid}",async(
@@ -32,7 +32,7 @@ internal static class ActivityHistoryApi
                 var page=await authority.ReadActivityPeriodsAsync(token,site,machineId,stream,mappingId,take,cursor,ct);
                 return Results.Ok(new { machineId,siteId=site,streamKey=stream,
                     evidenceKind="historical-derived-activity",currentConnectivity=(string?)null,
-                    verification="immutable-publication-receipts",continuity="same-batch-only-not-physical-completeness",
+                    verification="immutable-publication-receipts",continuity="publication-profile-not-yet-verified",
                     page.Series,page.Rows,page.NextCursor });
             }));
     }
