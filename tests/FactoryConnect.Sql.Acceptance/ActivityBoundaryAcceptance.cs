@@ -93,6 +93,12 @@ internal static class ActivityBoundaryAcceptance
         Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
             SuccessorRequestSha256="NOT-A-DIGEST"}]),
             "malformed receipt fingerprint cannot enter a publication manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            SuccessorRequestSha256=witness.SuccessorRequestSha256.ToLowerInvariant()}]),
+            "noncanonical lowercase receipt identity cannot enter a publication manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Successor=witness.Successor with{SiteId=Guid.NewGuid()}}]),
+            "cross-site witness substitution cannot enter a publication manifest");
         Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness,witness]),
             "reordered or repeated witnesses cannot form a valid manifest");
         Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
