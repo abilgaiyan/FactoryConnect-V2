@@ -95,6 +95,19 @@ internal static class ActivityBoundaryAcceptance
             "malformed receipt fingerprint cannot enter a publication manifest");
         Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness,witness]),
             "reordered or repeated witnesses cannot form a valid manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Successor=witness.Successor with{MachineId=Guid.NewGuid()}}]),
+            "manifest rejects cross-machine successor substitution");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Successor=witness.Successor with{MappingId=Guid.NewGuid()}}]),
+            "manifest rejects cross-mapping successor substitution");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Successor=witness.Successor with{Address="different-signal"}}]),
+            "manifest rejects exact signal-address substitution");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Qualification=witness.Qualification with{StreamKey="different-stream"}}]),
+            "manifest rejects qualification/source stream disagreement");
+
         var cut=AcceptedActivityContinuityQualifier.Qualify(approved,[left.Row,right.Row]);
         Check(!cut.Samples[1].ContinuityFromPrevious && cut.UnprovenBoundaryLinks==1,"candidate proof does not enable cross-batch publication or change policy identity");
         return count;
