@@ -54,7 +54,7 @@ public sealed partial class SqlSecurityAuthority
                 ORDER BY StartedAt DESC,InstanceId DESC,StartSequence DESC,EffectId DESC;
                 IF COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(p.StartRawValue))+DATALENGTH(p.EndRawValue)+512)
                     FROM @selected selected INNER LOOP JOIN activity.ClosedPeriod p WITH(HOLDLOCK,FORCESEEK) ON p.EffectId=selected.EffectId),0)
-                    +COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(o.ResultBytes)))
+                    +COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(o.ResultBytes))+CONVERT(bigint,DATALENGTH(o.RequestBytes)))
                     FROM (SELECT DISTINCT p.OperationId FROM @selected selected INNER LOOP JOIN activity.ClosedPeriod p WITH(HOLDLOCK,FORCESEEK) ON p.EffectId=selected.EffectId) ids
                     INNER LOOP JOIN activity.ProcessorOperation o WITH(HOLDLOCK,FORCESEEK) ON o.OperationId=ids.OperationId),0)>8388608
                     THROW 51091,'Activity publication page exceeds byte budget.',1;
@@ -77,7 +77,6 @@ public sealed partial class SqlSecurityAuthority
             Number(q,"@sequence",after is null?null:ulong.Parse(after.StartSequence,CultureInfo.InvariantCulture));
             var rows=new List<(PublishedActivityPeriod Row,ClosedActivityPeriod Period)>();
             var receipts=new Dictionary<Guid,ActivityDurableResult>();
-            var receiptIds=new List<Guid>();
             await using(var r=await q.ExecuteReaderAsync(ct))
             {
                 while(await r.ReadAsync(ct))
@@ -108,10 +107,9 @@ public sealed partial class SqlSecurityAuthority
                         receipt.Checkpoint.NextGeneration!=(ulong)r.GetInt64(1) || receipt.NewPeriods.Count>1000)
                         throw new InvalidDataException("Published operation ancestry mismatch.");
                     receipts.Add(r.GetGuid(0),receipt);
-                    receiptIds.Add(r.GetGuid(0));
                 }
             }
-            foreach(var receiptId in receiptIds)
+            foreach(var receiptId in receipts.Keys)
                 await VerifyActivityPublicationReceiptAsync(c,t,receiptId,identity,ct);
             foreach(var item in rows)
                 if(!receipts.TryGetValue(item.Row.PublicationOperationId,out var receipt) ||
@@ -167,7 +165,7 @@ public sealed partial class SqlSecurityAuthority
             IF COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(p.CheckpointJson))) FROM @selected s
                 INNER LOOP JOIN activity.ProcessorCheckpoint p WITH(HOLDLOCK,FORCESEEK) ON p.MachineId=@machine AND p.StreamKeyBytes=@stream AND p.MappingId=s.MappingId),0)>8388608
                 THROW 51091,'Activity checkpoint bytes exceed bound.',1;
-            IF COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(p.CheckpointJson))+COALESCE(DATALENGTH(o.ResultBytes),0))
+            IF COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(p.CheckpointJson))+COALESCE(CONVERT(bigint,DATALENGTH(o.ResultBytes)),0)+COALESCE(CONVERT(bigint,DATALENGTH(o.RequestBytes)),0))
                 FROM @selected s INNER LOOP JOIN activity.ProcessorCheckpoint p WITH(HOLDLOCK,FORCESEEK) ON p.MachineId=@machine AND p.StreamKeyBytes=@stream AND p.MappingId=s.MappingId
                 LEFT LOOP JOIN activity.ProcessorOperation o WITH(HOLDLOCK,FORCESEEK) ON o.OperationId=TRY_CONVERT(uniqueidentifier,JSON_VALUE(p.CheckpointJson,'$.AcceptedSource.OperationId'))),0)>8388608
                 THROW 51091,'Activity ancestry bytes exceed bound.',1;
