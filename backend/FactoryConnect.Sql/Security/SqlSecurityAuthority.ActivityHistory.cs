@@ -77,6 +77,7 @@ public sealed partial class SqlSecurityAuthority
             Number(q,"@sequence",after is null?null:ulong.Parse(after.StartSequence,CultureInfo.InvariantCulture));
             var rows=new List<(PublishedActivityPeriod Row,ClosedActivityPeriod Period)>();
             var receipts=new Dictionary<Guid,ActivityDurableResult>();
+            var receiptIds=new List<Guid>();
             await using(var r=await q.ExecuteReaderAsync(ct))
             {
                 while(await r.ReadAsync(ct))
@@ -107,8 +108,11 @@ public sealed partial class SqlSecurityAuthority
                         receipt.Checkpoint.NextGeneration!=(ulong)r.GetInt64(1) || receipt.NewPeriods.Count>1000)
                         throw new InvalidDataException("Published operation ancestry mismatch.");
                     receipts.Add(r.GetGuid(0),receipt);
+                    receiptIds.Add(r.GetGuid(0));
                 }
             }
+            foreach(var receiptId in receiptIds)
+                await VerifyActivityPublicationReceiptAsync(c,t,receiptId,identity,ct);
             foreach(var item in rows)
                 if(!receipts.TryGetValue(item.Row.PublicationOperationId,out var receipt) ||
                     receipt.NewPeriods.Count(x=>x==item.Period)!=1)
