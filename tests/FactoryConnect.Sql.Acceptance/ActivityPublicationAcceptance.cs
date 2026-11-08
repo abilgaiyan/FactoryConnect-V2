@@ -293,6 +293,7 @@ internal static class ActivityPublicationAcceptance
                 "DELETE FROM activity.PublicationReceiptAncestry WHERE OperationId=@op",
                 "FC2-040 read rejects missing latest publication ancestry");
             await RejectCorruptRead(
+                "ALTER TABLE activity.ProcessorOperation NOCHECK CONSTRAINT CK_ActivityOperationRequestHash; "+
                 "DISABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation; "+
                 "UPDATE activity.ProcessorOperation SET RequestBytes=RequestBytes+0x20 WHERE OperationId=@op",
                 "FC2-040 read rejects publication request bytes inconsistent with stored request hash");
