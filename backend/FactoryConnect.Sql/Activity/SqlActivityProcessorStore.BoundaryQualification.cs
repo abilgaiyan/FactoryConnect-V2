@@ -47,6 +47,14 @@ public sealed partial class SqlActivityProcessorStore
         ArgumentNullException.ThrowIfNull(selected);
         if(selected.Count is <1 or >100)
             throw new InvalidDataException("Exact bounded cross-batch source cut required.");
+        if(selected.Any(x=>x.SiteId!=scope.SiteId || x.MachineId!=scope.MachineId ||
+            x.MappingId!=scope.MappingId || x.StreamKey!=scope.StreamKey ||
+            x.InstanceId!=scope.InstanceId) ||
+           predecessor is not null &&
+           (predecessor.SiteId!=scope.SiteId || predecessor.MachineId!=scope.MachineId ||
+            predecessor.MappingId!=scope.MappingId || predecessor.StreamKey!=scope.StreamKey ||
+            predecessor.InstanceId!=scope.InstanceId))
+            throw new InvalidDataException("Cross-batch witness endpoints differ from exact worker scope.");
         var proofs=new List<AcceptedActivityBoundaryProof>();
         var previous=predecessor;
         foreach(var current in selected)
