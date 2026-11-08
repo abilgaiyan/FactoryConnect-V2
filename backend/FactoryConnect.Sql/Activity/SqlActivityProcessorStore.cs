@@ -27,7 +27,7 @@ public sealed record ActivityPeriodPage(
 /// <summary>Serializable atomic checkpoint and closed-period commit.
 /// Caller supplies only independently qualified, retained input; this slice
 /// does not turn raw counters into state nor claim physical continuity.</summary>
-public sealed class SqlActivityProcessorStore(string connectionString)
+public sealed partial class SqlActivityProcessorStore(string connectionString)
 {
     private static readonly UTF8Encoding Utf8=new(false,true);
     private static readonly ActivitySource Diagnostics=new("FactoryConnect.V2.Activity");

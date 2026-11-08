@@ -115,3 +115,14 @@ Next: qualify an explicitly configured activity worker against retained accepted
 source, then production quantities and incremental shift metrics. Historical
 publication display does not imply automated processing, live connectivity,
 physical completeness, OEE availability or production commissioning.
+
+## FC2-035 merged; FC2-036 activity hosting candidate
+
+PR #35 merged at `164b726e`; final-head CI #42447566192 passed backend/dashboard,
+1,152 full SQL checks without skips, 240 history checks and 26 acquisition-host checks.
+The next increment is [FC2-036 explicit activity worker hosting](../implementation/FC2-036-activity-worker-host.md).
+It adds a separate serial, machine/source-scoped process, bounded metadata discovery,
+deterministic operation identities and real bootstrap/crash/restart/idle acceptance.
+Migration 020 supplies an exact-signal discovery index. Qualification is pending;
+production service setup, stronger continuity, source recovery and commissioning
+remain separate. Quantities and incremental shift metrics follow this hosting gate.

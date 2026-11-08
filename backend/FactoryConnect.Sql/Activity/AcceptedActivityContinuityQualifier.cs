@@ -33,12 +33,7 @@ public static class AcceptedActivityContinuityQualifier
         if(approved.PackageSha256.Length!=64||
            !approved.PackageSha256.All(Uri.IsHexDigit))
             throw new InvalidDataException("Canonical approved package hash required.");
-        // The identity is stable across source batches, but the per-sample
-        // continuity flag is not: only same verified batch provenance earns
-        // an internal link. Do not infer coverage across batches or restarts.
-        var policy=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            $"{Profile}|{approved.PackageRevisionId:N}|{approved.AcknowledgementId:N}|{approved.PackageSha256}")));
-        var qualification=ActivityQualificationIdentity.From(approved.Signal,policy);
+        var qualification=QualificationFor(approved);
         var samples=new List<ActivityInputSample>(accepted.Count);
         SqlAcceptedActivityEvidenceReader.AcceptedRow? previous=null;
         var linked=0;
@@ -75,4 +70,11 @@ public static class AcceptedActivityContinuityQualifier
         }
         return new(qualification,samples.AsReadOnly(),Assurance,linked,held);
     }
+    internal static ActivityQualificationIdentity QualificationFor(ApprovedActivitySignal approved)
+    {
+        var policy=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{Profile}|{approved.PackageRevisionId:N}|{approved.AcknowledgementId:N}|{approved.PackageSha256}")));
+        return ActivityQualificationIdentity.From(approved.Signal,policy);
+    }
+
 }

@@ -23,7 +23,7 @@ internal static class MtConnectIngestionAcceptance
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
             => assertion=="sql-evidence-proof" ? Task.FromResult(identity) : throw new SecurityDeniedException();
     }
-    internal static async Task<int> Run(InstallationTarget target,bool measureActivityHistory=false)
+    internal static async Task<int> Run(InstallationTarget target,bool measureActivityHistory=false,bool workerHosting=false)
     {
         var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
         var now=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!;
@@ -445,7 +445,17 @@ internal static class MtConnectIngestionAcceptance
                 await Count("activity.ClosedPeriod")==0 && await Count("activity.ProcessorOperation")==0,
                 "initial source cut cannot skip the acknowledged epoch's first retained transition");
         }
-        var positiveOperation=Guid.NewGuid();
+        var workerScope=new ActivityWorkerScope(target.InstallationId,site,machine,currentActivity.Signal.MappingId,
+            Stream,eligibleFrame.InstanceId,eligibleFrom-1);
+        var workerCandidate=workerHosting?(await atomicStore.DiscoverAcceptedWorkAsync(workerScope,2)).Candidate:null;
+        var positiveOperation=workerCandidate?.OperationId??Guid.NewGuid();
+        if(workerHosting)
+        {
+            try { await atomicStore.DiscoverAcceptedWorkAsync(workerScope with{BootstrapAfterSequence=eligibleFrom+1},2);throw new InvalidOperationException("Worker skipped initial source."); }
+            catch(InvalidDataException) { Check((await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)).NextGeneration==0,"worker discovery rejects a later bootstrap without publishing progress"); }
+            Check(workerCandidate is not null && workerCandidate.AfterSequence==eligibleFrom-1 && workerCandidate.ThroughSequence==eligibleFrom+3 &&
+                (await atomicStore.DiscoverAcceptedWorkAsync(workerScope,2)).Candidate==workerCandidate,"worker bootstrap candidate is exact bounded and stable across discovery retries");
+        }
         try
         {
             await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
@@ -460,9 +470,10 @@ internal static class MtConnectIngestionAcceptance
         Check((await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)).NextGeneration==0 &&
             await Count("activity.ClosedPeriod")==0 && await Count("activity.ProcessorOperation")==0,
             "eligible rollback leaves checkpoint periods and receipts unchanged");
-        var committed=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
-            site,machine,currentActivity.Signal.MappingId,Stream,
-            eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
+        var committed=workerHosting?await ActivityHostAcceptance.Bootstrap(target,workerScope,workerCandidate!):
+            await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
         var replay=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
             site,machine,currentActivity.Signal.MappingId,Stream,
             eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
@@ -682,6 +693,14 @@ internal static class MtConnectIngestionAcceptance
             count+=await ActivityHistoryMeasurementAcceptance.RunAsync(target,site,currentActivity,
                 eligibleCut.Qualification,processPending,HistorySource);
             count+=await ActivityWorkerMemoryAcceptance.RunAsync(target,site,eligibleCut.Qualification,HistorySource);
+            count+=await ActivityWorkDiscoveryAcceptance.Run(target,workerScope,HistorySource);
+            count+=await ActivityHistoryHttpAcceptance.Run(target.ConnectionString,target.InstallationId,site,machine,otherMachine,
+                currentActivity.Signal.MappingId,rootToken,Epoch);
+        }
+        if(workerHosting)
+        {
+            count+=await ActivityHostAcceptance.Run(target,workerScope,eligibleCut.Qualification,
+                (seconds,repeated)=>ProcessSource(seconds,repeated));
             count+=await ActivityHistoryHttpAcceptance.Run(target.ConnectionString,target.InstallationId,site,machine,otherMachine,
                 currentActivity.Signal.MappingId,rootToken,Epoch);
         }

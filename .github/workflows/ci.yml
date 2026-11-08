@@ -96,6 +96,8 @@ jobs:
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --activity-history-only
       - name: Whole-process single-machine acquisition host
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --host-only
+      - name: Whole-process accepted activity host
+        run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --activity-host-only
       - name: Real SQL acceptance (missing SQL is a failure)
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release
       - name: Upload synthetic SQL performance evidence
