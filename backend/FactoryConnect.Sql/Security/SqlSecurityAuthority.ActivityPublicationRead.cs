@@ -82,8 +82,9 @@ public sealed partial class SqlSecurityAuthority
             proof.Batches.Select(x=>x.BatchId).Distinct().Count()!=proof.Batches.Length ||
             proof.ParentOperationId!=parentId || (generation==1)!=(parentId is null) ||
             (parentId is null ? parentGeneration is not null || parentRequestHash is not null || parentResultHash is not null || parentProofHash is not null
-                : parentGeneration!=generation-1 || !string.Equals(proof.ParentRequestSha256,Convert.ToHexString(parentRequestHash!),StringComparison.Ordinal) ||
-                  !string.Equals(proof.ParentProofSha256,Convert.ToHexString(parentProofHash!),StringComparison.Ordinal)))
+                : parentGeneration!=generation-1 || parentRequestHash is null || parentResultHash is null || parentProofHash is null ||
+                  !string.Equals(proof.ParentRequestSha256,Convert.ToHexString(parentRequestHash),StringComparison.Ordinal) ||
+                  !string.Equals(proof.ParentProofSha256,Convert.ToHexString(parentProofHash),StringComparison.Ordinal)))
             throw new InvalidDataException("Version-4 publication predecessor identity mismatch.");
 
         await using var witnesses=Command(c,t,"""
