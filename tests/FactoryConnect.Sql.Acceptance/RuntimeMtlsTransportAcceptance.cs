@@ -11,7 +11,7 @@ internal static class RuntimeMtlsTransportAcceptance
         await using(var fixture=new RuntimeMtlsFixture(Guid.NewGuid(),Guid.NewGuid(),now,3))
         {
             // Windows 10 Schannel has no supported TLS 1.3; Linux CI still exercises both protocols.
-            var protocols=OperatingSystem.IsWindows()?[SslProtocols.Tls12]:new[]{SslProtocols.Tls12,SslProtocols.Tls13};
+            SslProtocols[] protocols=OperatingSystem.IsWindows()?[SslProtocols.Tls12]:[SslProtocols.Tls12,SslProtocols.Tls13];
             foreach(var protocol in protocols)
             {
                 await using var pair=await fixture.Connect(protocol);await pair.Channel.WriteAsync(new byte[]{90});
