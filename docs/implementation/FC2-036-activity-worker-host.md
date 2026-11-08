@@ -103,3 +103,70 @@ at deep retained history, requiring bounded observation/index access and determi
 candidate replay. Existing exact-output, processing-memory, crash/restart, API/browser
 and complete SQL regressions remain required. CI evidence, measured limits and final
 review must be recorded before readiness/merge. No production action is performed.
+
+## Executable hosting mechanics — qualified, operational quiet-source gate open
+
+`0260e60f` passed [CI #42453004167](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42453004167):
+all three jobs, 225 dedicated accepted-host checks, 245 history checks, 26 acquisition
+host checks and 1,152 full SQL checks without skips. Local Release build had zero
+warnings/errors; 142 pure checks passed. The hosting fixture includes a fresh
+bootstrap plus seven continuation/negative child lifetimes. These are controlled
+mechanics, not unattended machine-service or production commissioning acceptance.
+
+Discovery profiles at deep history reported 16 observation rows read across three
+calls: each predecessor access read one row and each populated next-signal probe
+read two. SQL omitted the empty seek's ActualRowsRead counter; it remains null in
+the artifact. The empty seek had four logical reads, versus three for each populated
+probe. The regression checks that relationship explicitly rather than inventing a
+zero row-read count. Command-level logical reads totaled 4,449 in this fixture.
+These workload observations do not establish fleet capacity or production SLOs.
+
+**Open operating gate:** long quiet source windows. A later state transition after
+more than 100 retained acquisition batches can exceed the existing source-proof
+window even when all intervening batches contain only counter observations. The
+host must hold without changing checkpoint, periods or receipts. An additional
+101-quiet-batch regression exercises that behavior through actual ingestion and
+the executable. Its current-head qualification is tracked in PR #36.
+
+Do not classify this limit as qualified sustained processing or move directly to
+quantities. Verified empty-source advancement is the next work item, before
+unattended activity hosting is considered complete. PR #36 remains draft while
+that operational acceptance boundary is open.
+
+## Next narrow contract — verified no-state frontier advancement (review candidate)
+
+This proposal is not implemented by the current host and does not weaken the
+existing nonempty source-cut contract:
+
+1. A no-state cut requires bounded verified retained documents for an exact
+   acknowledged machine/stream/source instance. Every document must be parsed and
+   prove that the selected sequence window contains zero observations for the
+   exact activity source address. Unknown/unavailable/unmapped state values at
+   that address are observations, never an empty window.
+2. Preserve exact batch IDs, hashes, scope, acknowledgement and source bounds in
+   a versioned proof. The writer must revalidate that complete cut in its own
+   transaction under existing lock order, current authority and the durable
+   acquisition frontier. Missing/altered documents or projected omissions deny
+   advancement; SQL metadata absence alone is insufficient.
+3. Atomically commit an immutable no-state operation receipt and exact source
+   frontier, producing zero periods. Caught-up polls remain read-only. Never
+   derive running time or physical completeness from an empty cut.
+4. Before the first activity sample, represent absence explicitly; do not invent
+   a last observation, anchor or Unknown state. Preserve installation/site,
+   machine/mapping/qualification/acknowledgement binding and immutable ancestry.
+   Authenticated history remains no-published-history until actual observations
+   support a publication; a processor frontier is not an activity interval.
+5. After observations exist, retain their original identities. Empty progress
+   must preserve or conservatively break anchor continuity; it never proves a
+   cross-batch link. New observed source timestamps must still satisfy the exact
+   half-open interpretation window; no historical requalification is implied.
+6. Existing immutable receipt replay must remain compatible. Version new request
+   semantics rather than changing historical request bytes. Reject fabricated
+   checkpoints, omitted observations, scope changes and ambiguous retries.
+7. Qualify quiet bootstrap, more than 100 quiet batches, later state observations,
+   pre/post-commit process termination, exact replay, projection/document
+   corruption, expiry/revocation ordering and bounded repeated/deep-history cost.
+
+The original source-proof bounds remain active until this contract has executable
+acceptance. No production setup, migration execution or recovery is authorized by
+this proposal.

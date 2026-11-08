@@ -700,7 +700,15 @@ internal static class MtConnectIngestionAcceptance
         if(workerHosting)
         {
             count+=await ActivityHostAcceptance.Run(target,workerScope,eligibleCut.Qualification,
-                (seconds,repeated)=>ProcessSource(seconds,repeated));
+                (seconds,repeated)=>ProcessSource(seconds,repeated),async batches=> {
+                    for(var i=0;i<batches;i++)
+                    {
+                        var quiet=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+                        agent.Reply=(from,count)=>(200,Frame(from,count),null);
+                        var frame=await client.AcquireAsync(agent.Endpoint,Device,quiet.Cursor!.NextSequence,2);
+                        await Transport(await Request(frame));
+                    }
+                });
             count+=await ActivityHistoryHttpAcceptance.Run(target.ConnectionString,target.InstallationId,site,machine,otherMachine,
                 currentActivity.Signal.MappingId,rootToken,Epoch);
         }

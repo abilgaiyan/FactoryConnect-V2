@@ -32,7 +32,7 @@ internal static class ActivityHostAcceptance
     }
 
     internal static async Task<int> Run(InstallationTarget target,ActivityWorkerScope scope,ActivityQualificationIdentity identity,
-        Func<int,bool,Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>>> ingest)
+        Func<int,bool,Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>>> ingest,Func<int,Task> ingestQuiet)
     {
         RequireDisposable(target.Database);var checks=0;var children=new List<Child>();
         await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
@@ -123,11 +123,15 @@ internal static class ActivityHostAcceptance
                 ("@address",Encoding.UTF8.GetBytes(identity.SourceAddress)),("@machine",scope.MachineId),("@mapping",scope.MappingId),("@instance",(decimal)scope.InstanceId),("@sequence",(decimal)checkpoint.LastConsumedSample!.Sequence));
             await Exec("ENABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
         }
+        await ingestQuiet(101);await ingest(140,false);
+        var sparse=await Launch();await Until(sparse,"held");await sparse.Process.WaitForExitAsync();
+        Check(sparse.Process.ExitCode==20 && await SnapshotState()==afterCross,
+            "source-proof window overflow after quiet batches holds without skipping evidence or publishing partial progress");
         Check(children.Select(x=>x.Process.Id).Distinct().Count()==children.Count,"hosting acceptance uses distinct real process lifetimes");
         Directory.CreateDirectory("artifacts/ingestion");
         await File.WriteAllTextAsync("artifacts/ingestion/activity-host.json",JsonSerializer.Serialize(new {fixture=true,checks,
             processIds=children.Select(x=>x.Process.Id),before=baseline,after=afterCross,
-            limitations="Single exact source instance/mapping; no physical completeness, automatic recovery or production commissioning claim."}));
+            limitations="Single exact source instance/mapping; long quiet histories beyond source-proof bounds hold. Sparse-source progress remains an open operational gate. No physical completeness, automatic recovery or production commissioning claim."}));
         return checks;
         }
         finally { foreach(var child in children)await Dispose(child); }

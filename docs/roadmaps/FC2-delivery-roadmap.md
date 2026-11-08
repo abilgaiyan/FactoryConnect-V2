@@ -126,3 +126,14 @@ deterministic operation identities and real bootstrap/crash/restart/idle accepta
 Migration 020 supplies an exact-signal discovery index. Qualification is pending;
 production service setup, stronger continuity, source recovery and commissioning
 remain separate. Quantities and incremental shift metrics follow this hosting gate.
+
+## FC2-036 hosting mechanics versus operational acceptance
+
+The executable mechanics at `0260e60f` passed CI #42453004167 (225 accepted-host,
+245 history, 26 acquisition-host and 1,152 full SQL checks without skips). This
+qualifies the bounded host fixture; it does not close sustained activity hosting.
+Long quiet histories can exceed the existing 100-batch source-proof limit and
+must hold without silently skipping evidence. The implementation contract records
+a no-state frontier proposal and its required acceptance. PR #36 stays draft while
+that operating gate is open. Next: verified empty-source advancement and quiet
+bootstrap/restart qualification, before quantities or unattended service setup.

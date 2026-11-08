@@ -6,6 +6,7 @@ using FactoryConnect.Sql.ActivityProcessing;
 using Microsoft.Data.SqlClient;
 
 using var stopping=new CancellationTokenSource();
+var stage="configuration";Guid? publishingOperation=null;
 void Report(object value)=>Console.WriteLine(JsonSerializer.Serialize(value));
 try
 {
@@ -21,8 +22,10 @@ try
     }
     else if(args is ["--config",var path])
     {
-        if(new FileInfo(path).Length>32768)throw new InvalidDataException("Configuration byte limit exceeded.");
-        bytes=await File.ReadAllBytesAsync(path,stopping.Token);
+        await using var file=File.OpenRead(path);using var buffer=new MemoryStream();var chunk=new byte[4096];int read;
+        while((read=await file.ReadAsync(chunk,stopping.Token))!=0)
+        {if(buffer.Length+read>32768)throw new InvalidDataException("Configuration byte limit exceeded.");buffer.Write(chunk,0,read);}
+        bytes=buffer.ToArray();
     }
     else throw new ArgumentException("Use --config path or --stdin.");
     var options=JsonSerializer.Deserialize<ActivityHostOptions>(bytes,new JsonSerializerOptions {
@@ -39,9 +42,11 @@ try
     {
         using var operation=CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
         operation.CancelAfter(TimeSpan.FromSeconds(options.OperationTimeoutSeconds));
+        stage="discover";publishingOperation=null;
         var work=await store.DiscoverAcceptedWorkAsync(scope,options.CutSize,operation.Token);
         if(work.Candidate is { } cut)
         {
+            stage="apply";publishingOperation=cut.OperationId;
             var result=await store.ApplyAcceptedAsync(cut.OperationId,scope.InstallationId,scope.SiteId,scope.MachineId,
                 scope.MappingId,scope.StreamKey,scope.InstanceId,cut.AfterSequence,cut.ThroughSequence,cut.ExpectedGeneration,ct:operation.Token);
             Report(new{status="committed",processId=Environment.ProcessId,cut.OperationId,
@@ -52,14 +57,14 @@ try
         else Report(new{status="idle",processId=Environment.ProcessId,generation=work.Generation.ToString(CultureInfo.InvariantCulture),
             afterSequence=work.AfterSequence.ToString(CultureInfo.InvariantCulture),
             acceptedThrough=work.AcceptedThrough?.ToString(CultureInfo.InvariantCulture),notConnectivity=true});
-        await Task.Delay(options.PollIntervalMilliseconds,stopping.Token);
+        stage="waiting";await Task.Delay(options.PollIntervalMilliseconds,stopping.Token);
     }
     return 0;
 }
 catch(OperationCanceledException)when(stopping.IsCancellationRequested){return 0;}
 catch(Exception error)
 {
-    Report(new{status="held",processId=Environment.ProcessId,reason="activity-work-unavailable-or-unsafe",errorType=error.GetType().Name});
+    Report(new{status="held",processId=Environment.ProcessId,reason="activity-work-unavailable-or-unsafe",stage,operationId=publishingOperation,errorType=error.GetType().Name,sqlNumber=(error as SqlException)?.Number});
     return 20; // No automatic retry after ambiguous SQL publication. Restart reconstructs SQL truth.
 }
 finally { Report(new{status="stopped",processId=Environment.ProcessId}); }
