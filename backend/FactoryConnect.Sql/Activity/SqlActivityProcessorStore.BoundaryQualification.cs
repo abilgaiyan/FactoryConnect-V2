@@ -31,6 +31,26 @@ public sealed partial class SqlActivityProcessorStore
             gates.Parameters.AddWithValue("@processor",ProcessorLockResource(scope.MachineId,scope.MappingId,scope.StreamKey));
             await gates.ExecuteNonQueryAsync(ct);
         }
+        var proof=await AssessRetainedBoundaryInTransactionAsync(c,t,scope,prior,next,ct);
+        await t.CommitAsync(ct);return proof;
+    }
+    // This overload performs no independent lock acquisition or commit.
+    // A future publisher MUST call it only after obtaining its security,
+    // machine and exclusive processor gates in the publishing transaction.
+    // The returned assessment remains evidence, never a caller-supplied
+    // publication authorization token.
+    private async Task<AcceptedActivityBoundaryProof> AssessRetainedBoundaryInTransactionAsync(
+        SqlConnection c,SqlTransaction t,ActivityWorkerScope scope,
+        SqlAcceptedActivityEvidenceReader.AcceptedRow prior,
+        SqlAcceptedActivityEvidenceReader.AcceptedRow next,CancellationToken ct)
+    {
+        if(scope.InstallationId==Guid.Empty || scope.SiteId==Guid.Empty ||
+           scope.MachineId==Guid.Empty || scope.MappingId==Guid.Empty ||
+           prior.BatchId==next.BatchId ||
+           new[]{prior,next}.Any(x=>x.SiteId!=scope.SiteId || x.MachineId!=scope.MachineId ||
+               x.MappingId!=scope.MappingId || x.StreamKey!=scope.StreamKey ||
+               x.InstanceId!=scope.InstanceId))
+            throw new InvalidDataException("Exact scoped cross-batch endpoints required.");
         var approved=await new SqlApprovedActivityMappingResolver(connectionString,scope.InstallationId)
             .ResolveInTransactionAsync(c,t,scope.SiteId,scope.MachineId,scope.MappingId,scope.StreamKey,ct);
         ValidateInterpretationPeriod(approved,[prior,next]);
@@ -73,6 +93,7 @@ public sealed partial class SqlActivityProcessorStore
         }
         if(batches.Count!=2)throw new InvalidDataException("Retained boundary batch, endpoint or immutable receipt is missing.");
         var proof=AcceptedActivityBoundaryVerifier.Assess(approved,prior,next,batches[prior.BatchId],batches[next.BatchId]);
-        await t.CommitAsync(ct);return proof;
+        return proof;
     }
+
 }
