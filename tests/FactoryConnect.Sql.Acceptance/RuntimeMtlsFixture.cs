@@ -29,7 +29,7 @@ internal sealed class RuntimeMtlsFixture:IAsyncDisposable
         Certificate=Credentials.Leaf(Credentials.Runtime,now,crlUri:CrlUri);
         using(var publicCertificate=X509CertificateLoader.LoadCertificate(Certificate))
         {
-            using var paired=publicCertificate.CopyWithPrivateKey(Credentials.Runtime);
+            var paired=publicCertificate.CopyWithPrivateKey(Credentials.Runtime);
             ClientCertificate=LoadTransportCertificate(paired);
         }
         var serverRequest=new CertificateRequest("CN=localhost",serverKey,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
@@ -39,7 +39,7 @@ internal sealed class RuntimeMtlsFixture:IAsyncDisposable
         var names=new SubjectAlternativeNameBuilder();names.AddDnsName("localhost");serverRequest.CertificateExtensions.Add(names.Build());
         using(var publicServer=serverRequest.Create(Credentials.Root,now.AddMinutes(-1),now.AddDays(30),RandomNumberGenerator.GetBytes(16)))
         {
-            using var paired=publicServer.CopyWithPrivateKey(serverKey);
+            var paired=publicServer.CopyWithPrivateKey(serverKey);
             ServerCertificate=LoadTransportCertificate(paired);
         }
         var builder=new CertificateRevocationListBuilder();
@@ -52,7 +52,7 @@ internal sealed class RuntimeMtlsFixture:IAsyncDisposable
     // Linux retains the original in-memory certificate and private key.
     private static X509Certificate2 LoadTransportCertificate(X509Certificate2 paired)
     {
-        if(!OperatingSystem.IsWindows())return new X509Certificate2(paired);
+        if(!OperatingSystem.IsWindows())return paired;
         var password=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var pfx=paired.Export(X509ContentType.Pkcs12,password);
         try
@@ -60,7 +60,7 @@ internal sealed class RuntimeMtlsFixture:IAsyncDisposable
             return X509CertificateLoader.LoadPkcs12(pfx,password,
                 X509KeyStorageFlags.UserKeySet|X509KeyStorageFlags.Exportable);
         }
-        finally{CryptographicOperations.ZeroMemory(pfx);}
+        finally{CryptographicOperations.ZeroMemory(pfx);paired.Dispose();}
     }
     private async Task Serve()
     {
