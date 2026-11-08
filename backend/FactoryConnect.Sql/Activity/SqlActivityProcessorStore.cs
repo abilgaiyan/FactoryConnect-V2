@@ -151,6 +151,15 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
            expectedGeneration>long.MaxValue-1 ||
            identity!=ActivityQualificationIdentity.From(signal,identity.ContinuityIdentity))
             throw new ArgumentException("Exact bounded activity operation required.");
+        // Until transaction-bound cross-batch verification, versioned receipts
+        // and restart qualification are implemented, the accepted-source writer
+        // is intentionally restricted to its original continuity policy.
+        // This prevents an internal caller from selecting the new qualification
+        // identity while still publishing with legacy same-batch semantics.
+        if(accepted is not null &&
+           identity!=AcceptedActivityContinuityQualifier.QualificationFor(accepted.Approved))
+            throw new InvalidDataException(
+                "Accepted activity publication requires the enabled legacy continuity policy.");
         using var activity=Diagnostics.StartActivity("activity.sql.apply",ActivityKind.Internal);
         var started=Stopwatch.GetTimestamp();
         var insertElapsed=TimeSpan.Zero;
