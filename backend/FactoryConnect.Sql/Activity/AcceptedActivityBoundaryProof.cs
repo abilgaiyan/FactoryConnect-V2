@@ -16,6 +16,52 @@ internal sealed record AcceptedActivityBoundaryProof(
     internal const string Profile="accepted-receipt-boundary-candidate-v1-not-physical-completeness";
 }
 
+
+// Deterministic transaction-evidence digest. This is not an authorization token:
+// a publisher must reconstruct all witnesses on its own locked transaction
+// before recording this digest in the immutable operation request and result.
+internal static class AcceptedActivityBoundaryManifest
+{
+    internal const string Profile="retained-cross-batch-proof-manifest-v1";
+
+    internal static string Fingerprint(IReadOnlyList<AcceptedActivityBoundaryProof> proofs)
+    {
+        ArgumentNullException.ThrowIfNull(proofs);
+        if(proofs.Count is <1 or >100)
+            throw new InvalidDataException("Bounded cross-batch proof manifest required.");
+        for(var i=0;i<proofs.Count;i++)
+        {
+            var proof=proofs[i];
+            if(!proof.RetainedLink || proof.Disposition!="exact-direct-retained-predecessor" ||
+               proof.Predecessor.BatchId==proof.Successor.BatchId ||
+               proof.Predecessor.InstanceId!=proof.Successor.InstanceId ||
+               proof.Predecessor.Sequence>=proof.Successor.Sequence ||
+               proof.Predecessor.ObservedAt>=proof.Successor.ObservedAt ||
+               proof.PredecessorRequestSha256.Length!=64 ||
+               proof.SuccessorRequestSha256.Length!=64 ||
+               !proof.PredecessorRequestSha256.All(Uri.IsHexDigit) ||
+               !proof.SuccessorRequestSha256.All(Uri.IsHexDigit))
+                throw new InvalidDataException("Unqualified cross-batch witness cannot enter a publication manifest.");
+            if(i>0 && (proofs[i-1].Successor.Sequence>=proof.Predecessor.Sequence ||
+               proofs[i-1].Successor.InstanceId!=proof.Predecessor.InstanceId ||
+               proofs[i-1].Qualification!=proof.Qualification))
+                throw new InvalidDataException("Cross-batch manifest witness order or qualification changed.");
+        }
+        var bytes=JsonSerializer.SerializeToUtf8Bytes(new{
+            profile=Profile,
+            witnesses=proofs.Select(p=>new{
+                qualification=p.Qualification,
+                predecessor=p.Predecessor,
+                successor=p.Successor,
+                predecessorReceipt=p.PredecessorRequestSha256,
+                successorReceipt=p.SuccessorRequestSha256,
+                disposition=p.Disposition
+            }).ToArray()
+        });
+        return Convert.ToHexString(SHA256.HashData(bytes));
+    }
+}
+
 internal sealed record ActivityBoundaryBatch(Guid RuntimeIdentityId,
     SqlAcceptedActivityEvidenceReader.BatchProof Header,byte[] Document,byte[] Request,byte[] RequestHash);
 
