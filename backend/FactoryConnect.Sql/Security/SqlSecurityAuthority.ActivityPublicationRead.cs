@@ -87,9 +87,10 @@ public sealed partial class SqlSecurityAuthority
             throw new InvalidDataException("Version-4 publication predecessor identity mismatch.");
 
         await using var witnesses=Command(c,t,"""
-            SELECT w.BatchId,w.DocumentHash,w.IngestionRequestHash
+            SELECT TOP (102) w.BatchId,w.DocumentHash,w.IngestionRequestHash
             FROM activity.PublicationSourceWitness w WITH(HOLDLOCK)
-            WHERE w.OperationId=@op AND w.MachineId=@machine AND w.StreamKeyBytes=@stream;
+            WHERE w.OperationId=@op AND w.MachineId=@machine AND w.StreamKeyBytes=@stream
+            ORDER BY w.BatchId;
             """);
         Add(witnesses,("@op",operationId),("@machine",identity.MachineId),
             ("@stream",ActivityUtf8.GetBytes(identity.StreamKey)));
@@ -112,6 +113,7 @@ public sealed partial class SqlSecurityAuthority
         await using var wr=await witnesses.ExecuteReaderAsync(ct);
         while(await wr.ReadAsync(ct))
         {
+            if(found.Count>=101)throw new InvalidDataException("Version-4 source witness bound exceeded.");
             var batch=wr.GetGuid(0);
             if(!expected.TryGetValue(batch,out var pin) || !found.Add(batch) ||
                 !string.Equals(pin.DocumentSha256,Convert.ToHexString((byte[])wr[1]),StringComparison.Ordinal) ||
