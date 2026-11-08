@@ -65,6 +65,13 @@ public sealed partial class SqlActivityProcessorStore
                    previous.Sequence>=current.Sequence ||
                    previous.ObservedAt>current.ObservedAt)
                     throw new InvalidDataException("Cross-batch source order changed.");
+                if(previous.BatchId==current.BatchId &&
+                   (previous.DocumentSha256!=current.DocumentSha256 ||
+                    previous.AcknowledgementId!=current.AcknowledgementId ||
+                    previous.SiteId!=current.SiteId ||
+                    previous.Address!=current.Address))
+                    throw new InvalidDataException(
+                        "Same-batch selected observations disagree on immutable document or signal provenance.");
                 if(previous.BatchId!=current.BatchId)
                 {
                     // The verifier reopens both original documents, immutable
