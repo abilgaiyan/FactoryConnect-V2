@@ -42,10 +42,25 @@ internal static class AcceptedActivityBoundaryManifest
                !proof.PredecessorRequestSha256.All(Uri.IsHexDigit) ||
                !proof.SuccessorRequestSha256.All(Uri.IsHexDigit))
                 throw new InvalidDataException("Unqualified cross-batch witness cannot enter a publication manifest.");
+            if(proof.Predecessor.MachineId!=proof.Successor.MachineId ||
+               proof.Predecessor.SiteId!=proof.Successor.SiteId ||
+               proof.Predecessor.StreamKey!=proof.Successor.StreamKey ||
+               proof.Predecessor.MappingId!=proof.Successor.MappingId ||
+               proof.Predecessor.Address!=proof.Successor.Address ||
+               proof.Qualification.MachineId!=proof.Predecessor.MachineId ||
+               proof.Qualification.StreamKey!=proof.Predecessor.StreamKey ||
+               proof.Qualification.MappingId!=proof.Predecessor.MappingId ||
+               proof.Qualification.SourceAddress!=proof.Predecessor.Address)
+                throw new InvalidDataException("Cross-batch witness does not bind the same exact signal scope.");
             if(i>0 && (proofs[i-1].Successor.Sequence>=proof.Predecessor.Sequence ||
                proofs[i-1].Successor.InstanceId!=proof.Predecessor.InstanceId ||
+               proofs[i-1].Successor.MachineId!=proof.Predecessor.MachineId ||
+               proofs[i-1].Successor.SiteId!=proof.Predecessor.SiteId ||
+               proofs[i-1].Successor.StreamKey!=proof.Predecessor.StreamKey ||
+               proofs[i-1].Successor.MappingId!=proof.Predecessor.MappingId ||
+               proofs[i-1].Successor.Address!=proof.Predecessor.Address ||
                proofs[i-1].Qualification!=proof.Qualification))
-                throw new InvalidDataException("Cross-batch manifest witness order or qualification changed.");
+                throw new InvalidDataException("Cross-batch manifest witness order, scope or qualification changed.");
         }
         var bytes=JsonSerializer.SerializeToUtf8Bytes(new{
             profile=Profile,
