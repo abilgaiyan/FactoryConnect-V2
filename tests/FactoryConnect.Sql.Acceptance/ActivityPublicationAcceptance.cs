@@ -303,6 +303,35 @@ internal static class ActivityPublicationAcceptance
                 "UPDATE activity.PublicationSourceWitness SET DocumentHash=0x0000000000000000000000000000000000000000000000000000000000000000 "+
                 "WHERE OperationId=@op AND BatchId=(SELECT TOP(1) BatchId FROM activity.PublicationSourceWitness WHERE OperationId=@op ORDER BY BatchId)",
                 "FC2-040 read rejects retained source document witness hash substitution");
+            // An oversized request must be rejected by the SQL pre-read guard, not by
+            // a later JSON/hash check after materializing the oversized payload.
+            await using(var oversized=new SqlConnection(target.ConnectionString))
+            {
+                await oversized.OpenAsync();
+                await using var tx=(SqlTransaction)await oversized.BeginTransactionAsync(IsolationLevel.Serializable);
+                try
+                {
+                    await using(var mutate=new SqlCommand(
+                        "ALTER TABLE activity.ProcessorOperation NOCHECK CONSTRAINT CK_ActivityOperationRequestHash; "+
+                        "DISABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation; "+
+                        "UPDATE activity.ProcessorOperation SET RequestBytes=REPLICATE(CONVERT(varbinary(max),0x20),8388609) WHERE OperationId=@op",
+                        oversized,tx))
+                    {
+                        mutate.Parameters.AddWithValue("@op",latestOperation);
+                        await mutate.ExecuteNonQueryAsync();
+                    }
+                    try
+                    {
+                        await ((Task)verifyRead.Invoke(null,new object[]{oversized,tx,latestOperation,identity,CancellationToken.None})!);
+                        throw new InvalidOperationException("Oversized publication request was accepted.");
+                    }
+                    catch(SqlException e)when(e.Number==51091)
+                    {
+                        Check(true,"FC2-040 SQL pre-read guard rejects oversized publication request with 51091");
+                    }
+                }
+                finally {await tx.RollbackAsync();}
+            }
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
