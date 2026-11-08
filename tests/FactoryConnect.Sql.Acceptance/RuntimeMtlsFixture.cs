@@ -59,8 +59,8 @@ internal sealed class RuntimeMtlsFixture:IAsyncDisposable
         }
         catch(Exception error)when(error is IOException or OperationCanceledException or SocketException){}
     }
-    internal Task<Pair> Connect(SslProtocols protocol=SslProtocols.Tls13,X509Certificate2? certificate=null,RuntimeMtlsServer? policy=null,bool noCertificate=false)
-        =>Pair.Open(policy??Policy,ServerCertificate,noCertificate?null:certificate??ClientCertificate,protocol);
+    internal Task<Pair> Connect(SslProtocols? protocol=null,X509Certificate2? certificate=null,RuntimeMtlsServer? policy=null,bool noCertificate=false)
+        =>Pair.Open(policy??Policy,ServerCertificate,noCertificate?null:certificate??ClientCertificate,protocol??(OperatingSystem.IsWindows()?SslProtocols.Tls12:SslProtocols.Tls13));
     internal sealed class Pair:IAsyncDisposable
     {
         internal readonly RuntimeMtlsChannel Channel;
