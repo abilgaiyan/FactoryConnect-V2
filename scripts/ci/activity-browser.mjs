@@ -31,7 +31,7 @@ try {
     await expect(activity.locator('tbody code').filter({ hasText: 'READY' })).toHaveText('READY');
     await activity.getByText('Publication provenance', { exact: true }).click();
     await expect(activity.locator('details')).toContainText(process.env.FC2_BROWSER_MAPPING);
-    await expect(activity).toContainText('unproven batch boundaries remain breaks');
+    await expect(activity).toContainText('This read does not yet verify the publication profile or cross-batch ancestry');
     const session = await page.evaluate(async () => (await fetch('/api/security/v2/session')).json());
     return session.bearer;
   }
