@@ -92,7 +92,26 @@ processing slice is closed; production worker hosting and commissioning remain o
 The next authorized increment is [FC2-035 operator activity history](../implementation/FC2-035-operator-activity-history.md):
 read-only HTTPS pages of committed periods, existing OIDC/machine authority,
 immutable publication verification, bounded keyset navigation and actual browser
-acceptance. Its CI qualification is pending. No HTTP-triggered processing or
+acceptance. Its accepted executable qualification is recorded below. No HTTP-triggered processing or
 production enablement is introduced. After operator delivery, continue the roadmap
 with explicit worker hosting qualification, production quantity inputs and
 incremental shift metrics; local developer setup proceeds separately with the user.
+
+
+## FC2-035 executable qualification
+
+`0a343a29` passed [CI #42446914493](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42446914493):
+backend/dashboard (479 frontend tests), real OIDC → HTTPS → SQL → Chromium
+published-period display, 240 dedicated history checks, 26 host checks and 1,152
+full SQL checks without skips. Publication pages preserve exact strings/provenance,
+reject corruption and deny revoked/expired sessions. Matching the stream SQL
+parameter to `varbinary(512)` fixed a history-dependent residual seek: profiles at
+3 and 1,679 stored operations each read 22 period rows across discovery, newest
+and deep-page requests, with at most 17 SQL roundtrips per request. The implementation
+contract records measured limits. Final PR #35 head/review and merge disposition
+are tracked in its GitHub record.
+
+Next: qualify an explicitly configured activity worker against retained accepted
+source, then production quantities and incremental shift metrics. Historical
+publication display does not imply automated processing, live connectivity,
+physical completeness, OEE availability or production commissioning.

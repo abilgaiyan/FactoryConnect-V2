@@ -1,7 +1,7 @@
 # FC2-035 — Authorized operator activity history
 
 Implementation slice following FC2-034, merged through PR #34 at `f81837b1`.
-Status: implemented; disposable SQL / real HTTPS Chromium qualification pending.
+Status: executable increment CI-qualified at `0a343a29`; final merge disposition is tracked in [PR #35](https://github.com/abilgaiyan/FactoryConnect-V2/pull/35).
 
 ## Product boundary
 
@@ -68,10 +68,53 @@ evidence must prove a genuine wait before release and denial. It also runs after
 The Chromium fixture reuses the test-only signed OIDC code/PKCE provider over real
 HTTPS and actual SQL. It renders an accepted-source period, source values and
 publication provenance, then proves session revocation, durable logout and grant
-revocation denial. Existing invalid identity tests remain intact. Final measured
-CI evidence and merge disposition must be recorded before accepting this slice.
+revocation denial. Existing invalid identity tests remain intact. Measured CI evidence follows; merge disposition remains separately recorded in PR #35.
 
 This fixture is controlled qualification, not customer IdP/PKI provisioning or
 production enablement. Sustained cross-batch continuity remains unqualified and
 all unproven boundaries remain breaks. Production quantities, incremental shifts,
 Availability, Performance and Quality/OEE follow their own input contracts.
+
+
+## Accepted executable evidence — 8 November 2026
+
+[CI #42446914493](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42446914493)
+passed all three jobs at `0a343a29`: backend, 479 frontend tests, actual HTTPS/OIDC
+Chromium acceptance, 240 dedicated history checks, 26 whole-process acquisition
+host checks and 1,152 full SQL checks without skips. Existing exact-output,
+corruption, replay, crash/restart and processing-memory regressions remain green.
+Desktop and 390px mobile screenshots and publication-read profiles are retained
+in the `first-machine-ingestion` artifact.
+
+The new deep-history regression first exposed an apparent index seek that read
+all 1,677 closed periods. The shared parameter helper had bound stream identity as
+`varbinary(max)`, yielding a dynamic range and residual predicates instead of the
+full ordered key seek. This read path now binds `@stream` as `varbinary(512)`,
+matching the indexed schema. No index, publication, source-cut or authorization
+semantics changed; the strict access regression was retained.
+
+Within the dedicated history run, the same profiled discovery + newest one-row
+page + oldest-history cursor requests produced:
+
+| Stored operations | Closed periods | Total period rows read across profile | Command logical reads | Maximum request SQL roundtrips |
+| --- | --- | --- | --- | --- |
+| 3 | 2 | 22 | 1,800 | 17 |
+| 1,679 | 1,677 | 22 | 1,818 | 17 |
+
+Every individual period access read at most two rows in these profiles. No raw
+observation/batch traversal occurred. Logical reads are command totals, with
+nested statement counters retained separately. SQL profiling is separate from
+latency qualification; these are controlled single-machine workload observations,
+not fleet capacity, million-period history or production latency SLOs.
+
+The short-session regression proved a currently eligible request was genuinely
+blocked by a separate connection's processor gate before expiry, then denied after
+release. Period-value corruption, checksum-consistent checkpoint forgery and
+oversized publication data returned unavailable without a partial page. Grant and
+session revocation denied reads, and the HTTPS browser also proved durable logout.
+HTTP retrieval left checkpoint and operation receipts unchanged.
+
+This closes the scoped authenticated historical-publication delivery boundary.
+It does not start a production activity worker or establish sustained cross-batch
+continuity. Worker hosting, quantity contracts, incremental shifts, OEE inputs and
+production commissioning remain separate roadmap work.
