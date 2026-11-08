@@ -288,6 +288,7 @@ internal static class ActivityPublicationAcceptance
                 "DELETE TOP(1) FROM activity.PublicationSourceWitness WHERE OperationId=@op",
                 "FC2-040 read rejects a missing retained source witness");
             await RejectCorruptRead(
+                "ALTER TABLE activity.PublicationSourceWitness NOCHECK CONSTRAINT FK_PublicationWitness_Owner; "+
                 "DISABLE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry; "+
                 "DELETE FROM activity.PublicationReceiptAncestry WHERE OperationId=@op",
                 "FC2-040 read rejects missing latest publication ancestry");
