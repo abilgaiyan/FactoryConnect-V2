@@ -137,6 +137,16 @@ internal static class ActivityBoundaryAcceptance
         var baseline=await Snapshot();var proof=await store.AssessRetainedBoundaryAsync(scope,prior,next);
         Check(proof.RetainedLink && proof.Predecessor==prior && proof.Successor==next && proof.SuccessorRequestSha256.Length==64,
             "actual HTTP/mTLS accepted documents and immutable ingestion receipts prove exact direct ancestry");
+        var manifest=await store.AssessRetainedManifestAsync(scope,prior,[next]);
+        Check(manifest==AcceptedActivityBoundaryManifest.Fingerprint([proof]),
+            "writer-order serializable qualification reconstructs the same exact immutable receipt manifest");
+        Check(await Snapshot()==baseline,
+            "transaction-local manifest qualification never publishes checkpoint periods or operation receipts");
+        await Reject(async()=>{
+            _=await store.AssessRetainedManifestAsync(scope,prior,
+                [next with{RawValue="counterfeit"}]);
+            return proof;
+        },"transaction-local manifest rejects altered retained successor");
         await Reject(()=>store.AssessRetainedBoundaryAsync(scope,prior,next with{RawValue="counterfeit"}),"altered caller endpoint rejects");
         await Reject(()=>store.AssessRetainedBoundaryAsync(scope,prior,next with{MappingId=Guid.NewGuid()}),"unrelated mapping rejects");
         var original=(byte[])(await Scalar("SELECT RequestBytes FROM security.SecurityOperation WHERE OperationId=@op",("@op",next.BatchId)))!;
