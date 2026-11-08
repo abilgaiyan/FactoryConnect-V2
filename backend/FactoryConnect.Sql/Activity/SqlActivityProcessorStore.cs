@@ -434,6 +434,23 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                 ancestry.Parameters.Add("@parentProof",SqlDbType.Binary,32).Value=proof.ParentProofSha256 is {} parentProof?Convert.FromHexString(parentProof):DBNull.Value;
                 ancestry.Parameters.Add("@proof",SqlDbType.Binary,32).Value=SHA256.HashData(Utf8.GetBytes(publicationProof));
                 await ancestry.ExecuteNonQueryAsync(ct);
+                var witnesses=proof.Batches.Concat(proof.AnchorWitness is {} anchorWitness?new[]{anchorWitness}:Array.Empty<ActivityPublicationWitness>())
+                    .DistinctBy(x=>x.BatchId).ToArray();
+                await using var sources=new SqlCommand("""
+                    INSERT activity.PublicationSourceWitness(OperationId,BatchId,SiteId,MachineId,StreamKeyBytes,AcknowledgementId,RuntimeIdentityId,
+                        InstanceId,FromSequence,NextSequence,FirstAvailableSequence,DocumentHash,IngestionRequestHash)
+                    SELECT a.OperationId,b.BatchId,b.SiteId,b.MachineId,b.StreamKeyBytes,b.AcknowledgementId,b.RuntimeIdentityId,
+                        b.InstanceId,b.FromSequence,b.NextSequence,b.FirstAvailableSequence,b.DocumentHash,s.RequestHash
+                    FROM OPENJSON(@witnesses) WITH(BatchId uniqueidentifier '$.BatchId',Document varchar(64) '$.DocumentSha256',Receipt varchar(64) '$.RequestSha256') w
+                    JOIN acquisition.MtConnectBatch b ON b.BatchId=w.BatchId AND b.DocumentHash=CONVERT(binary(32),w.Document,2)
+                    JOIN security.SecurityOperation s ON s.OperationId=b.BatchId AND s.RequestHash=CONVERT(binary(32),w.Receipt,2)
+                    JOIN activity.PublicationReceiptAncestry a ON a.OperationId=@op AND a.MachineId=b.MachineId AND a.StreamKeyBytes=b.StreamKeyBytes;
+                    IF @@ROWCOUNT<>@count THROW 51095,'Publication retained source witnesses could not be bound.',1;
+                    """,c,t);
+                sources.Parameters.AddWithValue("@op",operationId);sources.Parameters.AddWithValue("@count",witnesses.Length);
+                sources.Parameters.Add("@witnesses",SqlDbType.NVarChar,-1).Value=JsonSerializer.Serialize(witnesses);
+                await sources.ExecuteNonQueryAsync(ct);
+
             }
             // One command per bounded page of derived periods, not one command
             // per transition. The transaction, operation receipt and immutable

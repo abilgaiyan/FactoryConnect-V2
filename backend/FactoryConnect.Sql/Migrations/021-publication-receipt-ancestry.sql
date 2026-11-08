@@ -22,3 +22,27 @@ CREATE TABLE activity.PublicationReceiptAncestry (
 GO
 CREATE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry INSTEAD OF UPDATE,DELETE AS
 BEGIN THROW 51040,'Publication receipt ancestry is immutable.',1; END;
+GO
+-- Protect the retained source witnesses of every generation, not only the
+-- predecessor/anchor documents touched by the next bounded resume.
+ALTER TABLE security.SecurityOperation ADD CONSTRAINT UQ_PublicationIngestionReceipt UNIQUE(OperationId,RequestHash);
+ALTER TABLE acquisition.MtConnectBatch ADD CONSTRAINT UQ_PublicationSourceDocument
+    UNIQUE(BatchId,SiteId,MachineId,StreamKeyBytes,AcknowledgementId,RuntimeIdentityId,InstanceId,FromSequence,NextSequence,FirstAvailableSequence,DocumentHash);
+ALTER TABLE activity.PublicationReceiptAncestry ADD CONSTRAINT UQ_PublicationWitnessOwner UNIQUE(OperationId,MachineId,StreamKeyBytes);
+CREATE TABLE activity.PublicationSourceWitness (
+    OperationId uniqueidentifier NOT NULL,BatchId uniqueidentifier NOT NULL,
+    SiteId uniqueidentifier NOT NULL,MachineId uniqueidentifier NOT NULL,StreamKeyBytes varbinary(512) NOT NULL,
+    AcknowledgementId uniqueidentifier NOT NULL,RuntimeIdentityId uniqueidentifier NOT NULL,
+    InstanceId decimal(20,0) NOT NULL,FromSequence decimal(20,0) NOT NULL,NextSequence decimal(20,0) NOT NULL,FirstAvailableSequence decimal(20,0) NOT NULL,
+    DocumentHash binary(32) NOT NULL,IngestionRequestHash binary(32) NOT NULL,
+    PRIMARY KEY(OperationId,BatchId),
+    CONSTRAINT FK_PublicationWitness_Owner FOREIGN KEY(OperationId,MachineId,StreamKeyBytes)
+        REFERENCES activity.PublicationReceiptAncestry(OperationId,MachineId,StreamKeyBytes),
+    CONSTRAINT FK_PublicationWitness_Document FOREIGN KEY(BatchId,SiteId,MachineId,StreamKeyBytes,AcknowledgementId,RuntimeIdentityId,InstanceId,FromSequence,NextSequence,FirstAvailableSequence,DocumentHash)
+        REFERENCES acquisition.MtConnectBatch(BatchId,SiteId,MachineId,StreamKeyBytes,AcknowledgementId,RuntimeIdentityId,InstanceId,FromSequence,NextSequence,FirstAvailableSequence,DocumentHash),
+    CONSTRAINT FK_PublicationWitness_Receipt FOREIGN KEY(BatchId,IngestionRequestHash)
+        REFERENCES security.SecurityOperation(OperationId,RequestHash)
+);
+GO
+CREATE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness INSTEAD OF UPDATE,DELETE AS
+BEGIN THROW 51040,'Publication source witness is immutable.',1; END;

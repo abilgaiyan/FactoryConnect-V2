@@ -199,3 +199,11 @@ row counts. This assurance assumes trusted, enabled SQL constraints and normal
 immutable-ledger operation; it does not defend an administrator who disables those
 constraints or substitutes an entire database. The final correction remains draft
 until its exact-head SQL acceptance passes; prior green CI is not its qualification.
+
+The same transaction also persists immutable source witnesses for every selected
+batch and open-anchor origin. Foreign keys pin exact ingestion request hashes and
+original document hashes plus batch scope/header/runtime/acknowledgement metadata.
+Thus earlier source receipts/documents remain protected even after their activity
+anchor closes and they leave the bounded resume working set. Additional SQL attacks
+attempt checksum-consistent earliest ingestion receipt and document substitution
+with their immutability triggers disabled; referential constraints must reject them.

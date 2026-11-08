@@ -45,6 +45,7 @@ internal static class ActivityPublicationAcceptance
         {await using var q=new SqlCommand(sql,c);foreach(var(n,v)in args)q.Parameters.AddWithValue(n,v);return await q.ExecuteScalarAsync();}
         async Task<string> Snapshot()=>JsonSerializer.Serialize(new{
             checkpoint=await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@m AND MappingId=@s",("@m",scope.MachineId),("@s",scope.MappingId)),
+            witnesses=await Scalar("SELECT COUNT(*) FROM activity.PublicationSourceWitness WHERE MachineId=@m",("@m",scope.MachineId)),
             ancestry=await Scalar("SELECT COUNT(*) FROM activity.PublicationReceiptAncestry WHERE MachineId=@m",("@m",scope.MachineId)),
             periods=await Scalar("SELECT COUNT(*) FROM activity.ClosedPeriod WHERE MachineId=@m",("@m",scope.MachineId)),
             receipts=await Scalar("SELECT COUNT(*) FROM activity.ProcessorOperation WHERE MachineId=@m",("@m",scope.MachineId))});
@@ -211,6 +212,8 @@ internal static class ActivityPublicationAcceptance
                 "complete durable history equals the exact four-period oracle after crashes concurrent writers replay and quiet cuts");
             Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.foreign_keys WHERE parent_object_id=OBJECT_ID('activity.PublicationReceiptAncestry') AND is_disabled=0 AND is_not_trusted=0"))==2,
                 "complete ancestry links use enabled trusted SQL foreign keys");
+            Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.foreign_keys WHERE parent_object_id=OBJECT_ID('activity.PublicationSourceWitness') AND is_disabled=0 AND is_not_trusted=0"))==3,
+                "all retained source generations have trusted receipt document and scope foreign keys");
             var beforeAncestry=await Snapshot();
             await Scalar("DISABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation; DISABLE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry");
             try
@@ -231,6 +234,21 @@ internal static class ActivityPublicationAcceptance
                     "earlier proof identity cannot be rebound underneath later ancestry generations");
             }
             finally {await Scalar("ENABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation; ENABLE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry");}
+            await Scalar("DISABLE TRIGGER security.TR_Operation_Immutable ON security.SecurityOperation; DISABLE TRIGGER acquisition.TR_MtConnectBatch_Immutable ON acquisition.MtConnectBatch");
+            try
+            {
+                async Task SourceConstraintReject(string sql,string label)
+                {
+                    try{await Scalar(sql,("@batch",opening[0].BatchId));}
+                    catch(SqlException e)when(e.Number==547){Check(true,label);return;}
+                    throw new InvalidOperationException("Earlier retained source substitution was not rejected.");
+                }
+                await SourceConstraintReject("UPDATE security.SecurityOperation SET RequestBytes=RequestBytes+0x20,RequestHash=HASHBYTES('SHA2_256',RequestBytes+0x20) WHERE OperationId=@batch",
+                    "earliest ingestion receipt cannot be checksum-consistently substituted after its anchor is closed");
+                await SourceConstraintReject("UPDATE acquisition.MtConnectBatch SET RawDocument=RawDocument+0x20,DocumentHash=HASHBYTES('SHA2_256',RawDocument+0x20) WHERE BatchId=@batch",
+                    "earliest original source document cannot be checksum-consistently substituted beneath later publication");
+            }
+            finally {await Scalar("ENABLE TRIGGER security.TR_Operation_Immutable ON security.SecurityOperation; ENABLE TRIGGER acquisition.TR_MtConnectBatch_Immutable ON acquisition.MtConnectBatch");}
             Check(await Snapshot()==beforeAncestry && (await store.DiscoverAcceptedWorkAsync(scope)).Candidate is null,
                 "all earlier-generation attacks preserve complete history and safe bounded resume");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
