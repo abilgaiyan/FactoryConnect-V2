@@ -137,3 +137,13 @@ must hold without silently skipping evidence. The implementation contract record
 a no-state frontier proposal and its required acceptance. PR #36 stays draft while
 that operating gate is open. Next: verified empty-source advancement and quiet
 bootstrap/restart qualification, before quantities or unattended service setup.
+
+
+FC2-036 now includes an implementation candidate for verified no-state advancement:
+100-batch / 4 MiB discovery windows, parsed exact-address absence proof, atomic
+versioned receipts/frontier, explicit absence before the first sample, bounded
+latest-generation checks and retained frontier-witness validation. Legacy nonempty
+fingerprints remain unchanged. Quiet bootstrap, post-wait expiry/projection races,
+101 quiet batches, corruption/replay, later observed output and deep hosting
+regressions are added to CI. This closes the implementation shape, not acceptance;
+PR #36 stays draft until the current executable and full regression qualify.

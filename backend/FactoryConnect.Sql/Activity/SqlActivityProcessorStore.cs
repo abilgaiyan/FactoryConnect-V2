@@ -70,7 +70,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
     private sealed record AcceptedSourceBinding(
         Guid SiteId,Guid InstallationId,ApprovedActivitySignal Approved,
         IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> Rows,
-        ulong InstanceId,ulong AfterSequence,ulong ThroughSequence,string ProofJson);
+        ulong InstanceId,ulong AfterSequence,ulong ThroughSequence,string ProofJson,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.BatchProof>? EmptyBatches=null);
 
     /// <summary>
     /// Evidence-bound write candidate. Rechecks the active approved mapping and
@@ -108,6 +109,36 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             expectedGeneration,cut.Samples,binding,injectRollback,ct);
     }
 
+    public async Task<ActivityDurableResult> ApplyAcceptedWorkAsync(ActivityWorkCandidate work,CancellationToken ct=default)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        if(!work.IsEmpty)return await ApplyAcceptedAsync(work.OperationId,work.Scope.InstallationId,work.Scope.SiteId,
+            work.Scope.MachineId,work.Scope.MappingId,work.Scope.StreamKey,work.Scope.InstanceId,
+            work.AfterSequence,work.ThroughSequence,work.ExpectedGeneration,ct:ct);
+        if(work.AfterSequence>=work.ThroughSequence || work.ThroughSequence==ulong.MaxValue)throw new ArgumentException("Bounded advancing no-state cut required.");
+        var scope=work.Scope;
+        var approved=await new SqlApprovedActivityMappingResolver(connectionString,scope.InstallationId)
+            .ResolveAsync(scope.SiteId,scope.MachineId,scope.MappingId,scope.StreamKey,ct);
+        var identity=AcceptedActivityContinuityQualifier.QualificationFor(approved);
+        if(identity!=work.Qualification)throw new InvalidDataException("Empty work qualification changed.");
+        var cut=await new SqlAcceptedActivityEvidenceReader(connectionString).ReadVerifiedCutAsync(scope.SiteId,
+            identity,scope.InstanceId,work.AfterSequence,work.ThroughSequence,100,ct);
+        if(cut.Rows.Count!=0 || cut.Batches.Count is <1 or >100 ||
+            cut.Batches.Any(x=>x.AcknowledgementId!=approved.AcknowledgementId || x.InstanceId!=scope.InstanceId))
+            throw new InvalidDataException("No-state work requires exact verified zero-observation documents.");
+        var covered=work.AfterSequence+1;
+        foreach(var batch in cut.Batches.OrderBy(x=>x.FromSequence).ThenBy(x=>x.NextSequence))
+        {
+            if(batch.FromSequence>covered)throw new InvalidDataException("No-state accepted batch coverage has a gap.");
+            covered=Math.Max(covered,batch.NextSequence);
+        }
+        if(covered!=work.ThroughSequence+1)throw new InvalidDataException("No-state cut must end at its verified batch frontier.");
+        var binding=new AcceptedSourceBinding(scope.SiteId,scope.InstallationId,approved,cut.Rows,
+            scope.InstanceId,work.AfterSequence,work.ThroughSequence,"[]",cut.Batches);
+        return await ApplyCoreAsync(work.OperationId,approved.Signal,identity,work.ExpectedGeneration,
+            Array.Empty<ActivityInputSample>(),binding,false,ct);
+    }
+
     private async Task<ActivityDurableResult> ApplyCoreAsync(
         Guid operationId,QualifiedActivitySignal signal,ActivityQualificationIdentity identity,
         ulong expectedGeneration,IReadOnlyList<ActivityInputSample> samples,
@@ -116,7 +147,7 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(samples);
-        if(operationId==Guid.Empty || samples.Count is <1 or >1000 ||
+        if(operationId==Guid.Empty || (samples.Count>1000 || samples.Count==0 && accepted?.EmptyBatches is null) ||
            expectedGeneration>long.MaxValue-1 ||
            identity!=ActivityQualificationIdentity.From(signal,identity.ContinuityIdentity))
             throw new ArgumentException("Exact bounded activity operation required.");
@@ -126,7 +157,11 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         var periodInsertCommands=0;
         var evaluatedPeriodRows=0;
         var savedSamples=samples.ToArray();
-        var request=JsonSerializer.SerializeToUtf8Bytes(new {
+        var request=accepted?.EmptyBatches is {} emptyProof?JsonSerializer.SerializeToUtf8Bytes(new {
+            version=3,kind="verified-no-state-cut-v1",operationId,identity,expectedGeneration,
+            acceptedInstance=accepted.InstanceId,acceptedAfter=accepted.AfterSequence,
+            acceptedThrough=accepted.ThroughSequence,batches=emptyProof.OrderBy(x=>x.BatchId).ToArray()
+        }):JsonSerializer.SerializeToUtf8Bytes(new {
             version=2,operationId,identity,expectedGeneration,samples=savedSamples,
             acceptedSourceProof=accepted?.ProofJson,
             acceptedInstance=accepted?.InstanceId,
@@ -196,8 +231,9 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                        current.Signal,identity.ContinuityIdentity)!=identity)
                     throw new InvalidDataException(
                         "Approved activity mapping changed before durable source binding.");
-                ValidateInterpretationPeriod(current,accepted.Rows);
-                await VerifyAcceptedSourceInTransactionAsync(c,t,identity,accepted,ct);
+                if(accepted.EmptyBatches is null)ValidateInterpretationPeriod(current,accepted.Rows);
+                if(accepted.EmptyBatches is not null)await VerifyEmptySourceInTransactionAsync(c,t,identity,accepted,ct);
+                else await VerifyAcceptedSourceInTransactionAsync(c,t,identity,accepted,ct);
             }
             // Load exact operation receipt before checking expected generation:
             // an identical retry returns the original committed result.
@@ -251,6 +287,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             {
                 using(Diagnostics.StartActivity("activity.sql.predecessor.verify",ActivityKind.Internal))
                     await VerifyPredecessorAsync(c,t,identity,checkpoint,accepted,ct);
+                if(accepted.EmptyBatches is null)
+                {
                 var prior=checkpoint.AcceptedSource?.LastObservation;
                 var first=accepted.Rows[0];
                 // A verified predecessor permits only the existing same-batch
@@ -260,12 +298,25 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                         prior.BatchId==first.BatchId && prior.InstanceId==first.InstanceId &&
                         prior.AcknowledgementId==first.AcknowledgementId &&
                         prior.DocumentSha256==first.DocumentSha256 };
+                }
             }
             else if(checkpoint.AcceptedSource is not null)
                 throw new InvalidDataException("Accepted checkpoint requires an accepted-source continuation.");
             var evaluated=ActivityCheckpointEvaluator.Advance(signal,identity,checkpoint,evaluationSamples);
             if(accepted is not null)
             {
+                if(accepted.EmptyBatches is {} verifiedEmpty)
+                {
+                    var frontier=verifiedEmpty.OrderByDescending(x=>x.NextSequence).First();
+                    evaluated=evaluated with { Checkpoint=evaluated.Checkpoint with {
+                        NextGeneration=checked(expectedGeneration+1),OpenAnchor=null,OpenState=null,
+                        AcceptedSource=new(operationId,accepted.InstanceId,accepted.ThroughSequence,
+                            accepted.Approved.PackageRevisionId,accepted.Approved.AcknowledgementId,accepted.Approved.PackageSha256,
+                            checkpoint.AcceptedSource?.LastObservation,null,accepted.SiteId,frontier)
+                    }};
+                }
+                else
+                {
                 var anchor=evaluated.Checkpoint.OpenAnchor;
                 var anchorRow=anchor is null ? null : accepted.Rows.FirstOrDefault(
                     row=>row.InstanceId==anchor.InstanceId && row.Sequence==anchor.Sequence)
@@ -274,6 +325,7 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                     AcceptedSource=new(operationId,accepted.InstanceId,accepted.ThroughSequence,
                         accepted.Approved.PackageRevisionId,accepted.Approved.AcknowledgementId,
                         accepted.Approved.PackageSha256,accepted.Rows[^1],anchorRow) } };
+                }
             }
             using var publication=Diagnostics.StartActivity("activity.sql.publish",ActivityKind.Internal);
             var resultBytes=JsonSerializer.SerializeToUtf8Bytes(
@@ -303,6 +355,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                     ? (object)Convert.ToDecimal(last.InstanceId,CultureInfo.InvariantCulture):DBNull.Value;
                 q.Parameters.Add("@sequence",SqlDbType.Decimal).Value=evaluated.Checkpoint.LastConsumedSample is {} tail
                     ? (object)Convert.ToDecimal(tail.Sequence,CultureInfo.InvariantCulture):DBNull.Value;
+                q.Parameters["@instance"].Precision=20;q.Parameters["@instance"].Scale=0;
+                q.Parameters["@sequence"].Precision=20;q.Parameters["@sequence"].Scale=0;
                 q.Parameters.Add("@json",SqlDbType.NVarChar,-1).Value=snapshot;
                 await q.ExecuteNonQueryAsync(ct);
             }
@@ -575,7 +629,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
            frontier.PackageRevisionId!=binding.Approved.PackageRevisionId ||
            frontier.AcknowledgementId!=binding.Approved.AcknowledgementId ||
            frontier.PackageSha256!=binding.Approved.PackageSha256 ||
-           frontier.LastObservation.Sequence>frontier.ThroughSequence)
+           frontier.LastObservation is {} last && last.Sequence>frontier.ThroughSequence ||
+           frontier.LastObservation is null && (checkpoint.LastConsumedSample is not null || frontier.FrontierBatch is null || frontier.SiteId!=binding.SiteId))
             throw new InvalidDataException("Accepted source cut does not continue the exact checkpoint frontier.");
         // The checkpoint must be the exact result of its immutable committed
         // operation, not merely checksum-consistent fields naming real rows.
@@ -609,6 +664,14 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             var proof=binding with { Rows=new[]{row},InstanceId=row.InstanceId,
                 AfterSequence=row.Sequence-1,ThroughSequence=row.Sequence,ProofJson=SourceProof(new[]{row}) };
             await VerifyAcceptedSourceInTransactionAsync(c,t,identity,proof,ct);
+        }
+        if(frontier.FrontierBatch is {} endBatch)
+            await VerifyFrontierBatchAsync(c,t,identity,binding.SiteId,frontier,endBatch,ct);
+        if(frontier.LastObservation is null)
+        {
+            if(checkpoint.OpenAnchor is not null || checkpoint.OpenState is not null || frontier.OpenAnchorObservation is not null)
+                throw new InvalidDataException("No observed sample can support an activity anchor.");
+            return;
         }
         await Verify(frontier.LastObservation,checkpoint.LastConsumedSample);
         if(checkpoint.OpenAnchor is not null)

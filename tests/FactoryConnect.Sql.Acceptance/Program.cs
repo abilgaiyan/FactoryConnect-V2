@@ -17,7 +17,7 @@ if(args is ["--activity-memory-child"])
 var canonicalPassed = ConfigurationAcceptance.CanonicalChecks();
 if (args is ["--canonical-only"]) { Console.WriteLine($"PASS: {canonicalPassed} canonical checks."); return; }
 var activityPure=ActivityInterpreterAcceptance.PureChecks();
-var bootstrapPure=activityPure+(args is ["--ingestion-only"] or ["--host-only"] or ["--activity-history-only"] or ["--activity-host-only"] ? 0 : await RuntimeMtlsTransportAcceptance.Run()+RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks());
+var bootstrapPure=activityPure+(args is ["--ingestion-only"] or ["--host-only"] or ["--activity-history-only"] or ["--activity-host-only"] or ["--activity-host-quiet-only"] ? 0 : await RuntimeMtlsTransportAcceptance.Run()+RuntimeCertificateAcceptance.PureChecks()+BootstrapAcceptance.PureChecks()+RecoveryTrustAcceptance.PureChecks()+RosterEligibilityAcceptance.PureChecks());
 if(args is ["--pure-only"]) { Console.WriteLine($"PASS: {canonicalPassed+bootstrapPure} pure acceptance checks."); return; }
 var admin = Environment.GetEnvironmentVariable("FC2_TEST_SQL")
     ?? throw new InvalidOperationException("FC2_TEST_SQL is required; SQL acceptance cannot be skipped.");
@@ -30,10 +30,10 @@ var databases = new List<string>();
 var passed = canonicalPassed+bootstrapPure;
 try
 {
-    if(args is ["--ingestion-only"] or ["--host-only"] or ["--activity-history-only"] or ["--activity-host-only"])
+    if(args is ["--ingestion-only"] or ["--host-only"] or ["--activity-history-only"] or ["--activity-host-only"] or ["--activity-host-quiet-only"])
     {
         var demoDb=await NewDatabase();var demoTarget=new InstallationTarget(demoDb.ConnectionString,demoDb.InitialCatalog,server,Guid.NewGuid(),true);await new SqlInstaller().ApplyAsync(demoTarget);
-        var demoChecks=args is ["--host-only"]?await AcquisitionHostAcceptance.Run(demoTarget with{InitializeEmpty=false}):await MtConnectIngestionAcceptance.Run(demoTarget with{InitializeEmpty=false},measureActivityHistory:args is ["--activity-history-only"],workerHosting:args is ["--activity-host-only"]);Console.WriteLine(args is ["--activity-host-only"]?$"PASS: {demoChecks} accepted activity host checks; controlled executable and disposable SQL.":args is ["--activity-history-only"]?$"PASS: {demoChecks} activity history checks; measured disposable SQL fixture, no production SLO claim.":args is ["--host-only"]?$"PASS: {demoChecks} whole-process acquisition host checks; controlled HTTP/mTLS and disposable SQL.":$"PASS: {demoChecks} first-machine ingestion checks; real HTTP/mTLS and disposable SQL.");return;
+        var demoChecks=args is ["--host-only"]?await AcquisitionHostAcceptance.Run(demoTarget with{InitializeEmpty=false}):await MtConnectIngestionAcceptance.Run(demoTarget with{InitializeEmpty=false},measureActivityHistory:args is ["--activity-history-only"],workerHosting:args is ["--activity-host-only"],quietBootstrap:args is ["--activity-host-quiet-only"]);Console.WriteLine(args is ["--activity-host-quiet-only"]?$"PASS: {demoChecks} quiet-bootstrap activity host checks; controlled executable and disposable SQL.":args is ["--activity-host-only"]?$"PASS: {demoChecks} accepted activity host checks; controlled executable and disposable SQL.":args is ["--activity-history-only"]?$"PASS: {demoChecks} activity history checks; measured disposable SQL fixture, no production SLO claim.":args is ["--host-only"]?$"PASS: {demoChecks} whole-process acquisition host checks; controlled HTTP/mTLS and disposable SQL.":$"PASS: {demoChecks} first-machine ingestion checks; real HTTP/mTLS and disposable SQL.");return;
     }
     var main = await NewDatabase();
     var installer = new SqlInstaller();

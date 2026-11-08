@@ -55,7 +55,7 @@ jobs:
 
   sql-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -92,6 +92,8 @@ jobs:
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
       - name: Run first-machine HTTP TLS SQL demonstration
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --ingestion-only
+      - name: Quiet-bootstrap accepted activity host
+        run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --activity-host-quiet-only
       - name: Activity larger-history measurement and regression
         run: dotnet run --project tests/FactoryConnect.Sql.Acceptance --configuration Release -- --activity-history-only
       - name: Whole-process single-machine acquisition host

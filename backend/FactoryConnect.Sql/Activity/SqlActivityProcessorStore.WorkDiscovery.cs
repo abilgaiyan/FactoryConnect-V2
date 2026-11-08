@@ -11,7 +11,7 @@ namespace FactoryConnect.Sql.ActivityProcessing;
 public sealed record ActivityWorkerScope(Guid InstallationId,Guid SiteId,Guid MachineId,
     Guid MappingId,string StreamKey,ulong InstanceId,ulong BootstrapAfterSequence);
 public sealed record ActivityWorkCandidate(Guid OperationId,ActivityWorkerScope Scope,
-    ActivityQualificationIdentity Qualification,ulong ExpectedGeneration,ulong AfterSequence,ulong ThroughSequence);
+    ActivityQualificationIdentity Qualification,ulong ExpectedGeneration,ulong AfterSequence,ulong ThroughSequence,bool IsEmpty=false);
 public sealed record ActivityWorkDiscovery(ulong Generation,ulong AfterSequence,ulong? AcceptedThrough,
     ActivityWorkCandidate? Candidate);
 
@@ -23,7 +23,7 @@ public sealed partial class SqlActivityProcessorStore
     {
         ArgumentNullException.ThrowIfNull(scope);
         if(new[]{scope.InstallationId,scope.SiteId,scope.MachineId,scope.MappingId}.Any(x=>x==Guid.Empty) ||
-            string.IsNullOrWhiteSpace(scope.StreamKey) || !scope.StreamKey.StartsWith("mtconnect:uuid:",StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(scope.StreamKey) || !scope.StreamKey.StartsWith("mtconnect:uuid:",StringComparison.Ordinal) || scope.StreamKey.Length=="mtconnect:uuid:".Length ||
             Utf8.GetByteCount(scope.StreamKey)>512 || scope.BootstrapAfterSequence==ulong.MaxValue || take is <1 or >100)
             throw new ArgumentException("Explicit bounded activity worker scope required.");
         using var diagnostic=Diagnostics.StartActivity("activity.work.discover",ActivityKind.Internal);
@@ -73,6 +73,16 @@ public sealed partial class SqlActivityProcessorStore
                         throw new InvalidDataException("Worker checkpoint lacks accepted ancestry.");
                 }
             }
+            await using(var ledger=new SqlCommand("SELECT TOP(1) AppliedGeneration,OperationId FROM activity.ProcessorOperation WITH(HOLDLOCK,INDEX(IX_ActivityOperation_Generation),FORCESEEK) WHERE MachineId=@machine AND StreamKeyBytes=@stream AND MappingId=@mapping ORDER BY AppliedGeneration DESC",c,t))
+            {
+                BindScope(ledger,identity);await using var r=await ledger.ExecuteReaderAsync(ct);
+                if(await r.ReadAsync(ct))
+                {
+                    if(checkpoint.NextGeneration!=(ulong)r.GetInt64(0) || checkpoint.AcceptedSource?.OperationId!=r.GetGuid(1))
+                        throw new InvalidDataException("Worker checkpoint does not name the latest immutable operation generation.");
+                }
+                else if(checkpoint.NextGeneration!=0)throw new InvalidDataException("Worker checkpoint operation ledger is missing.");
+            }
             var after=checkpoint.AcceptedSource?.ThroughSequence??scope.BootstrapAfterSequence;
             ulong? acceptedThrough=null;
             await using(var cursor=new SqlCommand("""
@@ -98,7 +108,7 @@ public sealed partial class SqlActivityProcessorStore
                 await using(var budget=new SqlCommand("IF EXISTS(SELECT 1 FROM activity.ProcessorOperation WHERE OperationId=@op AND DATALENGTH(ResultBytes)>8388608) THROW 51092,'Worker ancestry exceeds byte bound.',1;",c,t))
                 {budget.Parameters.AddWithValue("@op",predecessor.OperationId);await budget.ExecuteNonQueryAsync(ct);}
                 await VerifyPredecessorAsync(c,t,identity,checkpoint,new(scope.SiteId,scope.InstallationId,approved,
-                    new[]{predecessor.LastObservation},scope.InstanceId,after,after,SourceProof(new[]{predecessor.LastObservation})),ct);
+                    Array.Empty<SqlAcceptedActivityEvidenceReader.AcceptedRow>(),scope.InstanceId,after,after,"[]"),ct);
             }
             else
             {
@@ -106,6 +116,31 @@ public sealed partial class SqlActivityProcessorStore
                 await VerifyPredecessorAsync(c,t,identity,checkpoint,new(scope.SiteId,scope.InstallationId,approved,
                     Array.Empty<SqlAcceptedActivityEvidenceReader.AcceptedRow>(),scope.InstanceId,after,after,"[]"),ct);
             }
+            if(after==acceptedThrough.Value)
+            {await t.CommitAsync(ct);return new(checkpoint.NextGeneration,after,acceptedThrough,null);}
+            ulong? windowThrough=null;long windowBytes=0;
+            await using(var window=new SqlCommand("""
+                DECLARE @selected TABLE(BatchId uniqueidentifier PRIMARY KEY,NextSequence decimal(20,0));
+                INSERT @selected SELECT TOP(100) BatchId,NextSequence FROM acquisition.MtConnectBatch WITH(HOLDLOCK,INDEX(IX_MtConnectBatch_ActivityWindow),FORCESEEK)
+                    WHERE SiteId=@site AND MachineId=@machine AND StreamKeyBytes=@stream AND InstanceId=@instance
+                        AND NextSequence>@after+1 AND FromSequence<=@through ORDER BY NextSequence,BatchId;
+                SELECT s.NextSequence,CONVERT(bigint,DATALENGTH(b.RawDocument))+512 FROM @selected s
+                    INNER LOOP JOIN acquisition.MtConnectBatch b WITH(HOLDLOCK,FORCESEEK) ON b.BatchId=s.BatchId
+                    ORDER BY s.NextSequence,s.BatchId;
+                """,c,t))
+            {
+                BindScope(window,identity);window.Parameters.AddWithValue("@site",scope.SiteId);
+                WorkerNumber(window,"@instance",scope.InstanceId);WorkerNumber(window,"@after",after);WorkerNumber(window,"@through",acceptedThrough.Value);
+                await using var r=await window.ExecuteReaderAsync(ct);
+                while(await r.ReadAsync(ct))
+                {
+                    var next=decimal.ToUInt64(r.GetDecimal(0));
+                    if(next==0 || next-1>acceptedThrough.Value)throw new InvalidDataException("Accepted batch exceeds the durable cursor.");
+                    if(windowBytes+r.GetInt64(1)>4L*1024*1024)break;
+                    windowBytes+=r.GetInt64(1);windowThrough=next-1;
+                }
+            }
+            if(windowThrough is null || windowThrough<=after)throw new InvalidDataException("No bounded retained batch covers pending source.");
             var sequences=new List<ulong>(take);
             await using(var q=new SqlCommand("""
                 SELECT TOP (@take) Sequence FROM acquisition.MtConnectObservation WITH(HOLDLOCK,INDEX(IX_MtConnectObservation_ActivityNext),FORCESEEK)
@@ -115,21 +150,17 @@ public sealed partial class SqlActivityProcessorStore
                 """,c,t))
             {
                 BindScope(q,identity);q.Parameters.AddWithValue("@take",take);
-                WorkerNumber(q,"@instance",scope.InstanceId);WorkerNumber(q,"@after",after);WorkerNumber(q,"@through",acceptedThrough.Value);
+                WorkerNumber(q,"@instance",scope.InstanceId);WorkerNumber(q,"@after",after);WorkerNumber(q,"@through",windowThrough.Value);
                 await using var r=await q.ExecuteReaderAsync(ct);
                 while(await r.ReadAsync(ct))sequences.Add(decimal.ToUInt64(r.GetDecimal(0)));
             }
-            ActivityWorkCandidate? candidate=null;
-            if(sequences.Count>0)
-            {
-                var through=sequences[^1];
-                // Stable across process lifetimes; caller cannot choose receipt identity.
-                var op=new Guid(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new {
-                    contract="fc2-activity-worker-cut-v1",scope.InstallationId,scope.SiteId,identity,
-                    scope.InstanceId,after,through,generation=checkpoint.NextGeneration
-                }))[..16]);
-                candidate=new(op,scope,identity,checkpoint.NextGeneration,after,through);
-            }
+            var through=sequences.Count>0?sequences[^1]:windowThrough.Value;
+            var empty=sequences.Count==0;
+            var op=new Guid(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new {
+                contract="fc2-activity-worker-cut-v2",scope.InstallationId,scope.SiteId,identity,
+                scope.InstanceId,after,through,generation=checkpoint.NextGeneration,empty
+            }))[..16]);
+            var candidate=new ActivityWorkCandidate(op,scope,identity,checkpoint.NextGeneration,after,through,empty);
             await t.CommitAsync(ct);
             return new(checkpoint.NextGeneration,after,acceptedThrough,candidate);
         }

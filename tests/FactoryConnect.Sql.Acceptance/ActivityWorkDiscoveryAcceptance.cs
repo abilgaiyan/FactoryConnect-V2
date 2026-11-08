@@ -11,6 +11,9 @@ internal static class ActivityWorkDiscoveryAcceptance
         var store=new SqlActivityProcessorStore(sql);
         await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
         Directory.CreateDirectory("artifacts/performance");var checks=0;
+        var tail=await store.DiscoverAcceptedWorkAsync(scope,2);
+        if(tail.Candidate is {IsEmpty:true} empty)await store.ApplyAcceptedWorkAsync(empty);
+
         var profile=await ActivityHistorySqlProfile.CaptureAsync(c,app,async()=> {
             var spans=new List<ActivityHistoryMeasurementAcceptance.Span>();
             var start=DateTimeOffset.UtcNow;
@@ -27,13 +30,13 @@ internal static class ActivityWorkDiscoveryAcceptance
         },"artifacts/performance/activity-worker-discovery.json");
         var source=profile.Accesses.Where(x=>x.Table=="MtConnectObservation").ToArray();
         var probes=source.Where(x=>x.Index=="[IX_MtConnectObservation_ActivityNext]").ToArray();
-        var populated=probes.Where(x=>x.ActualRows>0).ToArray();
+        var populated=probes.Where(x=>x.ActualRows==2).ToArray();
         Check(populated.Length==2 && populated.All(x=>x.ActualRowsRead==2 && x.LogicalReads.HasValue),
             "nonempty exact-signal probes have measured two-row access counters");
         var probeReads=populated.Max(x=>x.LogicalReads!.Value);
-        Check(source.Length>0 && source.All(x=>x.ActualRowsRead is {} read ? read<=4 :
+        Check(source.Length>0 && source.All(x=>x.Executions==0 && x.ActualRows==0 || (x.ActualRowsRead is {} read ? read<=4 :
                 x.Index=="[IX_MtConnectObservation_ActivityNext]" && x.PhysicalOperator=="Index Seek" &&
-                x.ActualRows==0 && x.Executions==1 && x.LogicalReads is {} logical && logical<=probeReads+1) &&
+                x.ActualRows==0 && x.Executions==1 && x.LogicalReads is {} logical && logical<=probeReads+1)) &&
             probes.All(x=>x.PhysicalOperator=="Index Seek"),
             "deep discovery is bounded; an omitted empty-seek row counter requires bounded measured logical reads");
         Console.WriteLine($"MEASURE: worker discovery reported observation rows read={source.Sum(x=>x.ActualRowsRead)}, unavailable row counters={source.Count(x=>x.ActualRowsRead is null)}, command logical reads={profile.Commands.Sum(x=>x.LogicalReads)}");

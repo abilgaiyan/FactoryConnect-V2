@@ -47,12 +47,11 @@ try
         if(work.Candidate is { } cut)
         {
             stage="apply";publishingOperation=cut.OperationId;
-            var result=await store.ApplyAcceptedAsync(cut.OperationId,scope.InstallationId,scope.SiteId,scope.MachineId,
-                scope.MappingId,scope.StreamKey,scope.InstanceId,cut.AfterSequence,cut.ThroughSequence,cut.ExpectedGeneration,ct:operation.Token);
+            var result=await store.ApplyAcceptedWorkAsync(cut,operation.Token);
             Report(new{status="committed",processId=Environment.ProcessId,cut.OperationId,
                 generation=result.Checkpoint.NextGeneration.ToString(CultureInfo.InvariantCulture),
                 throughSequence=result.Checkpoint.AcceptedSource!.ThroughSequence.ToString(CultureInfo.InvariantCulture),
-                periods=result.NewPeriods.Count,replayed=result.Replayed});
+                periods=result.NewPeriods.Count,replayed=result.Replayed,verifiedNoStateCut=cut.IsEmpty});
         }
         else Report(new{status="idle",processId=Environment.ProcessId,generation=work.Generation.ToString(CultureInfo.InvariantCulture),
             afterSequence=work.AfterSequence.ToString(CultureInfo.InvariantCulture),
@@ -77,7 +76,7 @@ internal sealed record ActivityHostOptions(int Version,Guid InstallationId,Guid 
     {
         var sql=new SqlConnectionStringBuilder(SqlConnectionString);
         if(Version!=1 || new[]{InstallationId,SiteId,MachineId,MappingId}.Any(x=>x==Guid.Empty) ||
-            string.IsNullOrEmpty(StreamKey) || !StreamKey.StartsWith("mtconnect:uuid:",StringComparison.Ordinal) ||
+            string.IsNullOrEmpty(StreamKey) || !StreamKey.StartsWith("mtconnect:uuid:",StringComparison.Ordinal) || StreamKey.Length=="mtconnect:uuid:".Length ||
             new UTF8Encoding(false,true).GetByteCount(StreamKey)>512 ||
             string.IsNullOrWhiteSpace(sql.DataSource) || string.IsNullOrWhiteSpace(sql.InitialCatalog) ||
             new[]{"master","model","msdb","tempdb"}.Contains(sql.InitialCatalog,StringComparer.OrdinalIgnoreCase) ||

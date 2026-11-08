@@ -6,7 +6,7 @@ Baseline: PR #35 merged at `164b726e`; authenticated publication history is avai
 ## Boundary
 
 `FactoryConnect.ActivityHost` is a separate, explicitly launched console process.
-It consumes retained accepted MTConnect observations using `ApplyAcceptedAsync`;
+It consumes retained accepted MTConnect evidence using `ApplyAcceptedWorkAsync` (which preserves `ApplyAcceptedAsync` for nonempty cuts);
 it does not acquire machine data, run migrations, provision identities, start from
 an HTTP request or register automatically in the API/acquisition host. One exact
 installation/site/machine/mapping/stream/source-instance scope is configured.
@@ -72,13 +72,31 @@ mapping, source cut and immutable predecessor inside its original atomic writer
 transaction. Concurrent changes are rejected or return the original exact receipt;
 no checkpoint is replaced with a stale result.
 
-An empty poll writes no checkpoint/receipt or extrapolated interval. It is not a
-connectivity or physical-completeness claim. The worker does not skip empty history
-by changing its durable frontier. Existing 100-batch / aggregate byte source-proof
-bounds still apply: an excessively sparse pending cut holds for review instead of
-silently dropping evidence or relaxing proof. This first host does not implement
-historical requalification, source-instance recovery, cross-batch continuity or
-fleet scheduling.
+A caught-up poll writes no checkpoint/receipt or extrapolated interval. A pending
+raw window containing no activity observations is different: discovery caps each
+window at 100 batches and 4 MiB of document metadata budget, then the reader hashes
+and parses every document. Zero exact activity-address observations, contiguous
+accepted header coverage, current acknowledgement and exact batch endpoints are
+mandatory. The writer revalidates the complete proof and projected absence in its
+own original transaction before committing a version-3 no-state receipt/frontier.
+It emits zero periods and conservatively clears the old open anchor.
+
+Before the first sample, LastObservation/LastConsumedSample remain null. Site,
+source scope, qualification and an exact frontier document witness are persisted;
+the API reports no-published-history. Later samples start their own real anchor.
+Restart checks both the producing immutable receipt and retained frontier witness,
+including its raw hash. Older nonempty version-2 request fingerprints and JSON
+receipts remain compatible. Discovery also checks the latest immutable operation
+generation through a bounded unique ledger index, rejecting a genuine older
+receipt used to rewind the checkpoint.
+
+No-state advancement proves accepted evidence absence for that cut, not running
+time, connectivity or physical completeness. Unknown/unavailable observations at
+the activity address cannot be classified as an empty cut. More than 100 quiet
+batches are processed as multiple bounded proof-bearing cuts. Unprovable overlaps,
+missing coverage, oversized payloads, source/mapping changes and authority expiry
+hold for review. Historical requalification, automatic recovery, cross-batch
+continuity and fleet scheduling remain separate.
 
 ## Acceptance gates
 
@@ -126,17 +144,15 @@ more than 100 retained acquisition batches can exceed the existing source-proof
 window even when all intervening batches contain only counter observations. The
 host must hold without changing checkpoint, periods or receipts. An additional
 101-quiet-batch regression exercises that behavior through actual ingestion and
-the executable. Its current-head qualification is tracked in PR #36.
+the executable. That fail-closed limit exposed the need for bounded no-state advancement; the newer implementation below addresses it and is awaiting real SQL qualification.
 
 Do not classify this limit as qualified sustained processing or move directly to
 quantities. Verified empty-source advancement is the next work item, before
-unattended activity hosting is considered complete. PR #36 remains draft while
-that operational acceptance boundary is open.
+unattended activity hosting is considered complete. PR #36 remains draft until the new no-state path and all existing regressions pass current-head CI.
 
 ## Next narrow contract — verified no-state frontier advancement (review candidate)
 
-This proposal is not implemented by the current host and does not weaken the
-existing nonempty source-cut contract:
+The following contract now has an implementation candidate; it does not weaken the existing nonempty source-cut contract:
 
 1. A no-state cut requires bounded verified retained documents for an exact
    acknowledged machine/stream/source instance. Every document must be parsed and
@@ -167,6 +183,9 @@ existing nonempty source-cut contract:
    pre/post-commit process termination, exact replay, projection/document
    corruption, expiry/revocation ordering and bounded repeated/deep-history cost.
 
-The original source-proof bounds remain active until this contract has executable
-acceptance. No production setup, migration execution or recovery is authorized by
-this proposal.
+The per-cut source-proof bounds remain active. New acceptance covers quiet
+bootstrap, a post-processor-wait empty-cut expiry race with no prior checkpoint,
+projection corruption after preflight, legacy receipt compatibility, 101 quiet
+batches, historical no-state replay, frontier-document corruption, later real-state
+output, and the whole hosting fixture at deep history. These are candidates until
+current CI passes. No production setup, migration execution or recovery is performed.
