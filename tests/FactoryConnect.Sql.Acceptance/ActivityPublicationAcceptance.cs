@@ -292,6 +292,16 @@ internal static class ActivityPublicationAcceptance
                 "DISABLE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry; "+
                 "DELETE FROM activity.PublicationReceiptAncestry WHERE OperationId=@op",
                 "FC2-040 read rejects missing latest publication ancestry");
+            await RejectCorruptRead(
+                "DISABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation; "+
+                "UPDATE activity.ProcessorOperation SET RequestBytes=RequestBytes+0x20 WHERE OperationId=@op",
+                "FC2-040 read rejects publication request bytes inconsistent with stored request hash");
+            await RejectCorruptRead(
+                "ALTER TABLE activity.PublicationSourceWitness NOCHECK CONSTRAINT FK_PublicationWitness_Document; "+
+                "DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness; "+
+                "UPDATE activity.PublicationSourceWitness SET DocumentHash=0x0000000000000000000000000000000000000000000000000000000000000000 "+
+                "WHERE OperationId=@op AND BatchId=(SELECT TOP(1) BatchId FROM activity.PublicationSourceWitness WHERE OperationId=@op ORDER BY BatchId)",
+                "FC2-040 read rejects retained source document witness hash substitution");
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
