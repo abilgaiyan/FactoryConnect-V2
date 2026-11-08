@@ -34,6 +34,50 @@ public sealed partial class SqlActivityProcessorStore
         var proof=await AssessRetainedBoundaryInTransactionAsync(c,t,scope,prior,next,ct);
         await t.CommitAsync(ct);return proof;
     }
+    // Qualification-only integration exercise. Acquires the exact writer lock
+    // ordering and reconstructs a canonical manifest on one SERIALIZABLE
+    // transaction. The returned digest is NOT commit authority: a publisher
+    // must repeat this verification inside its own checkpoint transaction.
+    internal async Task<string> AssessRetainedManifestAsync(
+        ActivityWorkerScope scope,
+        SqlAcceptedActivityEvidenceReader.AcceptedRow? predecessor,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> selected,
+        CancellationToken ct=default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentNullException.ThrowIfNull(selected);
+        if(scope.InstallationId==Guid.Empty || scope.SiteId==Guid.Empty ||
+           scope.MachineId==Guid.Empty || scope.MappingId==Guid.Empty ||
+           string.IsNullOrWhiteSpace(scope.StreamKey) ||
+           selected.Count is <1 or >100)
+            throw new InvalidDataException("Exact bounded activity manifest scope required.");
+        await using var c=new SqlConnection(connectionString);
+        await c.OpenAsync(ct);
+        await using var t=(SqlTransaction)await c.BeginTransactionAsync(IsolationLevel.Serializable,ct);
+        await SqlApprovedActivityMappingResolver.LockSecurityAuthorityAsync(c,t,scope.InstallationId,ct);
+        await using(var gate=new SqlCommand("""
+            DECLARE @r int;
+            EXEC @r=sys.sp_getapplock @Resource=@machine,@LockMode='Shared',
+                @LockOwner='Transaction',@LockTimeout=10000;
+            IF @r<0 THROW 51094,'Activity manifest machine gate unavailable.',1;
+            EXEC @r=sys.sp_getapplock @Resource=@processor,@LockMode='Exclusive',
+                @LockOwner='Transaction',@LockTimeout=10000;
+            IF @r<0 THROW 51094,'Activity manifest processor gate unavailable.',1;
+            """,c,t))
+        {
+            gate.Parameters.AddWithValue("@machine",
+                ConfigurationLockResources.Machine(scope.InstallationId,scope.MachineId));
+            gate.Parameters.AddWithValue("@processor",
+                ProcessorLockResource(scope.MachineId,scope.MappingId,scope.StreamKey));
+            await gate.ExecuteNonQueryAsync(ct);
+        }
+        var proofs=await VerifySelectedBoundariesInTransactionAsync(
+            c,t,scope,predecessor,selected,ct);
+        var digest=AcceptedActivityBoundaryManifest.Fingerprint(proofs);
+        await t.CommitAsync(ct);
+        return digest;
+    }
+
     // Reconstruct every selected cross-batch boundary on the caller's writer
     // connection. No PR #38 assessment object is accepted as input. This is
     // intentionally not wired to publication until the policy-specific
