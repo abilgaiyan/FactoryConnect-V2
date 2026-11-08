@@ -71,7 +71,9 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         Guid SiteId,Guid InstallationId,ApprovedActivitySignal Approved,
         IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> Rows,
         ulong InstanceId,ulong AfterSequence,ulong ThroughSequence,string ProofJson,
-        IReadOnlyList<SqlAcceptedActivityEvidenceReader.BatchProof>? EmptyBatches=null);
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.BatchProof>? EmptyBatches=null,
+        string PublicationProfile=ActivityPublicationPolicy.Legacy,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.BatchProof>? PublicationBatches=null);
 
     /// <summary>
     /// Evidence-bound write candidate. Rechecks the active approved mapping and
@@ -112,6 +114,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
     public async Task<ActivityDurableResult> ApplyAcceptedWorkAsync(ActivityWorkCandidate work,CancellationToken ct=default)
     {
         ArgumentNullException.ThrowIfNull(work);
+        ActivityPublicationPolicy.Validate(work.Scope.PublicationProfile);
+        if(work.Scope.PublicationProfile==ActivityPublicationPolicy.CrossBatch)return await ApplyPublicationWorkAsync(work,false,ct);
         if(!work.IsEmpty)return await ApplyAcceptedAsync(work.OperationId,work.Scope.InstallationId,work.Scope.SiteId,
             work.Scope.MachineId,work.Scope.MappingId,work.Scope.StreamKey,work.Scope.InstanceId,
             work.AfterSequence,work.ThroughSequence,work.ExpectedGeneration,ct:ct);
@@ -151,6 +155,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
            expectedGeneration>long.MaxValue-1 ||
            identity!=ActivityQualificationIdentity.From(signal,identity.ContinuityIdentity))
             throw new ArgumentException("Exact bounded activity operation required.");
+        if(accepted is not null && identity!=AcceptedActivityContinuityQualifier.QualificationFor(accepted.Approved,accepted.PublicationProfile))
+            throw new InvalidDataException("Accepted publication policy and qualification disagree.");
         using var activity=Diagnostics.StartActivity("activity.sql.apply",ActivityKind.Internal);
         var started=Stopwatch.GetTimestamp();
         var insertElapsed=TimeSpan.Zero;
@@ -170,6 +176,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             acceptedThrough=accepted?.ThroughSequence
         });
         var requestHash=SHA256.HashData(request);
+        string? publicationProof=null;
+        ActivityInputSample[]? publicationSamples=null;
         var resource=ProcessorLockResource(identity.MachineId,identity.MappingId,identity.StreamKey);
         await using var c=new SqlConnection(connectionString);
         if(activity is not null)c.StatisticsEnabled=true;
@@ -235,15 +243,38 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                 if(accepted.EmptyBatches is null)ValidateInterpretationPeriod(current,accepted.Rows);
                 if(accepted.EmptyBatches is not null)await VerifyEmptySourceInTransactionAsync(c,t,identity,accepted,ct);
                 else await VerifyAcceptedSourceInTransactionAsync(c,t,identity,accepted,ct);
+                if(accepted.PublicationProfile==ActivityPublicationPolicy.CrossBatch)
+                {
+                    var parent=await LoadPublicationParentAsync(c,t,identity,expectedGeneration,ct);
+                    await VerifyPredecessorAsync(c,t,identity,parent.Checkpoint,accepted,ct);
+                    var verified=await BuildPublicationProofAsync(c,t,identity,accepted,parent,savedSamples,ct);
+                    publicationProof=verified.Proof;publicationSamples=verified.Samples;
+                    activity?.SetTag("activity.publication.profile",accepted.PublicationProfile);
+                    activity?.SetTag("activity.publication.source.batches",accepted.PublicationBatches!.Count);
+                    request=JsonSerializer.SerializeToUtf8Bytes(new {
+                        version=4,profile=ActivityPublicationPolicy.CrossBatch,operationId,identity,expectedGeneration,
+                        acceptedInstallation=accepted.InstallationId,acceptedSite=accepted.SiteId,
+                        acceptedInstance=accepted.InstanceId,acceptedAfter=accepted.AfterSequence,acceptedThrough=accepted.ThroughSequence,
+                        samples=publicationSamples,acceptedSourceProof=accepted.ProofJson,publicationProof,
+                        publicationProofSha256=Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(publicationProof)))
+                    });
+                    requestHash=SHA256.HashData(request);
+                }
+
             }
             // Load exact operation receipt before checking expected generation:
             // an identical retry returns the original committed result.
             await using(var lookup=new SqlCommand("""
+                IF @requireAncestry=1 AND EXISTS(SELECT 1 FROM activity.ProcessorOperation WHERE OperationId=@operation)
+                    AND NOT EXISTS(SELECT 1 FROM activity.PublicationReceiptAncestry a JOIN activity.ProcessorOperation o ON o.OperationId=a.OperationId
+                        WHERE a.OperationId=@operation AND a.RequestHash=o.RequestHash AND a.ResultHash=o.ResultHash)
+                    THROW 51095,'Publication replay lacks enforced receipt ancestry.',1;
                 SELECT RequestHash,RequestBytes,ResultBytes FROM activity.ProcessorOperation
                 WHERE OperationId=@operation
                 """,c,t))
             {
                 lookup.Parameters.Add("@operation",SqlDbType.UniqueIdentifier).Value=operationId;
+                lookup.Parameters.Add("@requireAncestry",SqlDbType.Bit).Value=publicationProof is not null;
                 await using var reader=await lookup.ExecuteReaderAsync(ct);
                 if(await reader.ReadAsync(ct))
                 {
@@ -283,12 +314,12 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             }
             if(checkpoint.NextGeneration!=expectedGeneration)
                 throw new InvalidOperationException("Stale activity processor generation.");
-            var evaluationSamples=savedSamples.ToArray();
+            var evaluationSamples=publicationSamples??savedSamples.ToArray();
             if(accepted is not null)
             {
                 using(Diagnostics.StartActivity("activity.sql.predecessor.verify",ActivityKind.Internal))
                     await VerifyPredecessorAsync(c,t,identity,checkpoint,accepted,ct);
-                if(accepted.EmptyBatches is null)
+                if(accepted.EmptyBatches is null && accepted.PublicationProfile==ActivityPublicationPolicy.Legacy)
                 {
                 var prior=checkpoint.AcceptedSource?.LastObservation;
                 var first=accepted.Rows[0];
@@ -328,6 +359,11 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                         accepted.Approved.PackageSha256,accepted.Rows[^1],anchorRow) } };
                 }
             }
+            if(publicationProof is not null)
+                evaluated=evaluated with {Checkpoint=evaluated.Checkpoint with {
+                    AcceptedSource=evaluated.Checkpoint.AcceptedSource! with {PublicationAncestryJson=publicationProof,
+                        PublicationProofSha256=Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(publicationProof)))}
+                }};
             using var publication=Diagnostics.StartActivity("activity.sql.publish",ActivityKind.Internal);
             var resultBytes=JsonSerializer.SerializeToUtf8Bytes(
                 new ActivityDurableResult(evaluated.Checkpoint,evaluated.ClosedPeriods,false));
@@ -363,8 +399,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             }
             await using(var receipt=new SqlCommand("""
                 INSERT activity.ProcessorOperation(OperationId,MachineId,StreamKeyBytes,MappingId,
-                    RequestHash,RequestBytes,ExpectedGeneration,AppliedGeneration,ResultBytes,RecordedAt)
-                VALUES(@op,@machine,@stream,@mapping,@hash,@bytes,@expected,@applied,@result,
+                    RequestHash,RequestBytes,ExpectedGeneration,AppliedGeneration,ResultBytes,ResultHash,RecordedAt)
+                VALUES(@op,@machine,@stream,@mapping,@hash,@bytes,@expected,@applied,@result,@resultHash,
                     TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00'))
                 """,c,t))
             {
@@ -375,7 +411,46 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                 receipt.Parameters.Add("@expected",SqlDbType.BigInt).Value=checked((long)expectedGeneration);
                 receipt.Parameters.Add("@applied",SqlDbType.BigInt).Value=checked((long)evaluated.Checkpoint.NextGeneration);
                 receipt.Parameters.Add("@result",SqlDbType.VarBinary,-1).Value=resultBytes;
+                receipt.Parameters.Add("@resultHash",SqlDbType.Binary,32).Value=publicationProof is null?DBNull.Value:SHA256.HashData(resultBytes);
                 await receipt.ExecuteNonQueryAsync(ct);
+            }
+            if(publicationProof is not null)
+            {
+                var proof=JsonSerializer.Deserialize<ActivityPublicationAncestry>(publicationProof)!;
+                await using var ancestry=new SqlCommand("""
+                    INSERT activity.PublicationReceiptAncestry(OperationId,MachineId,StreamKeyBytes,MappingId,Generation,RequestHash,ResultHash,ProofHash,
+                        ParentOperationId,ParentGeneration,ParentRequestHash,ParentResultHash,ParentProofHash)
+                    SELECT o.OperationId,o.MachineId,o.StreamKeyBytes,o.MappingId,o.AppliedGeneration,o.RequestHash,o.ResultHash,@proof,
+                        p.OperationId,p.AppliedGeneration,p.RequestHash,p.ResultHash,a.ProofHash
+                    FROM activity.ProcessorOperation o LEFT JOIN activity.ProcessorOperation p ON p.OperationId=@parent
+                    LEFT JOIN activity.PublicationReceiptAncestry a ON a.OperationId=p.OperationId
+                    WHERE o.OperationId=@op AND (o.AppliedGeneration=1 AND @parent IS NULL OR
+                        o.AppliedGeneration>1 AND p.RequestHash=@parentHash AND p.AppliedGeneration=o.ExpectedGeneration AND a.ProofHash=@parentProof);
+                    IF @@ROWCOUNT<>1 THROW 51095,'Publication receipt ancestry could not be bound.',1;
+                    """,c,t);
+                ancestry.Parameters.AddWithValue("@op",operationId);
+                ancestry.Parameters.Add("@parent",SqlDbType.UniqueIdentifier).Value=(object?)proof.ParentOperationId??DBNull.Value;
+                ancestry.Parameters.Add("@parentHash",SqlDbType.Binary,32).Value=proof.ParentRequestSha256 is {} parentHash?Convert.FromHexString(parentHash):DBNull.Value;
+                ancestry.Parameters.Add("@parentProof",SqlDbType.Binary,32).Value=proof.ParentProofSha256 is {} parentProof?Convert.FromHexString(parentProof):DBNull.Value;
+                ancestry.Parameters.Add("@proof",SqlDbType.Binary,32).Value=SHA256.HashData(Utf8.GetBytes(publicationProof));
+                await ancestry.ExecuteNonQueryAsync(ct);
+                var witnesses=proof.Batches.Concat(proof.AnchorWitness is {} anchorWitness?new[]{anchorWitness}:Array.Empty<ActivityPublicationWitness>())
+                    .DistinctBy(x=>x.BatchId).ToArray();
+                await using var sources=new SqlCommand("""
+                    INSERT activity.PublicationSourceWitness(OperationId,BatchId,SiteId,MachineId,StreamKeyBytes,AcknowledgementId,RuntimeIdentityId,
+                        InstanceId,FromSequence,NextSequence,FirstAvailableSequence,DocumentHash,IngestionRequestHash)
+                    SELECT a.OperationId,b.BatchId,b.SiteId,b.MachineId,b.StreamKeyBytes,b.AcknowledgementId,b.RuntimeIdentityId,
+                        b.InstanceId,b.FromSequence,b.NextSequence,b.FirstAvailableSequence,b.DocumentHash,s.RequestHash
+                    FROM OPENJSON(@witnesses) WITH(BatchId uniqueidentifier '$.BatchId',Document varchar(64) '$.DocumentSha256',Receipt varchar(64) '$.RequestSha256') w
+                    JOIN acquisition.MtConnectBatch b ON b.BatchId=w.BatchId AND b.DocumentHash=CONVERT(binary(32),w.Document,2)
+                    JOIN security.SecurityOperation s ON s.OperationId=b.BatchId AND s.RequestHash=CONVERT(binary(32),w.Receipt,2)
+                    JOIN activity.PublicationReceiptAncestry a ON a.OperationId=@op AND a.MachineId=b.MachineId AND a.StreamKeyBytes=b.StreamKeyBytes;
+                    IF @@ROWCOUNT<>@count THROW 51095,'Publication retained source witnesses could not be bound.',1;
+                    """,c,t);
+                sources.Parameters.AddWithValue("@op",operationId);sources.Parameters.AddWithValue("@count",witnesses.Length);
+                sources.Parameters.Add("@witnesses",SqlDbType.NVarChar,-1).Value=JsonSerializer.Serialize(witnesses);
+                await sources.ExecuteNonQueryAsync(ct);
+
             }
             // One command per bounded page of derived periods, not one command
             // per transition. The transaction, operation receipt and immutable
@@ -668,6 +743,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         }
         if(frontier.FrontierBatch is {} endBatch)
             await VerifyFrontierBatchAsync(c,t,identity,binding.SiteId,frontier,endBatch,ct);
+        if(binding.PublicationProfile==ActivityPublicationPolicy.CrossBatch)
+            await VerifyPublicationCheckpointAsync(c,t,identity,checkpoint,binding,ct);
         if(frontier.LastObservation is null)
         {
             if(checkpoint.OpenAnchor is not null || checkpoint.OpenState is not null || frontier.OpenAnchorObservation is not null)
@@ -679,8 +756,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
         {
             var anchor=frontier.OpenAnchorObservation
                 ?? throw new InvalidDataException("Accepted open anchor provenance is missing.");
-            if(anchor.BatchId!=frontier.LastObservation.BatchId ||
-               anchor.DocumentSha256!=frontier.LastObservation.DocumentSha256 ||
+            if((binding.PublicationProfile==ActivityPublicationPolicy.Legacy &&
+                (anchor.BatchId!=frontier.LastObservation.BatchId || anchor.DocumentSha256!=frontier.LastObservation.DocumentSha256)) ||
                anchor.Sequence>frontier.LastObservation.Sequence)
                 throw new InvalidDataException("Accepted open anchor crosses an unqualified batch boundary.");
             await Verify(anchor,checkpoint.OpenAnchor);

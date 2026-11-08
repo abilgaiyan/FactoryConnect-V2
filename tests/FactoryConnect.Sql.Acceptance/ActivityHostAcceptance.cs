@@ -32,6 +32,14 @@ internal static class ActivityHostAcceptance
         finally { await Dispose(child); }
     }
 
+    internal static async Task DrainPublication(InstallationTarget target,ActivityWorkerScope scope,int expectedCommits)
+    {
+        RequireDisposable(target.Database);
+        var child=await Start(target,scope,100);
+        try {for(var i=0;i<expectedCommits;i++)await Until(child,"committed");await Until(child,"idle");await Stop(child);}
+        finally {await Dispose(child);}
+    }
+
     private static async Task LegacyReplay(InstallationTarget target,ActivityWorkerScope scope,ActivityWorkCandidate cut)
     {
         await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
@@ -397,7 +405,7 @@ internal static class ActivityHostAcceptance
         var events=Channel.CreateBounded<JsonElement>(100);
         var reader=Task.Run(async()=>{try{while(await process.StandardOutput.ReadLineAsync() is {} line){using var json=JsonDocument.Parse(line);if(!events.Writer.TryWrite(json.RootElement.Clone()))throw new InvalidDataException("Host event bound exceeded.");}events.Writer.Complete();}catch(Exception e){events.Writer.TryComplete(e);}});
         var child=new Child(process,events,reader,process.StandardError.ReadToEndAsync(),app);
-        await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(new {version=1,scope.InstallationId,scope.SiteId,scope.MachineId,scope.MappingId,scope.StreamKey,
+        await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(new {version=scope.PublicationProfile==ActivityPublicationPolicy.CrossBatch?2:1,scope.PublicationProfile,scope.InstallationId,scope.SiteId,scope.MachineId,scope.MappingId,scope.StreamKey,
             InstanceId=scope.InstanceId.ToString(CultureInfo.InvariantCulture),BootstrapAfterSequence=scope.BootstrapAfterSequence.ToString(CultureInfo.InvariantCulture),
             SqlConnectionString=new SqlConnectionStringBuilder(target.ConnectionString){ApplicationName=app}.ConnectionString,CutSize=size,PollIntervalMilliseconds=100,OperationTimeoutSeconds=15}));
         await process.StandardInput.FlushAsync();return child;

@@ -63,6 +63,57 @@ internal static class ActivityBoundaryAcceptance
         var changedInstance=Make(102,104,103,"READY",left.Row.BatchId,8);
         Check(!AcceptedActivityBoundaryVerifier.Assess(approved,left.Row,changedInstance.Row,left.Batch,changedInstance.Batch).RetainedLink,"source-instance change is explicit even with exact predecessor ID");
         Check(!Assess(right.Batch with{RuntimeIdentityId=Guid.NewGuid()}).RetainedLink,"runtime identity change remains a break");
+        var legacyIdentity=AcceptedActivityContinuityQualifier.QualificationFor(approved);
+        var explicitLegacy=AcceptedActivityContinuityQualifier.QualificationForProfile(
+            approved,AcceptedActivityContinuityQualifier.LegacyProfile);
+        var crossBatchIdentity=AcceptedActivityContinuityQualifier.QualificationForProfile(
+            approved,AcceptedActivityContinuityQualifier.TransactionBoundProfile);
+        Check(legacyIdentity==explicitLegacy,
+            "explicit legacy profile preserves existing checkpoint identity");
+        Check(crossBatchIdentity!=legacyIdentity &&
+              crossBatchIdentity.MachineId==legacyIdentity.MachineId &&
+              crossBatchIdentity.MappingId==legacyIdentity.MappingId &&
+              crossBatchIdentity.ExactValueMapSha256==legacyIdentity.ExactValueMapSha256,
+            "new cross-batch policy isolates qualification without changing mapping scope");
+        try
+        {
+            _=AcceptedActivityContinuityQualifier.QualificationForProfile(approved,"unrecognized-profile");
+            throw new InvalidOperationException("Unknown continuity profile was accepted.");
+        }
+        catch(ArgumentOutOfRangeException)
+        {
+            Check(true,"unknown continuity policy fails closed");
+        }
+        var witness=Assess();
+        var manifest=AcceptedActivityBoundaryManifest.Fingerprint([witness]);
+        Check(manifest.Length==64 && manifest==AcceptedActivityBoundaryManifest.Fingerprint([witness]),
+            "qualified retained witness has deterministic proof-manifest digest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([Assess(Change("ExpectedBatchId",JsonValue.Create(Guid.NewGuid())))]),
+            "negative ancestry assessment cannot enter a publication manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            SuccessorRequestSha256="NOT-A-DIGEST"}]),
+            "malformed receipt fingerprint cannot enter a publication manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            SuccessorRequestSha256=witness.SuccessorRequestSha256.ToLowerInvariant()}]),
+            "noncanonical lowercase receipt identity cannot enter a publication manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Successor=witness.Successor with{SiteId=Guid.NewGuid()}}]),
+            "cross-site witness substitution cannot enter a publication manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness,witness]),
+            "reordered or repeated witnesses cannot form a valid manifest");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Successor=witness.Successor with{MachineId=Guid.NewGuid()}}]),
+            "manifest rejects cross-machine successor substitution");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Successor=witness.Successor with{MappingId=Guid.NewGuid()}}]),
+            "manifest rejects cross-mapping successor substitution");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Successor=witness.Successor with{Address="different-signal"}}]),
+            "manifest rejects exact signal-address substitution");
+        Reject(()=>AcceptedActivityBoundaryManifest.Fingerprint([witness with{
+            Qualification=witness.Qualification with{StreamKey="different-stream"}}]),
+            "manifest rejects qualification/source stream disagreement");
+
         var cut=AcceptedActivityContinuityQualifier.Qualify(approved,[left.Row,right.Row]);
         Check(!cut.Samples[1].ContinuityFromPrevious && cut.UnprovenBoundaryLinks==1,"candidate proof does not enable cross-batch publication or change policy identity");
         return count;
@@ -86,6 +137,16 @@ internal static class ActivityBoundaryAcceptance
         var baseline=await Snapshot();var proof=await store.AssessRetainedBoundaryAsync(scope,prior,next);
         Check(proof.RetainedLink && proof.Predecessor==prior && proof.Successor==next && proof.SuccessorRequestSha256.Length==64,
             "actual HTTP/mTLS accepted documents and immutable ingestion receipts prove exact direct ancestry");
+        var manifest=await store.AssessRetainedManifestAsync(scope,prior,[next]);
+        Check(manifest==AcceptedActivityBoundaryManifest.Fingerprint([proof]),
+            "writer-order serializable qualification reconstructs the same exact immutable receipt manifest");
+        Check(await Snapshot()==baseline,
+            "transaction-local manifest qualification never publishes checkpoint periods or operation receipts");
+        await Reject(async()=>{
+            _=await store.AssessRetainedManifestAsync(scope,prior,
+                [next with{RawValue="counterfeit"}]);
+            return proof;
+        },"transaction-local manifest rejects altered retained successor");
         await Reject(()=>store.AssessRetainedBoundaryAsync(scope,prior,next with{RawValue="counterfeit"}),"altered caller endpoint rejects");
         await Reject(()=>store.AssessRetainedBoundaryAsync(scope,prior,next with{MappingId=Guid.NewGuid()}),"unrelated mapping rejects");
         var original=(byte[])(await Scalar("SELECT RequestBytes FROM security.SecurityOperation WHERE OperationId=@op",("@op",next.BatchId)))!;

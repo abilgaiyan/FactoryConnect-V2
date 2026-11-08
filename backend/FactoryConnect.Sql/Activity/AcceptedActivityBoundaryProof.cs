@@ -16,6 +16,67 @@ internal sealed record AcceptedActivityBoundaryProof(
     internal const string Profile="accepted-receipt-boundary-candidate-v1-not-physical-completeness";
 }
 
+
+// Deterministic transaction-evidence digest. This is not an authorization token:
+// a publisher must reconstruct all witnesses on its own locked transaction
+// before recording this digest in the immutable operation request and result.
+internal static class AcceptedActivityBoundaryManifest
+{
+    internal const string Profile="retained-cross-batch-proof-manifest-v1";
+
+    internal static string Fingerprint(IReadOnlyList<AcceptedActivityBoundaryProof> proofs)
+    {
+        ArgumentNullException.ThrowIfNull(proofs);
+        if(proofs.Count is <1 or >100)
+            throw new InvalidDataException("Bounded cross-batch proof manifest required.");
+        for(var i=0;i<proofs.Count;i++)
+        {
+            var proof=proofs[i];
+            if(!proof.RetainedLink || proof.Disposition!="exact-direct-retained-predecessor" ||
+               proof.Predecessor.BatchId==proof.Successor.BatchId ||
+               proof.Predecessor.InstanceId!=proof.Successor.InstanceId ||
+               proof.Predecessor.Sequence>=proof.Successor.Sequence ||
+               proof.Predecessor.ObservedAt>=proof.Successor.ObservedAt ||
+               proof.PredecessorRequestSha256.Length!=64 ||
+               proof.SuccessorRequestSha256.Length!=64 ||
+               !proof.PredecessorRequestSha256.All(c=>c is >= '0' and <= '9' or >= 'A' and <= 'F') ||
+               !proof.SuccessorRequestSha256.All(c=>c is >= '0' and <= '9' or >= 'A' and <= 'F'))
+                throw new InvalidDataException("Unqualified cross-batch witness cannot enter a publication manifest.");
+            if(proof.Predecessor.MachineId!=proof.Successor.MachineId ||
+               proof.Predecessor.SiteId!=proof.Successor.SiteId ||
+               proof.Predecessor.StreamKey!=proof.Successor.StreamKey ||
+               proof.Predecessor.MappingId!=proof.Successor.MappingId ||
+               proof.Predecessor.Address!=proof.Successor.Address ||
+               proof.Qualification.MachineId!=proof.Predecessor.MachineId ||
+               proof.Qualification.StreamKey!=proof.Predecessor.StreamKey ||
+               proof.Qualification.MappingId!=proof.Predecessor.MappingId ||
+               proof.Qualification.SourceAddress!=proof.Predecessor.Address)
+                throw new InvalidDataException("Cross-batch witness does not bind the same exact signal scope.");
+            if(i>0 && (proofs[i-1].Successor.Sequence>=proof.Predecessor.Sequence ||
+               proofs[i-1].Successor.InstanceId!=proof.Predecessor.InstanceId ||
+               proofs[i-1].Successor.MachineId!=proof.Predecessor.MachineId ||
+               proofs[i-1].Successor.SiteId!=proof.Predecessor.SiteId ||
+               proofs[i-1].Successor.StreamKey!=proof.Predecessor.StreamKey ||
+               proofs[i-1].Successor.MappingId!=proof.Predecessor.MappingId ||
+               proofs[i-1].Successor.Address!=proof.Predecessor.Address ||
+               proofs[i-1].Qualification!=proof.Qualification))
+                throw new InvalidDataException("Cross-batch manifest witness order, scope or qualification changed.");
+        }
+        var bytes=JsonSerializer.SerializeToUtf8Bytes(new{
+            profile=Profile,
+            witnesses=proofs.Select(p=>new{
+                qualification=p.Qualification,
+                predecessor=p.Predecessor,
+                successor=p.Successor,
+                predecessorReceipt=p.PredecessorRequestSha256,
+                successorReceipt=p.SuccessorRequestSha256,
+                disposition=p.Disposition
+            }).ToArray()
+        });
+        return Convert.ToHexString(SHA256.HashData(bytes));
+    }
+}
+
 internal sealed record ActivityBoundaryBatch(Guid RuntimeIdentityId,
     SqlAcceptedActivityEvidenceReader.BatchProof Header,byte[] Document,byte[] Request,byte[] RequestHash);
 
@@ -48,21 +109,30 @@ internal static class AcceptedActivityBoundaryVerifier
     private static (MtConnectSampleFrame Frame,Guid? Predecessor,ulong? Instance) Verify(
         ApprovedActivitySignal approved,SqlAcceptedActivityEvidenceReader.AcceptedRow row,ActivityBoundaryBatch batch)
     {
-        var h=batch.Header;
-        if(batch.RuntimeIdentityId==Guid.Empty || batch.Request.Length is <1 or >16384 ||
-            h.BatchId!=row.BatchId || h.AcknowledgementId!=approved.AcknowledgementId || h.InstanceId!=row.InstanceId ||
-            h.DocumentSha256!=row.DocumentSha256 || h.DocumentSha256!=Convert.ToHexString(SHA256.HashData(batch.Document)) ||
-            !CryptographicOperations.FixedTimeEquals(SHA256.HashData(batch.Request),batch.RequestHash))
-            throw new InvalidDataException("Retained boundary batch or ingestion receipt integrity differs.");
-        const string prefix="mtconnect:uuid:";
-        if(!row.StreamKey.StartsWith(prefix,StringComparison.Ordinal))throw new InvalidDataException("Exact MTConnect stream required.");
-        var frame=MtConnectSampleParser.Parse(batch.Document,row.StreamKey[prefix.Length..],h.FromSequence);
-        if(frame.InstanceId!=h.InstanceId || frame.FirstSequence!=h.FirstAvailableSequence || frame.NextSequence!=h.NextSequence)
-            throw new InvalidDataException("Boundary source headers differ from retained batch.");
-        var source=frame.Observations.SingleOrDefault(x=>x.Sequence==row.Sequence);
+        var result=VerifyReceipt(row.SiteId,row.MachineId,row.StreamKey,batch);
+        if(batch.Header.BatchId!=row.BatchId || batch.Header.AcknowledgementId!=approved.AcknowledgementId ||
+            batch.Header.InstanceId!=row.InstanceId || batch.Header.DocumentSha256!=row.DocumentSha256)
+            throw new InvalidDataException("Retained endpoint batch identity differs.");
+        var source=result.Frame.Observations.SingleOrDefault(x=>x.Sequence==row.Sequence);
         if(source is null || source.DataItemId!=row.Address || source.RawValue!=row.RawValue || source.Quality!=row.Quality ||
             source.SourceTimestamp!=row.SourceTimestamp || source.Timestamp!=row.ObservedAt || source.ContentHash!=row.CanonicalSha256)
             throw new InvalidDataException("Boundary endpoint differs from verified source document.");
+        return result;
+    }
+
+    internal static (MtConnectSampleFrame Frame,Guid? Predecessor,ulong? Instance) VerifyReceipt(
+        Guid site,Guid machine,string stream,ActivityBoundaryBatch batch)
+    {
+        var h=batch.Header;
+        if(batch.RuntimeIdentityId==Guid.Empty || batch.Request.Length is <1 or >16384 ||
+            h.DocumentSha256!=Convert.ToHexString(SHA256.HashData(batch.Document)) ||
+            !CryptographicOperations.FixedTimeEquals(SHA256.HashData(batch.Request),batch.RequestHash))
+            throw new InvalidDataException("Retained batch or ingestion receipt integrity differs.");
+        const string prefix="mtconnect:uuid:";
+        if(!stream.StartsWith(prefix,StringComparison.Ordinal))throw new InvalidDataException("Exact MTConnect stream required.");
+        var frame=MtConnectSampleParser.Parse(batch.Document,stream[prefix.Length..],h.FromSequence);
+        if(frame.InstanceId!=h.InstanceId || frame.FirstSequence!=h.FirstAvailableSequence || frame.NextSequence!=h.NextSequence)
+            throw new InvalidDataException("Boundary source headers differ from retained batch.");
         try
         {
             using var document=JsonDocument.Parse(batch.Request);var root=document.RootElement;
@@ -71,8 +141,8 @@ internal static class AcceptedActivityBoundaryVerifier
             ulong? instance=instanceText is null ? null : ulong.Parse(instanceText,NumberStyles.None,CultureInfo.InvariantCulture);
             if((predecessor is null)!=(instance is null))throw new InvalidDataException("Incomplete ingestion predecessor identity.");
             var expected=JsonSerializer.SerializeToUtf8Bytes(new {
-                version=1,action="ingest-mtconnect",SiteId=row.SiteId,MachineId=row.MachineId,
-                AcknowledgementId=h.AcknowledgementId,StreamKey=row.StreamKey,ExpectedBatchId=predecessor,
+                version=1,action="ingest-mtconnect",SiteId=site,MachineId=machine,
+                AcknowledgementId=h.AcknowledgementId,StreamKey=stream,ExpectedBatchId=predecessor,
                 expectedInstance=instance?.ToString(CultureInfo.InvariantCulture),from=h.FromSequence.ToString(CultureInfo.InvariantCulture),documentHash=h.DocumentSha256
             });
             if(!expected.AsSpan().SequenceEqual(batch.Request))throw new InvalidDataException("Boundary receipt does not bind exact batch scope and document.");

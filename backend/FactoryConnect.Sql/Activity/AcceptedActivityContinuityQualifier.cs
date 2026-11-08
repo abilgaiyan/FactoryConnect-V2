@@ -19,7 +19,10 @@ public sealed record QualifiedActivityCut(
 public static class AcceptedActivityContinuityQualifier
 {
     public const string Assurance="accepted-same-batch-observation-continuity-not-physical-completeness";
-    private const string Profile="retained-batch-continuity-v1";
+    // Distinct immutable identities: introducing the new profile must never
+    // reinterpret a legacy checkpoint or silently adopt its operation receipts.
+    internal const string LegacyProfile="retained-batch-continuity-v1";
+    internal const string TransactionBoundProfile="retained-cross-batch-receipt-v1";
 
     public static QualifiedActivityCut Qualify(
         ApprovedActivitySignal approved,
@@ -70,10 +73,23 @@ public static class AcceptedActivityContinuityQualifier
         }
         return new(qualification,samples.AsReadOnly(),Assurance,linked,held);
     }
-    internal static ActivityQualificationIdentity QualificationFor(ApprovedActivitySignal approved)
+    internal static ActivityQualificationIdentity QualificationFor(ApprovedActivitySignal approved,string profile=LegacyProfile)
+        => QualificationForProfile(approved,profile);
+
+    // Identity construction only. This does not authorize publication or
+    // upgrade an existing checkpoint; writer-side proof and replay gates remain
+    // mandatory before the new profile can be selected by a worker.
+    internal static ActivityQualificationIdentity QualificationForProfile(
+        ApprovedActivitySignal approved,string profile)
     {
+        ArgumentNullException.ThrowIfNull(approved);
+        if(profile is not (LegacyProfile or TransactionBoundProfile))
+            throw new ArgumentOutOfRangeException(nameof(profile),"Unknown activity continuity profile.");
+        if(approved.PackageRevisionId==Guid.Empty || approved.AcknowledgementId==Guid.Empty ||
+           approved.PackageSha256.Length!=64 || !approved.PackageSha256.All(Uri.IsHexDigit))
+            throw new InvalidDataException("Exact approved activity policy identity required.");
         var policy=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            $"{Profile}|{approved.PackageRevisionId:N}|{approved.AcknowledgementId:N}|{approved.PackageSha256}")));
+            $"{profile}|{approved.PackageRevisionId:N}|{approved.AcknowledgementId:N}|{approved.PackageSha256}")));
         return ActivityQualificationIdentity.From(approved.Signal,policy);
     }
 

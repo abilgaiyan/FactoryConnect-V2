@@ -31,6 +31,131 @@ public sealed partial class SqlActivityProcessorStore
             gates.Parameters.AddWithValue("@processor",ProcessorLockResource(scope.MachineId,scope.MappingId,scope.StreamKey));
             await gates.ExecuteNonQueryAsync(ct);
         }
+        var proof=await AssessRetainedBoundaryInTransactionAsync(c,t,scope,prior,next,ct);
+        await t.CommitAsync(ct);return proof;
+    }
+    // Qualification-only integration exercise. Acquires the exact writer lock
+    // ordering and reconstructs a canonical manifest on one SERIALIZABLE
+    // transaction. The returned digest is NOT commit authority: a publisher
+    // must repeat this verification inside its own checkpoint transaction.
+    internal async Task<string> AssessRetainedManifestAsync(
+        ActivityWorkerScope scope,
+        SqlAcceptedActivityEvidenceReader.AcceptedRow? predecessor,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> selected,
+        CancellationToken ct=default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentNullException.ThrowIfNull(selected);
+        if(scope.InstallationId==Guid.Empty || scope.SiteId==Guid.Empty ||
+           scope.MachineId==Guid.Empty || scope.MappingId==Guid.Empty ||
+           string.IsNullOrWhiteSpace(scope.StreamKey) ||
+           selected.Count is <1 or >100)
+            throw new InvalidDataException("Exact bounded activity manifest scope required.");
+        await using var c=new SqlConnection(connectionString);
+        await c.OpenAsync(ct);
+        await using var t=(SqlTransaction)await c.BeginTransactionAsync(IsolationLevel.Serializable,ct);
+        await SqlApprovedActivityMappingResolver.LockSecurityAuthorityAsync(c,t,scope.InstallationId,ct);
+        await using(var gate=new SqlCommand("""
+            DECLARE @r int;
+            EXEC @r=sys.sp_getapplock @Resource=@machine,@LockMode='Shared',
+                @LockOwner='Transaction',@LockTimeout=10000;
+            IF @r<0 THROW 51094,'Activity manifest machine gate unavailable.',1;
+            EXEC @r=sys.sp_getapplock @Resource=@processor,@LockMode='Exclusive',
+                @LockOwner='Transaction',@LockTimeout=10000;
+            IF @r<0 THROW 51094,'Activity manifest processor gate unavailable.',1;
+            """,c,t))
+        {
+            gate.Parameters.AddWithValue("@machine",
+                ConfigurationLockResources.Machine(scope.InstallationId,scope.MachineId));
+            gate.Parameters.AddWithValue("@processor",
+                ProcessorLockResource(scope.MachineId,scope.MappingId,scope.StreamKey));
+            await gate.ExecuteNonQueryAsync(ct);
+        }
+        var proofs=await VerifySelectedBoundariesInTransactionAsync(
+            c,t,scope,predecessor,selected,ct);
+        var digest=AcceptedActivityBoundaryManifest.Fingerprint(proofs);
+        await t.CommitAsync(ct);
+        return digest;
+    }
+
+    // Reconstruct every selected cross-batch boundary on the caller's writer
+    // connection. No PR #38 assessment object is accepted as input. This is
+    // intentionally not wired to publication until the policy-specific
+    // checkpoint, receipt and quiet-cut contracts are implemented.
+    private async Task<IReadOnlyList<AcceptedActivityBoundaryProof>> VerifySelectedBoundariesInTransactionAsync(
+        SqlConnection c,SqlTransaction t,ActivityWorkerScope scope,
+        SqlAcceptedActivityEvidenceReader.AcceptedRow? predecessor,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> selected,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(selected);
+        if(selected.Count is <1 or >100)
+            throw new InvalidDataException("Exact bounded cross-batch source cut required.");
+        if(selected.Any(x=>x.SiteId!=scope.SiteId || x.MachineId!=scope.MachineId ||
+            x.MappingId!=scope.MappingId || x.StreamKey!=scope.StreamKey ||
+            x.InstanceId!=scope.InstanceId) ||
+           predecessor is not null &&
+           (predecessor.SiteId!=scope.SiteId || predecessor.MachineId!=scope.MachineId ||
+            predecessor.MappingId!=scope.MappingId || predecessor.StreamKey!=scope.StreamKey ||
+            predecessor.InstanceId!=scope.InstanceId))
+            throw new InvalidDataException("Cross-batch witness endpoints differ from exact worker scope.");
+        var proofs=new List<AcceptedActivityBoundaryProof>();
+        var previous=predecessor;
+        foreach(var current in selected)
+        {
+            if(previous is not null)
+            {
+                if(previous.InstanceId!=current.InstanceId ||
+                   previous.Sequence>=current.Sequence ||
+                   previous.ObservedAt>current.ObservedAt)
+                    throw new InvalidDataException("Cross-batch source order changed.");
+                if(previous.BatchId==current.BatchId &&
+                   (previous.DocumentSha256!=current.DocumentSha256 ||
+                    previous.AcknowledgementId!=current.AcknowledgementId ||
+                    previous.SiteId!=current.SiteId ||
+                    previous.Address!=current.Address))
+                    throw new InvalidDataException(
+                        "Same-batch selected observations disagree on immutable document or signal provenance.");
+                if(previous.BatchId!=current.BatchId)
+                {
+                    // The verifier reopens both original documents, immutable
+                    // ingestion requests and indexed endpoint projections in
+                    // this transaction; a missing or conflicting witness throws.
+                    // A negative RetainedLink remains a break, not continuity.
+                    var witness=await AssessRetainedBoundaryInTransactionAsync(
+                        c,t,scope,previous,current,ct);
+                    // A failed assessment is not a usable witness. Do not
+                    // accidentally interpret a non-throwing negative result as
+                    // permission to connect periods across this boundary.
+                    if(!witness.RetainedLink)
+                        throw new InvalidDataException(
+                            "Selected cross-batch boundary has no qualified direct retained predecessor: "+
+                            witness.Disposition);
+                    proofs.Add(witness);
+                }
+            }
+            previous=current;
+        }
+        return proofs.AsReadOnly();
+    }
+
+    // This overload performs no independent lock acquisition or commit.
+    // A future publisher MUST call it only after obtaining its security,
+    // machine and exclusive processor gates in the publishing transaction.
+    // The returned assessment remains evidence, never a caller-supplied
+    // publication authorization token.
+    private async Task<AcceptedActivityBoundaryProof> AssessRetainedBoundaryInTransactionAsync(
+        SqlConnection c,SqlTransaction t,ActivityWorkerScope scope,
+        SqlAcceptedActivityEvidenceReader.AcceptedRow prior,
+        SqlAcceptedActivityEvidenceReader.AcceptedRow next,CancellationToken ct)
+    {
+        if(scope.InstallationId==Guid.Empty || scope.SiteId==Guid.Empty ||
+           scope.MachineId==Guid.Empty || scope.MappingId==Guid.Empty ||
+           prior.BatchId==next.BatchId ||
+           new[]{prior,next}.Any(x=>x.SiteId!=scope.SiteId || x.MachineId!=scope.MachineId ||
+               x.MappingId!=scope.MappingId || x.StreamKey!=scope.StreamKey ||
+               x.InstanceId!=scope.InstanceId))
+            throw new InvalidDataException("Exact scoped cross-batch endpoints required.");
         var approved=await new SqlApprovedActivityMappingResolver(connectionString,scope.InstallationId)
             .ResolveInTransactionAsync(c,t,scope.SiteId,scope.MachineId,scope.MappingId,scope.StreamKey,ct);
         ValidateInterpretationPeriod(approved,[prior,next]);
@@ -73,6 +198,7 @@ public sealed partial class SqlActivityProcessorStore
         }
         if(batches.Count!=2)throw new InvalidDataException("Retained boundary batch, endpoint or immutable receipt is missing.");
         var proof=AcceptedActivityBoundaryVerifier.Assess(approved,prior,next,batches[prior.BatchId],batches[next.BatchId]);
-        await t.CommitAsync(ct);return proof;
+        return proof;
     }
+
 }
