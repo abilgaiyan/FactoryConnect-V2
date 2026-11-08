@@ -112,8 +112,8 @@ public sealed partial class SqlSecurityAuthority
                     receiptPayloads.Add(r.GetGuid(0),resultPayload);
                 }
             }
-            await VerifyActivityPublicationReceiptsAsync(c,t,
-                receiptPayloads.Select(x=>new PublicationReadInput(x.Key,identity,x.Value)).ToArray(),ct);
+            foreach(var receiptId in receipts.Keys)
+                await VerifyActivityPublicationReceiptCoreAsync(c,t,receiptId,identity,receiptPayloads[receiptId],ct);
             foreach(var item in rows)
                 if(!receipts.TryGetValue(item.Row.PublicationOperationId,out var receipt) ||
                     receipt.NewPeriods.Count(x=>x==item.Period)!=1)
@@ -214,8 +214,8 @@ public sealed partial class SqlSecurityAuthority
                 cp.NextGeneration.ToString(CultureInfo.InvariantCulture),cp.LastConsumedSample.ObservedAt,source.PackageRevisionId,source.AcknowledgementId)));
         }
         await r.DisposeAsync();
-        await VerifyActivityPublicationReceiptsAsync(c,t,
-            sourceOperations.Select(x=>new PublicationReadInput(x.OperationId,x.Qualification,x.ResultBytes)).ToArray(),ct);
+        foreach(var sourceOperation in sourceOperations)
+            await VerifyActivityPublicationReceiptCoreAsync(c,t,sourceOperation.OperationId,sourceOperation.Qualification,sourceOperation.ResultBytes,ct);
         return result;
     }
     private static void Number(SqlCommand q,string name,ulong? value)
