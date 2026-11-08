@@ -51,10 +51,21 @@ public sealed partial class SqlSecurityAuthority
                     ON o.OperationId=s.OperationId AND o.MappingId=s.MappingId
                 WHERE o.MachineId=@machine AND o.StreamKeyBytes=@stream),0)>8388608
                 THROW 51091,'Activity publication receipts exceed aggregate byte budget.',1;
+            IF EXISTS(
+                SELECT 1 FROM @selected s JOIN activity.PublicationSourceWitness w WITH(HOLDLOCK)
+                    ON w.OperationId=s.OperationId AND w.MachineId=@machine AND w.StreamKeyBytes=@stream
+                GROUP BY w.OperationId HAVING COUNT_BIG(*)>101)
+                THROW 51091,'Activity publication per-operation witness count exceeds bound.',1;
             IF COALESCE((SELECT COUNT_BIG(*)
                 FROM @selected s JOIN activity.PublicationSourceWitness w WITH(HOLDLOCK)
                     ON w.OperationId=s.OperationId AND w.MachineId=@machine AND w.StreamKeyBytes=@stream),0)>10302
                 THROW 51091,'Activity publication witness count exceeds bound.',1;
+            IF COALESCE((SELECT SUM(
+                    CONVERT(bigint,DATALENGTH(w.DocumentHash))+
+                    CONVERT(bigint,DATALENGTH(w.IngestionRequestHash)))
+                FROM @selected s JOIN activity.PublicationSourceWitness w WITH(HOLDLOCK)
+                    ON w.OperationId=s.OperationId AND w.MachineId=@machine AND w.StreamKeyBytes=@stream),0)>1048576
+                THROW 51091,'Activity publication witness bytes exceed bound.',1;
             SELECT s.OperationId,o.RequestBytes,o.RequestHash,
                 CASE WHEN s.ReuseResult=1 THEN CONVERT(varbinary(max),NULL) ELSE o.ResultBytes END,
                 o.ResultHash,a.Generation,a.ProofHash,a.ParentOperationId,a.ParentGeneration,
