@@ -39,8 +39,8 @@ internal static class AcceptedActivityBoundaryManifest
                proof.Predecessor.ObservedAt>=proof.Successor.ObservedAt ||
                proof.PredecessorRequestSha256.Length!=64 ||
                proof.SuccessorRequestSha256.Length!=64 ||
-               !proof.PredecessorRequestSha256.All(Uri.IsHexDigit) ||
-               !proof.SuccessorRequestSha256.All(Uri.IsHexDigit))
+               !proof.PredecessorRequestSha256.All(c=>c is >= '0' and <= '9' or >= 'A' and <= 'F') ||
+               !proof.SuccessorRequestSha256.All(c=>c is >= '0' and <= '9' or >= 'A' and <= 'F'))
                 throw new InvalidDataException("Unqualified cross-batch witness cannot enter a publication manifest.");
             if(proof.Predecessor.MachineId!=proof.Successor.MachineId ||
                proof.Predecessor.SiteId!=proof.Successor.SiteId ||
