@@ -48,6 +48,8 @@ public sealed partial class SqlSecurityAuthority
         if(request.Length>8388608 || resultBytes.Length>8388608 ||
             !SHA256.HashData(request).AsSpan().SequenceEqual(requestHash))
             throw new InvalidDataException("Activity receipt request integrity mismatch.");
+        try
+        {
         using var json=JsonDocument.Parse(request);
         var root=json.RootElement;
         if(!root.TryGetProperty("version",out var version) || !version.TryGetInt32(out var number))
@@ -122,5 +124,11 @@ public sealed partial class SqlSecurityAuthority
                 throw new InvalidDataException("Version-4 publication source witness mismatch.");
         }
         if(found.Count!=expected.Count)throw new InvalidDataException("Version-4 publication source witness missing.");
+        }
+        catch(JsonException e){throw new InvalidDataException("Malformed activity publication receipt JSON.",e);}
+        catch(KeyNotFoundException e){throw new InvalidDataException("Activity publication receipt property missing.",e);}
+        catch(InvalidOperationException e){throw new InvalidDataException("Invalid activity publication receipt property type.",e);}
+        catch(FormatException e){throw new InvalidDataException("Invalid activity publication receipt property value.",e);}
+        catch(OverflowException e){throw new InvalidDataException("Invalid activity publication receipt numeric value.",e);}
     }
 }
