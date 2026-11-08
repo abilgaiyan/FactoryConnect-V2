@@ -45,6 +45,7 @@ internal static class ActivityPublicationAcceptance
         {await using var q=new SqlCommand(sql,c);foreach(var(n,v)in args)q.Parameters.AddWithValue(n,v);return await q.ExecuteScalarAsync();}
         async Task<string> Snapshot()=>JsonSerializer.Serialize(new{
             checkpoint=await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@m AND MappingId=@s",("@m",scope.MachineId),("@s",scope.MappingId)),
+            ancestry=await Scalar("SELECT COUNT(*) FROM activity.PublicationReceiptAncestry WHERE MachineId=@m",("@m",scope.MachineId)),
             periods=await Scalar("SELECT COUNT(*) FROM activity.ClosedPeriod WHERE MachineId=@m",("@m",scope.MachineId)),
             receipts=await Scalar("SELECT COUNT(*) FROM activity.ProcessorOperation WHERE MachineId=@m",("@m",scope.MachineId))});
         void Check(bool pass,string name){if(!pass)throw new InvalidOperationException(name);checks++;Console.WriteLine("PASS: publication "+name);}
@@ -208,6 +209,30 @@ internal static class ActivityPublicationAcceptance
                 Expected(ActivityState.Running,afterQuiet[0],afterQuiet[^1])};
             Check(page.Rows.Select(x=>x.Period).SequenceEqual(oracle) && page.Rows.All(x=>x.Qualification==identity),
                 "complete durable history equals the exact four-period oracle after crashes concurrent writers replay and quiet cuts");
+            Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM sys.foreign_keys WHERE parent_object_id=OBJECT_ID('activity.PublicationReceiptAncestry') AND is_disabled=0 AND is_not_trusted=0"))==2,
+                "complete ancestry links use enabled trusted SQL foreign keys");
+            var beforeAncestry=await Snapshot();
+            await Scalar("DISABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation; DISABLE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry");
+            try
+            {
+                async Task ConstraintReject(string sql,string label)
+                {
+                    try{await Scalar(sql,("@op",first.OperationId));}
+                    catch(SqlException e)when(e.Number==547){Check(true,label);return;}
+                    throw new InvalidOperationException("Earlier-generation ancestry substitution was not rejected.");
+                }
+                await ConstraintReject("UPDATE activity.ProcessorOperation SET RequestBytes=RequestBytes+0x20,RequestHash=HASHBYTES('SHA2_256',RequestBytes+0x20) WHERE OperationId=@op",
+                    "earliest-generation checksum-consistent request substitution is rejected by receipt ancestry FK");
+                await ConstraintReject("UPDATE activity.ProcessorOperation SET ResultBytes=ResultBytes+0x20,ResultHash=HASHBYTES('SHA2_256',ResultBytes+0x20) WHERE OperationId=@op",
+                    "earliest-generation checksum-consistent result substitution is rejected by receipt ancestry FK");
+                await ConstraintReject("DELETE activity.ProcessorOperation WHERE OperationId=@op","earliest retained operation cannot disappear from the complete ancestry chain");
+                await ConstraintReject("DELETE activity.PublicationReceiptAncestry WHERE OperationId=@op","earliest ancestry node cannot be removed while later generations exist");
+                await ConstraintReject("UPDATE activity.PublicationReceiptAncestry SET ProofHash=CONVERT(binary(32),0x00) WHERE OperationId=@op",
+                    "earlier proof identity cannot be rebound underneath later ancestry generations");
+            }
+            finally {await Scalar("ENABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation; ENABLE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry");}
+            Check(await Snapshot()==beforeAncestry && (await store.DiscoverAcceptedWorkAsync(scope)).Candidate is null,
+                "all earlier-generation attacks preserve complete history and safe bounded resume");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
             Check(await Snapshot()==beforeRevocation,"revocation denial advances no checkpoint receipt or period");

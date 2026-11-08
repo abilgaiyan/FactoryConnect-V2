@@ -265,11 +265,16 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             // Load exact operation receipt before checking expected generation:
             // an identical retry returns the original committed result.
             await using(var lookup=new SqlCommand("""
+                IF @requireAncestry=1 AND EXISTS(SELECT 1 FROM activity.ProcessorOperation WHERE OperationId=@operation)
+                    AND NOT EXISTS(SELECT 1 FROM activity.PublicationReceiptAncestry a JOIN activity.ProcessorOperation o ON o.OperationId=a.OperationId
+                        WHERE a.OperationId=@operation AND a.RequestHash=o.RequestHash AND a.ResultHash=o.ResultHash)
+                    THROW 51095,'Publication replay lacks enforced receipt ancestry.',1;
                 SELECT RequestHash,RequestBytes,ResultBytes FROM activity.ProcessorOperation
                 WHERE OperationId=@operation
                 """,c,t))
             {
                 lookup.Parameters.Add("@operation",SqlDbType.UniqueIdentifier).Value=operationId;
+                lookup.Parameters.Add("@requireAncestry",SqlDbType.Bit).Value=publicationProof is not null;
                 await using var reader=await lookup.ExecuteReaderAsync(ct);
                 if(await reader.ReadAsync(ct))
                 {
@@ -394,8 +399,8 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
             }
             await using(var receipt=new SqlCommand("""
                 INSERT activity.ProcessorOperation(OperationId,MachineId,StreamKeyBytes,MappingId,
-                    RequestHash,RequestBytes,ExpectedGeneration,AppliedGeneration,ResultBytes,RecordedAt)
-                VALUES(@op,@machine,@stream,@mapping,@hash,@bytes,@expected,@applied,@result,
+                    RequestHash,RequestBytes,ExpectedGeneration,AppliedGeneration,ResultBytes,ResultHash,RecordedAt)
+                VALUES(@op,@machine,@stream,@mapping,@hash,@bytes,@expected,@applied,@result,@resultHash,
                     TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00'))
                 """,c,t))
             {
@@ -406,7 +411,29 @@ public sealed partial class SqlActivityProcessorStore(string connectionString)
                 receipt.Parameters.Add("@expected",SqlDbType.BigInt).Value=checked((long)expectedGeneration);
                 receipt.Parameters.Add("@applied",SqlDbType.BigInt).Value=checked((long)evaluated.Checkpoint.NextGeneration);
                 receipt.Parameters.Add("@result",SqlDbType.VarBinary,-1).Value=resultBytes;
+                receipt.Parameters.Add("@resultHash",SqlDbType.Binary,32).Value=publicationProof is null?DBNull.Value:SHA256.HashData(resultBytes);
                 await receipt.ExecuteNonQueryAsync(ct);
+            }
+            if(publicationProof is not null)
+            {
+                var proof=JsonSerializer.Deserialize<ActivityPublicationAncestry>(publicationProof)!;
+                await using var ancestry=new SqlCommand("""
+                    INSERT activity.PublicationReceiptAncestry(OperationId,MachineId,StreamKeyBytes,MappingId,Generation,RequestHash,ResultHash,ProofHash,
+                        ParentOperationId,ParentGeneration,ParentRequestHash,ParentResultHash,ParentProofHash)
+                    SELECT o.OperationId,o.MachineId,o.StreamKeyBytes,o.MappingId,o.AppliedGeneration,o.RequestHash,o.ResultHash,@proof,
+                        p.OperationId,p.AppliedGeneration,p.RequestHash,p.ResultHash,a.ProofHash
+                    FROM activity.ProcessorOperation o LEFT JOIN activity.ProcessorOperation p ON p.OperationId=@parent
+                    LEFT JOIN activity.PublicationReceiptAncestry a ON a.OperationId=p.OperationId
+                    WHERE o.OperationId=@op AND (o.AppliedGeneration=1 AND @parent IS NULL OR
+                        o.AppliedGeneration>1 AND p.RequestHash=@parentHash AND p.AppliedGeneration=o.ExpectedGeneration AND a.ProofHash=@parentProof);
+                    IF @@ROWCOUNT<>1 THROW 51095,'Publication receipt ancestry could not be bound.',1;
+                    """,c,t);
+                ancestry.Parameters.AddWithValue("@op",operationId);
+                ancestry.Parameters.Add("@parent",SqlDbType.UniqueIdentifier).Value=(object?)proof.ParentOperationId??DBNull.Value;
+                ancestry.Parameters.Add("@parentHash",SqlDbType.Binary,32).Value=proof.ParentRequestSha256 is {} parentHash?Convert.FromHexString(parentHash):DBNull.Value;
+                ancestry.Parameters.Add("@parentProof",SqlDbType.Binary,32).Value=proof.ParentProofSha256 is {} parentProof?Convert.FromHexString(parentProof):DBNull.Value;
+                ancestry.Parameters.Add("@proof",SqlDbType.Binary,32).Value=SHA256.HashData(Utf8.GetBytes(publicationProof));
+                await ancestry.ExecuteNonQueryAsync(ct);
             }
             // One command per bounded page of derived periods, not one command
             // per transition. The transaction, operation receipt and immutable

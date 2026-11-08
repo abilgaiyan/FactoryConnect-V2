@@ -191,3 +191,8 @@ provenance/eligibility failures, independent-machine progress and 101 quiet batc
 Final executable qualification and merge disposition remain tracked in PR #39.
 Do not infer readiness from the earlier standalone manifest fixtures. After the
 publication/restart gates pass, continue operator-screen acceptance before OEE work.
+
+FC2-039 final ancestry gate: `0a32cc3a` is CI-qualified for publishing/restart;
+complete earlier-generation substitution requires the new migration-021 relational
+receipt ancestry ledger and its adversarial SQL qualification. PR #39 remains draft
+for that exact-head evidence. Operator-screen acceptance follows completion.

@@ -170,3 +170,32 @@ All implementation acceptance remains pending until the actual final-head CI and
 review are recorded in PR #39. This section does not declare any failing or unrun
 gate closed. Operator-screen acceptance follows this completed publishing boundary;
 quantity/OEE work and production commissioning remain separate.
+
+## Final ancestry qualification correction
+
+Head `0a32cc3a` passed CI #42474789447, including end-to-end publication and the
+four-period restart/replay/quiet oracle. That evidence does not by itself prove
+that an earlier retained generation cannot be substituted beneath a later one.
+The bounded resume verifier reads immediate parent/anchor witnesses, not all history.
+
+Migration 021 therefore adds an immutable publication ancestry ledger in the same
+writer transaction. Each node references the exact operation scope, generation,
+request hash and checked result hash. Its self-referencing foreign key binds the
+previous generation's operation/request/result/proof hashes in the same scope.
+Generation strictly decreases to a generation-one root; NULL parent components are
+allowed only at that root. An earlier request, result, proof identity or ancestry
+node cannot be changed or removed while retained descendants reference it. This
+closes complete-chain substitution through enforced relational integrity without
+performing a historical-prefix audit on every poll. Legacy v2/v3 receipts retain
+NULL ResultHash and unchanged replay semantics. Unqualified draft-era cross-batch
+receipts lacking these links hold rather than being silently backfilled/adopted.
+
+Dedicated SQL acceptance disables the two immutability triggers in its disposable
+database and attempts checksum-consistent request/result substitution, operation
+removal, ancestry-node removal and proof rebinding at the earliest generation after
+later progress. The enabled foreign keys must reject every attempt, with history
+and bounded resume unchanged. The rollback snapshots now also include ancestry
+row counts. This assurance assumes trusted, enabled SQL constraints and normal
+immutable-ledger operation; it does not defend an administrator who disables those
+constraints or substitutes an entire database. The final correction remains draft
+until its exact-head SQL acceptance passes; prior green CI is not its qualification.

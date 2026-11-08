@@ -40,7 +40,7 @@ public sealed partial class SqlActivityProcessorStore
             IF EXISTS(SELECT 1 FROM activity.ProcessorOperation WHERE MachineId=@machine AND StreamKeyBytes=@stream AND MappingId=@mapping
                 AND AppliedGeneration=@generation AND (DATALENGTH(ResultBytes)>8388608 OR DATALENGTH(RequestBytes)>8388608))
                 THROW 51095,'Publication ancestry exceeds byte bound.',1;
-            SELECT OperationId,RequestBytes,RequestHash,ResultBytes FROM activity.ProcessorOperation WITH(HOLDLOCK,INDEX(IX_ActivityOperation_Generation),FORCESEEK)
+            SELECT OperationId,RequestBytes,RequestHash,ResultBytes,ResultHash FROM activity.ProcessorOperation WITH(HOLDLOCK,INDEX(IX_ActivityOperation_Generation),FORCESEEK)
             WHERE MachineId=@machine AND StreamKeyBytes=@stream AND MappingId=@mapping AND AppliedGeneration=@generation;
             """,c,t);
         BindScope(q,identity);q.Parameters.AddWithValue("@generation",checked((long)generation));
@@ -48,6 +48,8 @@ public sealed partial class SqlActivityProcessorStore
         if(!await r.ReadAsync(ct))throw new InvalidDataException("Publication predecessor receipt is missing.");
         var bytes=(byte[])r[1];var hash=(byte[])r[2];
         if(!SHA256.HashData(bytes).AsSpan().SequenceEqual(hash))throw new InvalidDataException("Publication predecessor request hash differs.");
+        if(r.IsDBNull(4) || !SHA256.HashData((byte[])r[3]).AsSpan().SequenceEqual((byte[])r[4]))
+            throw new InvalidDataException("Publication predecessor result hash differs or is unqualified.");
         var saved=JsonSerializer.Deserialize<ActivityDurableResult>((byte[])r[3]);
         if(saved is null || saved.Replayed || saved.Checkpoint.Qualification!=identity || saved.Checkpoint.NextGeneration!=generation ||
             saved.Checkpoint.AcceptedSource?.OperationId!=r.GetGuid(0) || saved.Checkpoint.AcceptedSource.PublicationAncestryJson is null)
@@ -62,6 +64,13 @@ public sealed partial class SqlActivityProcessorStore
             request.RootElement.GetProperty("publicationProofSha256").GetString()!=saved.Checkpoint.AcceptedSource.PublicationProofSha256 ||
             request.RootElement.GetProperty("publicationProof").GetString()!=saved.Checkpoint.AcceptedSource.PublicationAncestryJson)
             throw new InvalidDataException("Publication predecessor does not bind its proof.");
+        var operation=r.GetGuid(0);var resultHash=(byte[])r[4];await r.DisposeAsync();
+        await using(var edge=new SqlCommand("SELECT 1 FROM activity.PublicationReceiptAncestry WITH(HOLDLOCK) WHERE OperationId=@op AND RequestHash=@hash AND ResultHash=@result",c,t))
+        {
+            edge.Parameters.AddWithValue("@op",operation);edge.Parameters.Add("@hash",SqlDbType.Binary,32).Value=hash;
+            edge.Parameters.Add("@result",SqlDbType.Binary,32).Value=resultHash;
+            if(await edge.ExecuteScalarAsync(ct) is null)throw new InvalidDataException("Publication predecessor ancestry link is missing.");
+        }
         return new(saved.Checkpoint,Convert.ToHexString(hash));
     }
 
@@ -120,6 +129,19 @@ public sealed partial class SqlActivityProcessorStore
         ActivityProcessorCheckpoint cp,AcceptedSourceBinding binding,CancellationToken ct)
     {
         var proof=ParsePublicationAncestry(cp);
+        await using(var edge=new SqlCommand("""
+            SELECT 1 FROM activity.PublicationReceiptAncestry a WITH(HOLDLOCK)
+            JOIN activity.ProcessorOperation o WITH(HOLDLOCK) ON o.OperationId=a.OperationId
+            WHERE a.OperationId=@op AND a.MachineId=@machine AND a.StreamKeyBytes=@stream AND a.MappingId=@mapping AND a.Generation=@generation
+                AND a.RequestHash=o.RequestHash AND a.ResultHash=o.ResultHash AND a.ProofHash=@proof;
+            """,c,t))
+        {
+            BindScope(edge,identity);edge.Parameters.AddWithValue("@op",cp.AcceptedSource!.OperationId);
+            edge.Parameters.AddWithValue("@generation",checked((long)cp.NextGeneration));
+            edge.Parameters.Add("@proof",SqlDbType.Binary,32).Value=Convert.FromHexString(cp.AcceptedSource.PublicationProofSha256!);
+            if(await edge.ExecuteScalarAsync(ct) is null)throw new InvalidDataException("Publication checkpoint lacks database-enforced complete receipt ancestry.");
+        }
+
         var self=await LoadPublicationParentAsync(c,t,identity,cp.NextGeneration,ct);
         if(self.Checkpoint!=cp)throw new InvalidDataException("Publication checkpoint differs from its proof-bearing receipt.");
         if(cp.NextGeneration>1)
