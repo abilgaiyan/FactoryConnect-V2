@@ -438,7 +438,7 @@ internal static class MtConnectIngestionAcceptance
                 agent.Reply=(start,size)=>(200,Frame(start,size,activity:true,activityStart:currentActivity.EffectiveFrom.AddSeconds(20),activityRepeats:true),null);
                 var frame=await client.AcquireAsync(agent.Endpoint,Device,position,6);await Transport(await Request(frame));
                 return await acceptedReader.ReadBoundedAsync(site,ActivityQualificationIdentity.From(currentActivity.Signal,"quiet-bootstrap-reader"),frame.InstanceId,position-1,frame.NextSequence-1,100);
-            },async()=>(await new SqlSecurityAuthority(target.ConnectionString,target.InstallationId).ReadActivitySeriesAsync(rootToken,site,machine,Stream)).Count);
+            },async()=>(await new SqlSecurityAuthority(target.ConnectionString,target.InstallationId).ReadActivitySeriesAsync(token,site,machine,Stream)).Count);
             return count;
         }
         // Generate eligible timestamps at the source, before acquisition and ingestion.
