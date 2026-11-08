@@ -166,3 +166,17 @@ claiming sustained activity across batches, then production quantities and incre
 shift inputs. Physical completeness, automatic recovery, fleet service deployment
 and production commissioning are not established by the worker. Local developer
 setup remains the user's separate activity.
+
+## FC2-038 retained cross-batch candidate qualification
+
+The next bounded increment inspects exact immutable ingestion receipt ancestry,
+verified original documents and retained endpoint projections in one protected
+read-only transaction. It adds direct-boundary candidate proof and pure/disposable-SQL
+regressions, including checksum-consistent unrelated predecessors and missing source
+projections. See `FC2-038-cross-batch-boundary-qualification.md` for the contract and
+remaining publication gates; current-head CI evidence is tracked in its PR.
+
+This is qualification groundwork, not sustained cross-batch activity publication.
+Existing policy, checkpoint/request identities, quiet-window anchor breaks and
+runtime output remain unchanged. Next is a versioned writer-bound proof with durable
+restart/replay qualification before any stronger continuity policy is enabled.

@@ -283,6 +283,7 @@ internal static class ActivityHostAcceptance
             !page.Rows.Any(x=>x.Period.StartSequence==opening[2].Sequence && x.Period.EndSequence==cross[0].Sequence),
             "continuous host discovers later ingestion and preserves explicit cross-batch breaks");
         await Stop(restarted);
+        checks+=await ActivityBoundaryAcceptance.Run(target,scope,opening[^1],cross[0]);
         var idleRestart=await Launch();await Until(idleRestart,"idle");await Stop(idleRestart);
         Check(await SnapshotState()==afterCross,"post-commit restart neither reprocesses history nor duplicates receipts");
         foreach(var wrong in new[]{scope with{InstanceId=scope.InstanceId+1},scope with{MappingId=Guid.NewGuid()}})
