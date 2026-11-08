@@ -68,8 +68,9 @@ public sealed partial class SqlSecurityAuthority
                 WHERE o.MachineId=@machine AND o.StreamKeyBytes=@stream AND o.MappingId=@mapping;
                 """.Replace("/*cursor-filter*/",cursorFilter,StringComparison.Ordinal));
             Add(q,("@machine",machineId),("@stream",ActivityUtf8.GetBytes(streamKey)),("@mapping",mappingId),
-                ("@qual",Convert.FromHexString(stored.Series.QualificationSha256)),("@limit",take+1),
+                ("@limit",take+1),
                 ("@afterTime",(object?)after?.StartedAt??DBNull.Value),("@effect",(object?)after?.EffectId??DBNull.Value));
+            q.Parameters["@stream"].Size=512; // Match the indexed binary key; MAX creates a range/residual seek.
             q.Parameters["@afterTime"].SqlDbType=SqlDbType.DateTimeOffset;
             q.Parameters["@afterTime"].Value=after is null?DBNull.Value:DateTimeOffset.ParseExact(after.StartedAt,"O",CultureInfo.InvariantCulture);
             Number(q,"@instance",after is null?null:ulong.Parse(after.InstanceId,CultureInfo.InvariantCulture));
@@ -176,6 +177,7 @@ public sealed partial class SqlSecurityAuthority
             ORDER BY p.MappingId;
             """);
         Add(q,("@machine",machine),("@stream",ActivityUtf8.GetBytes(stream)),("@mapping",(object?)mapping??DBNull.Value));
+        q.Parameters["@stream"].Size=512;
         q.Parameters["@mapping"].SqlDbType=SqlDbType.UniqueIdentifier;
         var result=new List<StoredActivity>();
         await using var r=await q.ExecuteReaderAsync(ct);
