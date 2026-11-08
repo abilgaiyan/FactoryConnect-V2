@@ -201,6 +201,13 @@ internal static class ActivityPublicationAcceptance
                 "101 verified quiet batches advance two bounded proof-bearing cuts without fabricated periods or retained anchor");
             var afterQuiet=await ingest(60,false,false);await Committed(await Start(await Work()));
             var page=await store.ReadPeriodPageAsync(identity);Check(!page.Rows.Any(x=>x.Period.StartSequence==later[^1].Sequence && x.Period.EndSequence==afterQuiet[0].Sequence),"quiet history never silently bridges old and new state observations");
+            ClosedActivityPeriod Expected(ActivityState state,SqlAcceptedActivityEvidenceReader.AcceptedRow from,SqlAcceptedActivityEvidenceReader.AcceptedRow to)
+                =>new(scope.MachineId,scope.StreamKey,scope.MappingId,state,from.ObservedAt,to.ObservedAt,to.ObservedAt.UtcTicks-from.ObservedAt.UtcTicks,
+                    scope.InstanceId,from.Sequence,to.Sequence,from.RawValue,to.RawValue);
+            var oracle=new[]{exact,Expected(ActivityState.Idle,closing[^1],later[0]),Expected(ActivityState.Running,later[0],later[^1]),
+                Expected(ActivityState.Running,afterQuiet[0],afterQuiet[^1])};
+            Check(page.Rows.Select(x=>x.Period).SequenceEqual(oracle) && page.Rows.All(x=>x.Qualification==identity),
+                "complete durable history equals the exact four-period oracle after crashes concurrent writers replay and quiet cuts");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
             Check(await Snapshot()==beforeRevocation,"revocation denial advances no checkpoint receipt or period");
