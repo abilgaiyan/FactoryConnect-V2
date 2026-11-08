@@ -29,7 +29,7 @@ interface Scope {
   evidenceKind: "historical-derived-activity";
   currentConnectivity: null;
   verification: "immutable-publication-receipts";
-  continuity: "same-batch-only-not-physical-completeness";
+  continuity: "publication-profile-not-yet-verified";
 }
 export interface ActivitySeriesList extends Scope {
   status: "no-published-history" | "published-history";
@@ -47,7 +47,7 @@ const utc = (x: unknown): x is string => typeof x === "string" && /(?:Z|\+00:00)
 function scope(x: unknown): x is Record<string, unknown> & Scope {
   return record(x) && guid(x.machineId) && guid(x.siteId) && typeof x.streamKey === "string"
     && x.evidenceKind === "historical-derived-activity" && x.currentConnectivity === null
-    && x.verification === "immutable-publication-receipts" && x.continuity === "same-batch-only-not-physical-completeness";
+    && x.verification === "immutable-publication-receipts" && x.continuity === "publication-profile-not-yet-verified";
 }
 function series(x: unknown): x is ActivitySeries {
   return record(x) && guid(x.mappingId) && typeof x.sourceAddress === "string" && x.sourceAddress.length > 0
