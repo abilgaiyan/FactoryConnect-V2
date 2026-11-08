@@ -13,6 +13,10 @@ public sealed partial class SqlSecurityAuthority
     // witness bindings, not physical completeness or reconstructed source documents.
     private static async Task VerifyActivityPublicationReceiptAsync(SqlConnection c,SqlTransaction t,
         Guid operationId,ActivityQualificationIdentity identity,CancellationToken ct)
+        => await VerifyActivityPublicationReceiptCoreAsync(c,t,operationId,identity,null,ct);
+
+    private static async Task VerifyActivityPublicationReceiptCoreAsync(SqlConnection c,SqlTransaction t,
+        Guid operationId,ActivityQualificationIdentity identity,byte[]? previouslyLoadedResult,CancellationToken ct)
     {
         await using var q=Command(c,t,"""
             IF EXISTS(
@@ -22,7 +26,7 @@ public sealed partial class SqlSecurityAuthority
                     AND (DATALENGTH(o.RequestBytes)>8388608 OR DATALENGTH(o.ResultBytes)>8388608
                         OR CONVERT(bigint,DATALENGTH(o.RequestBytes))+CONVERT(bigint,DATALENGTH(o.ResultBytes))>8388608))
                 THROW 51091,'Activity publication receipt exceeds byte budget.',1;
-            SELECT o.RequestBytes,o.RequestHash,o.ResultBytes,o.ResultHash,
+            SELECT o.RequestBytes,o.RequestHash,CASE WHEN @reuseResult=1 THEN CONVERT(varbinary(max),NULL) ELSE o.ResultBytes END,o.ResultHash,
                 a.Generation,a.ProofHash,a.ParentOperationId,a.ParentGeneration,
                 a.ParentRequestHash,a.ParentResultHash,a.ParentProofHash
             FROM activity.ProcessorOperation o WITH(HOLDLOCK)
@@ -33,7 +37,8 @@ public sealed partial class SqlSecurityAuthority
             WHERE o.OperationId=@op AND o.MachineId=@machine AND o.StreamKeyBytes=@stream AND o.MappingId=@mapping;
             """);
         Add(q,("@op",operationId),("@machine",identity.MachineId),
-            ("@stream",ActivityUtf8.GetBytes(identity.StreamKey)),("@mapping",identity.MappingId));
+            ("@stream",ActivityUtf8.GetBytes(identity.StreamKey)),("@mapping",identity.MappingId),
+            ("@reuseResult",previouslyLoadedResult is null?0:1));
         q.Parameters["@stream"].Size=512;
         byte[] request,requestHash,resultBytes;
         byte[]? resultHash,proofHash,parentRequestHash,parentResultHash,parentProofHash;
@@ -41,7 +46,7 @@ public sealed partial class SqlSecurityAuthority
         await using(var rd=await q.ExecuteReaderAsync(ct))
         {
             if(!await rd.ReadAsync(ct))throw new InvalidDataException("Activity publication receipt missing.");
-            request=(byte[])rd[0];requestHash=(byte[])rd[1];resultBytes=(byte[])rd[2];
+            request=(byte[])rd[0];requestHash=(byte[])rd[1];resultBytes=previouslyLoadedResult??(byte[])rd[2];
             resultHash=rd.IsDBNull(3)?null:(byte[])rd[3];
             generation=rd.IsDBNull(4)?null:rd.GetInt64(4);
             proofHash=rd.IsDBNull(5)?null:(byte[])rd[5];
