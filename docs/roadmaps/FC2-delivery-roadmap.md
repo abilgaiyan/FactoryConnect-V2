@@ -147,3 +147,22 @@ fingerprints remain unchanged. Quiet bootstrap, post-wait expiry/projection race
 101 quiet batches, corruption/replay, later observed output and deep hosting
 regressions are added to CI. This closes the implementation shape, not acceptance;
 PR #36 stays draft until the current executable and full regression qualify.
+
+## FC2-036 verified quiet-source hosting qualification
+
+`0836f324` passed [CI #42457523666](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42457523666):
+1,152 full SQL checks without skips, 233 activity-host checks, 91 quiet-bootstrap
+checks, 291 deep-history checks, 26 acquisition-host checks and 479 dashboard tests.
+The quiet-progress implementation gate is accepted: 101 quiet batches advance in
+bounded proof-bearing cuts before/after observations, without invented samples or
+intervals. Expiry/projection races, legacy/no-state replay, frontier corruption,
+checkpoint rewind and later exact observed output are qualified. The implementation
+contract records measured SQL work and limits. Final integrated head also preserves
+PR #37's Windows mTLS fixture changes and adds direct no-state crash acceptance;
+its CI/review/merge disposition is tracked in PR #36.
+
+Next: qualify stronger retained-source cross-batch acquisition continuity before
+claiming sustained activity across batches, then production quantities and incremental
+shift inputs. Physical completeness, automatic recovery, fleet service deployment
+and production commissioning are not established by the worker. Local developer
+setup remains the user's separate activity.

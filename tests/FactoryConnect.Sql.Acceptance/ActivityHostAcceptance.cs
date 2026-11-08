@@ -140,6 +140,54 @@ internal static class ActivityHostAcceptance
         return 1;
     }
 
+    private static async Task<int> CrashEmptyBeforeCommit(InstallationTarget target,ActivityWorkerScope scope)
+    {
+        await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
+        var barrier="fc2-empty-commit-"+Guid.NewGuid().ToString("N");
+        await using(var trigger=new SqlCommand($"""
+            CREATE TRIGGER activity.Fixture_NoStateHostCommit ON activity.ProcessorOperation AFTER INSERT AS
+            BEGIN
+                IF EXISTS(SELECT 1 FROM inserted WHERE JSON_VALUE(CONVERT(varchar(max),RequestBytes),'$.kind')='verified-no-state-cut-v1')
+                BEGIN
+                    DECLARE @r int;
+                    EXEC @r=sys.sp_getapplock @Resource=N'{barrier}',@LockMode='Shared',@LockOwner='Transaction',@LockTimeout=30000;
+                    IF @r<0 THROW 51098,'Fixture barrier unavailable.',1;
+                END
+            END
+            """,c))await trigger.ExecuteNonQueryAsync();
+        Child? child=null;
+        try
+        {
+            await using var holder=new SqlConnection(target.ConnectionString);await holder.OpenAsync();
+            await using var tx=(SqlTransaction)await holder.BeginTransactionAsync();
+            await using(var gate=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=0; IF @r<0 THROW 51098,'Fixture lock unavailable.',1;",holder,tx))
+            {gate.Parameters.AddWithValue("@resource",barrier);await gate.ExecuteNonQueryAsync();}
+            child=await Start(target,scope,1);var observed=child;
+            try
+            {
+                await Wait(async()=> {
+                    await using var q=new SqlCommand("SELECT COUNT(*) FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id=l.request_session_id WHERE s.program_name=@app AND l.resource_type='APPLICATION' AND l.request_status='WAIT' AND l.request_mode='S'",c);
+                    q.Parameters.AddWithValue("@app",observed.App);return Convert.ToInt32(await q.ExecuteScalarAsync())==1;
+                });
+                if(child.Process.HasExited)throw new InvalidOperationException("No-state child exited before its commit barrier.");
+                child.Process.Kill(true);await child.Process.WaitForExitAsync();
+            }
+            finally {if(!child.Process.HasExited){child.Process.Kill(true);await child.Process.WaitForExitAsync();}await tx.RollbackAsync();}
+            await Wait(async()=> {
+                await using var q=new SqlCommand("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE program_name=@app",c);q.Parameters.AddWithValue("@app",observed.App);return Convert.ToInt32(await q.ExecuteScalarAsync())==0;
+            });
+            await using var unchanged=new SqlCommand("SELECT (SELECT COUNT(*) FROM activity.ProcessorCheckpoint WHERE MachineId=@machine)+(SELECT COUNT(*) FROM activity.ProcessorOperation WHERE MachineId=@machine)+(SELECT COUNT(*) FROM activity.ClosedPeriod WHERE MachineId=@machine)",c);
+            unchanged.Parameters.AddWithValue("@machine",scope.MachineId);if(Convert.ToInt32(await unchanged.ExecuteScalarAsync())!=0)throw new InvalidOperationException("Killed no-state publication left partial durable effects.");
+        }
+        finally
+        {
+            if(child is not null)await Dispose(child);
+            await using var drop=new SqlCommand("DROP TRIGGER IF EXISTS activity.Fixture_NoStateHostCommit",c);await drop.ExecuteNonQueryAsync();
+        }
+        Console.WriteLine("PASS: no-state child killed after checkpoint/receipt insertion and before commit rolls back all effects");
+        return 1;
+    }
+
     internal static async Task<int> QuietBootstrap(InstallationTarget target,ActivityWorkerScope scope,
         ActivityQualificationIdentity identity,Func<Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>>> ingest,
         Func<Task<int>> publishedSeriesCount)
@@ -148,8 +196,11 @@ internal static class ActivityHostAcceptance
         var candidate=(await store.DiscoverAcceptedWorkAsync(scope,1)).Candidate!;
         Check(candidate.IsEmpty,"quiet bootstrap proposes proof-bearing progress without an observation");
         checks+=await RejectChangedEmptyProjection(target,scope,candidate);
+        checks+=await CrashEmptyBeforeCommit(target,scope);
         var first=await Start(target,scope,1);
-        try { var committed=await Until(first,"committed");var next=await Until(first,"committed");Check(committed.GetProperty("verifiedNoStateCut").GetBoolean() && next.GetProperty("verifiedNoStateCut").GetBoolean() && committed.GetProperty("periods").GetInt32()==0 && next.GetProperty("periods").GetInt32()==0,"fresh OS process commits two bounded no-state frontiers across 101 quiet batches");await Until(first,"idle");await Stop(first); }
+        try { var committed=await Until(first,"committed");var next=await Until(first,"committed");Check(committed.GetProperty("verifiedNoStateCut").GetBoolean() && next.GetProperty("verifiedNoStateCut").GetBoolean() && committed.GetProperty("periods").GetInt32()==0 && next.GetProperty("periods").GetInt32()==0,"fresh OS process commits two bounded no-state frontiers across 101 quiet batches");await Until(first,"idle");
+            Check((await store.ReadCheckpointAsync(identity)).NextGeneration==2,"parent independently observes durable no-state progress before termination");
+            first.Process.Kill(true);await first.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
         finally { await Dispose(first); }
         var empty=await store.ReadCheckpointAsync(identity);
         Check(empty.NextGeneration==2 && empty.LastConsumedSample is null && empty.OpenAnchor is null && empty.OpenState is null &&

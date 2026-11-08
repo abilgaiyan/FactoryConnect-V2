@@ -27,17 +27,40 @@ internal sealed class RuntimeMtlsFixture:IAsyncDisposable
         this.status=status;Credentials=new(installation,actor,now,epoch);
         crlListener.Start();CrlUri=new Uri($"http://127.0.0.1:{((IPEndPoint)crlListener.LocalEndpoint).Port}/crl/{Guid.NewGuid():N}");
         Certificate=Credentials.Leaf(Credentials.Runtime,now,crlUri:CrlUri);
-        using(var publicCertificate=X509CertificateLoader.LoadCertificate(Certificate))ClientCertificate=publicCertificate.CopyWithPrivateKey(Credentials.Runtime);
+        using(var publicCertificate=X509CertificateLoader.LoadCertificate(Certificate))
+        {
+            var paired=publicCertificate.CopyWithPrivateKey(Credentials.Runtime);
+            ClientCertificate=LoadTransportCertificate(paired);
+        }
         var serverRequest=new CertificateRequest("CN=localhost",serverKey,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
         serverRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false,false,0,true));
         serverRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature,true));
         serverRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection{new("1.3.6.1.5.5.7.3.1")},false));
         var names=new SubjectAlternativeNameBuilder();names.AddDnsName("localhost");serverRequest.CertificateExtensions.Add(names.Build());
-        using(var publicServer=serverRequest.Create(Credentials.Root,now.AddMinutes(-1),now.AddDays(30),RandomNumberGenerator.GetBytes(16)))ServerCertificate=publicServer.CopyWithPrivateKey(serverKey);
+        using(var publicServer=serverRequest.Create(Credentials.Root,now.AddMinutes(-1),now.AddDays(30),RandomNumberGenerator.GetBytes(16)))
+        {
+            var paired=publicServer.CopyWithPrivateKey(serverKey);
+            ServerCertificate=LoadTransportCertificate(paired);
+        }
         var builder=new CertificateRevocationListBuilder();
         if(status=="revoked")builder.AddEntry(ClientCertificate,now.AddSeconds(-1),X509RevocationReason.KeyCompromise);
         crl=builder.Build(Credentials.Root,BigInteger.One,status=="expired"?now.AddDays(-1):now.AddDays(1),HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1,status=="expired"?now.AddDays(-2):now.AddMinutes(-1));
         Policy=new(Credentials.Root.RawData,CrlUri);serving=Serve();
+    }
+    // Schannel on Windows cannot use the in-memory CopyWithPrivateKey key handle for TLS.
+    // Import a fixture-only PKCS#12 into the current user's key store, without PersistKeySet.
+    // Linux retains the original in-memory certificate and private key.
+    private static X509Certificate2 LoadTransportCertificate(X509Certificate2 paired)
+    {
+        if(!OperatingSystem.IsWindows())return paired;
+        var password=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        var pfx=paired.Export(X509ContentType.Pkcs12,password);
+        try
+        {
+            return X509CertificateLoader.LoadPkcs12(pfx,password,
+                X509KeyStorageFlags.UserKeySet|X509KeyStorageFlags.Exportable);
+        }
+        finally{CryptographicOperations.ZeroMemory(pfx);paired.Dispose();}
     }
     private async Task Serve()
     {
@@ -59,8 +82,8 @@ internal sealed class RuntimeMtlsFixture:IAsyncDisposable
         }
         catch(Exception error)when(error is IOException or OperationCanceledException or SocketException){}
     }
-    internal Task<Pair> Connect(SslProtocols protocol=SslProtocols.Tls13,X509Certificate2? certificate=null,RuntimeMtlsServer? policy=null,bool noCertificate=false)
-        =>Pair.Open(policy??Policy,ServerCertificate,noCertificate?null:certificate??ClientCertificate,protocol);
+    internal Task<Pair> Connect(SslProtocols? protocol=null,X509Certificate2? certificate=null,RuntimeMtlsServer? policy=null,bool noCertificate=false)
+        =>Pair.Open(policy??Policy,ServerCertificate,noCertificate?null:certificate??ClientCertificate,protocol??(OperatingSystem.IsWindows()?SslProtocols.Tls12:SslProtocols.Tls13));
     internal sealed class Pair:IAsyncDisposable
     {
         internal readonly RuntimeMtlsChannel Channel;

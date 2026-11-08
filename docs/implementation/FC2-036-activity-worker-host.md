@@ -1,28 +1,20 @@
 # FC2-036 — Explicit single-machine activity worker host
 
-Status: implementation candidate; real SQL/process/performance CI qualification pending.
-Baseline: PR #35 merged at `164b726e`; authenticated publication history is available.
+Executable qualification: `0836f324` passed [CI #42457523666](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42457523666).
+Final integration/merge disposition is tracked in [PR #36](https://github.com/abilgaiyan/FactoryConnect-V2/pull/36).
+This is controlled retained-source hosting qualification, not production commissioning.
 
-## Boundary
+## Boundary and configuration
 
-`FactoryConnect.ActivityHost` is a separate, explicitly launched console process.
-It consumes retained accepted MTConnect evidence using `ApplyAcceptedWorkAsync` (which preserves `ApplyAcceptedAsync` for nonempty cuts);
-it does not acquire machine data, run migrations, provision identities, start from
-an HTTP request or register automatically in the API/acquisition host. One exact
-installation/site/machine/mapping/stream/source-instance scope is configured.
-Customer service credentials, installation and production commissioning are separate.
+`FactoryConnect.ActivityHost` is a separately launched console process over retained
+accepted MTConnect evidence. It does not acquire data, apply migrations, provision
+identities, start from HTTP or register automatically in the API/acquisition host.
+One exact installation/site/machine/mapping/stream/source-instance scope is configured.
+Customer service credentials, installation, recovery and commissioning are separate.
 
-The worker runs one discovery/apply operation at a time, with no input queue or
-prefetch. Each operation has a deadline. Ctrl+C, SIGTERM or `stop` on stdin cancels
-work. Any unsafe/unavailable/ambiguous operation exits held (20); it never guesses
-whether a SQL commit happened. A new process reconstructs progress from SQL.
-
-## Configuration
-
-Run the Release-built tool with `--config path` or `--stdin` (one JSON line).
-Configuration is limited to 32 KiB; unknown fields are rejected. Secrets are not
-command-line arguments or diagnostics. `--stdin` leaves subsequent lines available
-for `stop`. Example shape, with credentials supplied separately by the installer:
+Run the Release tool with `--config path` or `--stdin` (one JSON line). Actual input
+is bounded to 32 KiB; unknown fields are rejected. Secrets are not command-line
+arguments or diagnostics. Subsequent stdin lines may supply `stop`.
 
 ```json
 {
@@ -34,158 +26,133 @@ for `stop`. Example shape, with credentials supplied separately by the installer
   "streamKey": "mtconnect:uuid:<exact device UUID>",
   "instanceId": "<canonical UInt64 decimal string>",
   "bootstrapAfterSequence": "<canonical UInt64 decimal string>",
-  "sqlConnectionString": "<explicit existing V2 database; never a system database>",
+  "sqlConnectionString": "<explicit existing V2 database, not a system database>",
   "cutSize": 100,
   "pollIntervalMilliseconds": 250,
   "operationTimeoutSeconds": 15
 }
 ```
 
-Cut size is 1–100; poll interval 50–60,000 ms; deadline 1–30 seconds. Bootstrap is
-an explicit retained-window boundary, not a timestamp search. It must equal the
-first batch's FromSequence minus one for the acknowledged source instance; the
-existing writer rejects sequence-zero bootstrap and later caller-selected starts.
-After a checkpoint exists, its exact frontier governs resume; the bootstrap option
-is not a recovery/reset command. Source-instance or mapping changes require review,
-not automatic adoption. Existing interpretation-window rules remain unchanged.
+Cut size is 1–100, poll interval 50–60,000 ms and deadline 1–30 seconds. Bootstrap
+must equal the first acknowledged retained batch's FromSequence minus one; sequence
+zero bootstrap remains unsupported. After a checkpoint exists its exact frontier
+governs resume. Bootstrap is not a reset or timestamp-search command. Source-instance
+or mapping changes hold for review rather than being automatically adopted.
 
-## Discovery and publication contract
+The loop has one in-flight operation and no queue/prefetch. Ctrl+C, SIGTERM or `stop`
+cancels it. Unsafe/unavailable/ambiguous operations exit held (20), reporting stage,
+operation ID and SQL error number without source values/credentials. The worker
+never guesses whether a SQL commit happened; restart reconstructs SQL truth.
 
-Discovery joins the existing security Shared → machine Shared → processor Shared
-lock order, obtains approved mapping authority after the waits and reads the SQL
-checkpoint under the same transaction. It verifies checksum, qualification,
-generation, immutable producing receipt and retained predecessor/anchor even when
-there is no new work. Receipt/checkpoint payloads have explicit 8 MiB preflights.
+## Discovery, ancestry and publication
 
-Migration 020 adds a metadata-only exact-signal index. `TOP(cutSize)` sequences are
-selected after the checkpoint and at/below the pinned durable acquisition cursor.
-Discovery does not load or reconstruct historical raw documents. It does not filter
-away rows with unexpected addresses/acknowledgements to make a cut pass. The existing
-accepted-source reader subsequently checks document completeness, projections and
-provenance. Sparse tails use the mapping/source index, rather than traversing all
-unrelated retained observations.
+Discovery joins security Shared → machine Shared → processor Shared ordering. The
+existing ingestion machine Exclusive gate serializes accepted-frontier changes.
+Current approved mapping authority is resolved after waits. Checksum, qualification,
+generation, producing receipt, original predecessor/anchor and retained frontier
+witness are checked even when caught up. Checkpoint/receipt payloads have explicit
+8 MiB preflights. Migration 020 adds an exact-signal metadata index and a unique
+scope/generation ledger index; a genuine older receipt cannot rewind the checkpoint.
 
-A candidate pins exact generation, instance, after/through cut and qualification.
-Its operation ID is deterministic over that complete scope and a versioned worker
-contract. Discovery is not publication authorization: `ApplyAcceptedAsync` rechecks
-mapping, source cut and immutable predecessor inside its original atomic writer
-transaction. Concurrent changes are rejected or return the original exact receipt;
-no checkpoint is replaced with a stale result.
+Each candidate pins exact scope, qualification, instance, generation and after/through
+cut. Its versioned operation identity is deterministic across process lifetimes.
+Discovery is not publication permission: `ApplyAcceptedWorkAsync` delegates nonempty
+work to the unchanged version-2 request contract in `ApplyAcceptedAsync`. The original
+writer-owned transaction revalidates current authority, interval, complete accepted
+source cut and predecessor before atomic checkpoint/receipt/period commit. Historical
+receipt replay may return an older original result without replacing newer progress.
 
-A caught-up poll writes no checkpoint/receipt or extrapolated interval. A pending
-raw window containing no activity observations is different: discovery caps each
-window at 100 batches and 4 MiB of document metadata budget, then the reader hashes
-and parses every document. Zero exact activity-address observations, contiguous
-accepted header coverage, current acknowledgement and exact batch endpoints are
-mandatory. The writer revalidates the complete proof and projected absence in its
-own original transaction before committing a version-3 no-state receipt/frontier.
-It emits zero periods and conservatively clears the old open anchor.
+Caught-up polls write nothing. Pending source windows are bounded to 100 batches and
+4 MiB of document-plus-metadata budget before proof reading; the existing 8 MiB source
+verification limit remains active. Exact-signal sequence seeks avoid traversing an
+unrelated raw prefix. Work and protected reads remain bounded by the selected new cut
+and necessary predecessor/witness, not cumulative history.
 
-Before the first sample, LastObservation/LastConsumedSample remain null. Site,
-source scope, qualification and an exact frontier document witness are persisted;
-the API reports no-published-history. Later samples start their own real anchor.
-Restart checks both the producing immutable receipt and retained frontier witness,
-including its raw hash. Older nonempty version-2 request fingerprints and JSON
-receipts remain compatible. Discovery also checks the latest immutable operation
-generation through a bounded unique ledger index, rejecting a genuine older
-receipt used to rewind the checkpoint.
+## Verified no-state advancement
 
-No-state advancement proves accepted evidence absence for that cut, not running
-time, connectivity or physical completeness. Unknown/unavailable observations at
-the activity address cannot be classified as an empty cut. More than 100 quiet
-batches are processed as multiple bounded proof-bearing cuts. Unprovable overlaps,
-missing coverage, oversized payloads, source/mapping changes and authority expiry
-hold for review. Historical requalification, automatic recovery, cross-batch
-continuity and fleet scheduling remain separate.
+Quiet source windows require evidence, not metadata absence alone. The source reader
+hashes and parses every selected retained document, binds exact scope/header values
+and checks projected observation completeness. A no-state cut must contain zero
+observations for the exact activity address. Unknown/unavailable/unknown-value samples
+at that address are observations and cannot be skipped as empty.
 
-## Acceptance gates
+Accepted header coverage must cover the complete cut without gaps, use the exact
+current acknowledgement and end at a verified batch frontier. The writer revalidates
+the complete batch-ID set, header/hash proof (including raw SHA-256), projected absence
+and durable acquisition cursor in its own transaction after lock waits. Appended or
+altered overlapping evidence invalidates a stale proof. No per-document SQL client
+loop or historical-prefix reconstruction is introduced.
 
-Dedicated `--activity-host-only` uses a generated disposable SQL database and real
-MTConnect HTTP/mTLS ingestion. It exercises the shipped executable through stdin:
+A successful version-3 no-state operation atomically commits an immutable receipt and
+source frontier, zero periods and a conservative anchor break. It retains the original
+last observed sample when one exists. Before the first sample, LastObservation and
+LastConsumedSample remain null; site/scope, qualification and a retained frontier
+witness are explicit. The history API reports no-published-history until actual
+observations support a series. No Unknown state, running time or connectivity is
+invented. A later real sample starts its own anchor under the existing same-batch
+policy. Nonempty samples still satisfy the exact half-open interpretation window.
 
-- A fresh worker commits the initial acknowledged eligible cut, after the existing
-  injected rollback; stored receipt, exact period and operation replay are checked.
-- A continuous host resumes SQL state, consumes bounded one-observation cuts and
-  idles without extra effects.
-- A controlled SQL trigger blocks closing publication after period insertion.
-  Actual lock evidence precedes termination. Rollback preserves the original anchor;
-  a new process discovers and closes that same-batch interval once.
-- Later ingestion is discovered, cross-batch links remain breaks, graceful shutdown
-  and post-commit restart preserve checkpoint/receipt/period state.
-- Wrong instance/mapping, checksum-consistent forged ancestry and missing retained
-  predecessor hold even on idle restart. Synthetic corruption is restored in finally.
-- Authorized activity HTTP readback remains consistent with the published results.
+Restart validates both immutable producing ancestry and the exact retained frontier
+document. Historical no-state replay returns its original receipt without rewinding
+newer progress. Older nonempty request fingerprints and pre-frontier JSON receipts
+remain replay-compatible; their request bytes are not rewritten.
 
-The larger-history suite additionally profiles idle and nonempty next-cut discovery
-at deep retained history, requiring bounded observation/index access and deterministic
-candidate replay. Existing exact-output, processing-memory, crash/restart, API/browser
-and complete SQL regressions remain required. CI evidence, measured limits and final
-review must be recorded before readiness/merge. No production action is performed.
+## Acceptance evidence
 
-## Executable hosting mechanics — qualified, operational quiet-source gate open
+At `0836f324`, all three CI jobs passed:
 
-`0260e60f` passed [CI #42453004167](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42453004167):
-all three jobs, 225 dedicated accepted-host checks, 245 history checks, 26 acquisition
-host checks and 1,152 full SQL checks without skips. Local Release build had zero
-warnings/errors; 142 pure checks passed. The hosting fixture includes a fresh
-bootstrap plus seven continuation/negative child lifetimes. These are controlled
-mechanics, not unattended machine-service or production commissioning acceptance.
+| Suite | Result |
+| --- | --- |
+| Full SQL regression | 1,152 checks, no skips |
+| Dedicated activity host | 233 checks |
+| Quiet bootstrap | 91 checks |
+| Deep-history processing/discovery/host | 291 checks |
+| Acquisition host | 26 checks |
+| Dashboard | 479 tests |
 
-Discovery profiles at deep history reported 16 observation rows read across three
-calls: each predecessor access read one row and each populated next-signal probe
-read two. SQL omitted the empty seek's ActualRowsRead counter; it remains null in
-the artifact. The empty seek had four logical reads, versus three for each populated
-probe. The regression checks that relationship explicitly rather than inventing a
-zero row-read count. Command-level logical reads totaled 4,449 in this fixture.
-These workload observations do not establish fleet capacity or production SLOs.
+Local Release builds had zero warnings/errors; 142 pure checks passed. Actual
+MTConnect HTTP/mTLS ingestion and generated disposable SQL databases feed the shipped
+host executable through stdin. Acceptance includes fresh bootstrap, serial bounded
+cuts, observed SQL-barrier pre-commit termination, same-batch anchor restart, later
+input, cross-batch breaks, graceful/idle restart, missing predecessor, forged ancestry,
+checkpoint rewind, exact legacy replay and authorized publication HTTP readback.
 
-**Open operating gate:** long quiet source windows. A later state transition after
-more than 100 retained acquisition batches can exceed the existing source-proof
-window even when all intervening batches contain only counter observations. The
-host must hold without changing checkpoint, periods or receipts. An additional
-101-quiet-batch regression exercises that behavior through actual ingestion and
-the executable. That fail-closed limit exposed the need for bounded no-state advancement; the newer implementation below addresses it and is awaiting real SQL qualification.
+Quiet bootstrap crosses 101 no-state batches before any sample and emits no periods.
+A fresh process then preserves the first real anchor across repeated state and closes
+one exact interval. A currently eligible no-state cut with no prior checkpoint passes
+preflight, waits on a held processor lock, expires and rejects with no effects. A
+projection altered after preflight is also rejected inside the writer transaction.
 
-Do not classify this limit as qualified sustained processing or move directly to
-quantities. Verified empty-source advancement is the next work item, before
-unattended activity hosting is considered complete. PR #36 remains draft until the new no-state path and all existing regressions pass current-head CI.
+After observed progress, 101 quiet batches commit as two bounded proof-bearing cuts.
+Historical empty replay does not rewind the second cut. An altered frontier document
+fails even when its SQL hash is updated consistently. Later observations produce only
+their own exact qualified interval. The entire hosting fixture repeats at deep history.
 
-## Next narrow contract — verified no-state frontier advancement (review candidate)
+The final integration additionally exercises termination after no-state checkpoint/
+receipt insertion and before commit, verifies full rollback, then independently
+observes committed no-state progress before abrupt termination and process restart.
+Its current-head qualification is recorded in PR #36.
 
-The following contract now has an implementation candidate; it does not weaken the existing nonempty source-cut contract:
+Deep discovery profiled three calls. The accepted run reported 22 observation rows
+read and no unavailable row counters, with 3,632 command logical reads. Each populated
+next-signal probe read two rows; individual predecessor accesses stayed bounded.
+Plans may choose the new signal index for predecessor checks too, so the regression
+identifies the two-row next-input probes without assuming one fixed join plan. Earlier
+empty seeks omitted ActualRowsRead; raw null counters are preserved and only qualified
+with measured logical-read bounds, never fabricated as zero. Artifacts retain actual
+plans, statements and command totals. These are controlled single-machine observations,
+not fleet capacity, statistical latency comparisons or production SLOs.
 
-1. A no-state cut requires bounded verified retained documents for an exact
-   acknowledged machine/stream/source instance. Every document must be parsed and
-   prove that the selected sequence window contains zero observations for the
-   exact activity source address. Unknown/unavailable/unmapped state values at
-   that address are observations, never an empty window.
-2. Preserve exact batch IDs, hashes, scope, acknowledgement and source bounds in
-   a versioned proof. The writer must revalidate that complete cut in its own
-   transaction under existing lock order, current authority and the durable
-   acquisition frontier. Missing/altered documents or projected omissions deny
-   advancement; SQL metadata absence alone is insufficient.
-3. Atomically commit an immutable no-state operation receipt and exact source
-   frontier, producing zero periods. Caught-up polls remain read-only. Never
-   derive running time or physical completeness from an empty cut.
-4. Before the first activity sample, represent absence explicitly; do not invent
-   a last observation, anchor or Unknown state. Preserve installation/site,
-   machine/mapping/qualification/acknowledgement binding and immutable ancestry.
-   Authenticated history remains no-published-history until actual observations
-   support a publication; a processor frontier is not an activity interval.
-5. After observations exist, retain their original identities. Empty progress
-   must preserve or conservatively break anchor continuity; it never proves a
-   cross-batch link. New observed source timestamps must still satisfy the exact
-   half-open interpretation window; no historical requalification is implied.
-6. Existing immutable receipt replay must remain compatible. Version new request
-   semantics rather than changing historical request bytes. Reject fabricated
-   checkpoints, omitted observations, scope changes and ambiguous retries.
-7. Qualify quiet bootstrap, more than 100 quiet batches, later state observations,
-   pre/post-commit process termination, exact replay, projection/document
-   corruption, expiry/revocation ordering and bounded repeated/deep-history cost.
+## Remaining boundaries
 
-The per-cut source-proof bounds remain active. New acceptance covers quiet
-bootstrap, a post-processor-wait empty-cut expiry race with no prior checkpoint,
-projection corruption after preflight, legacy receipt compatibility, 101 quiet
-batches, historical no-state replay, frontier-document corruption, later real-state
-output, and the whole hosting fixture at deep history. These are candidates until
-current CI passes. No production setup, migration execution or recovery is performed.
+No-state proof establishes absence in the accepted source cut, not physical sensor
+completeness. Same verified batch continuity remains qualified; unproven cross-batch
+links remain breaks. Stronger retained-source cross-batch acquisition assurance must
+be qualified before presenting sustained activity across those boundaries. No software
+receipt alone proves physical completeness.
+
+Unprovable overlaps, missing coverage, oversized payloads, source/mapping changes and
+authority expiry hold. Automatic historical requalification, source-instance recovery,
+fleet scheduling, service installation/rollback and production commissioning remain
+separate. Quantities and shift/OEE inputs retain their own evidence contracts. No
+production setup, migration execution or recovery is performed by this PR.
