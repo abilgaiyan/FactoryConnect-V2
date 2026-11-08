@@ -25,7 +25,15 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
         DateTimeOffset ObservedAt,string RawValue,string Quality,
         string SourceTimestamp,string CanonicalSha256,string DocumentSha256);
 
-    public async Task<IReadOnlyList<AcceptedRow>> ReadBoundedAsync(
+    public sealed record BatchProof(Guid BatchId,Guid AcknowledgementId,ulong InstanceId,
+        ulong FromSequence,ulong NextSequence,ulong FirstAvailableSequence,string DocumentSha256);
+    public sealed record VerifiedCut(IReadOnlyList<AcceptedRow> Rows,IReadOnlyList<BatchProof> Batches);
+
+    public async Task<IReadOnlyList<AcceptedRow>> ReadBoundedAsync(Guid siteId,ActivityQualificationIdentity identity,
+        ulong instanceId,ulong afterSequence,ulong throughSequence,int take=100,CancellationToken ct=default)
+        => (await ReadVerifiedCutAsync(siteId,identity,instanceId,afterSequence,throughSequence,take,ct)).Rows;
+
+    public async Task<VerifiedCut> ReadVerifiedCutAsync(
         Guid siteId,ActivityQualificationIdentity identity,
         ulong instanceId,ulong afterSequence,ulong throughSequence,
         int take=100,CancellationToken ct=default)
@@ -260,7 +268,8 @@ public sealed class SqlAcceptedActivityEvidenceReader(string connectionString)
                 activity.SetTag("accepted-source.sql.roundtrips",
                     connection.RetrieveStatistics()["ServerRoundtrips"]);
             }
-            return rows.AsReadOnly();
+            return new(rows.AsReadOnly(),batches.Values.Select(batch=>new BatchProof(batch.BatchId,
+                batch.AcknowledgementId,batch.Instance,batch.From,batch.Next,batch.First,batch.DocumentSha256)).ToArray());
         }
         catch
         {

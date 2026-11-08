@@ -189,7 +189,7 @@ public sealed partial class SqlSecurityAuthority
             var cp=JsonSerializer.Deserialize<ActivityProcessorCheckpoint>(json)??throw new InvalidDataException("Missing activity checkpoint.");
             var source=cp.AcceptedSource;
             if(cp.Qualification.MachineId!=machine || cp.Qualification.StreamKey!=stream || cp.Qualification.MappingId!=r.GetGuid(0) ||
-                source is null || source.LastObservation.SiteId!=site || cp.LastConsumedSample is null ||
+                source is null || (source.LastObservation?.SiteId??source.SiteId)!=site ||
                 cp.NextGeneration!=(ulong)r.GetInt64(2) || cp.NextGeneration==0 ||
                 !SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(cp.Qualification)).AsSpan().SequenceEqual((byte[])r[1]) || r.IsDBNull(7))
                 throw new InvalidDataException("Activity checkpoint lacks accepted publication ancestry.");
@@ -197,6 +197,12 @@ public sealed partial class SqlSecurityAuthority
             if(receipt is null || receipt.Replayed || receipt.Checkpoint!=cp || source.OperationId!=r.GetGuid(5) ||
                 receipt.Checkpoint.NextGeneration!=(ulong)r.GetInt64(6))
                 throw new InvalidDataException("Activity checkpoint differs from its publication receipt.");
+            if(cp.LastConsumedSample is null)
+            {
+                if(source.LastObservation is not null || source.FrontierBatch is null || cp.OpenAnchor is not null || cp.OpenState is not null || receipt.NewPeriods.Count!=0)
+                    throw new InvalidDataException("Unobserved progress cannot establish an activity series.");
+                continue;
+            }
             result.Add(new(cp,new(cp.Qualification.MappingId,cp.Qualification.SourceAddress,Convert.ToHexString((byte[])r[1]),
                 cp.NextGeneration.ToString(CultureInfo.InvariantCulture),cp.LastConsumedSample.ObservedAt,source.PackageRevisionId,source.AcknowledgementId)));
         }

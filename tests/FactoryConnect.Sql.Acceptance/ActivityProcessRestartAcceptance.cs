@@ -194,7 +194,7 @@ internal static class ActivityProcessRestartAcceptance
             foreach(var damaged in new[]{
                 crossed.Checkpoint with { AcceptedSource=null },
                 crossed.Checkpoint with { AcceptedSource=crossed.Checkpoint.AcceptedSource! with {
-                    LastObservation=crossed.Checkpoint.AcceptedSource.LastObservation with { BatchId=Guid.NewGuid() } } } })
+                    LastObservation=crossed.Checkpoint.AcceptedSource.LastObservation! with { BatchId=Guid.NewGuid() } } } })
             {
                 await SetCheckpoint(damaged);
                 try

@@ -137,7 +137,7 @@ internal static class ActivityHistoryMeasurementAcceptance
         // Failure acceptance at the deepest history, with a valid new cut.
         var next=await ingest();
         var stable=await SnapshotState();
-        var prior=checkpoint.AcceptedSource!.LastObservation;
+        var prior=checkpoint.AcceptedSource!.LastObservation!;
         await Exec("DISABLE TRIGGER acquisition.TR_MtConnectObservation_Immutable ON acquisition.MtConnectObservation");
         try
         {

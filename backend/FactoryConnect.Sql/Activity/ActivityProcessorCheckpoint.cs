@@ -41,8 +41,9 @@ public sealed record ActivityQualificationIdentity(
 public sealed record ActivityAcceptedFrontier(
     Guid OperationId,ulong InstanceId,ulong ThroughSequence,Guid PackageRevisionId,
     Guid AcknowledgementId,string PackageSha256,
-    SqlAcceptedActivityEvidenceReader.AcceptedRow LastObservation,
-    SqlAcceptedActivityEvidenceReader.AcceptedRow? OpenAnchorObservation);
+    SqlAcceptedActivityEvidenceReader.AcceptedRow? LastObservation,
+    SqlAcceptedActivityEvidenceReader.AcceptedRow? OpenAnchorObservation,Guid SiteId=default,
+    SqlAcceptedActivityEvidenceReader.BatchProof? FrontierBatch=null);
 
 public sealed record ActivityProcessorCheckpoint(
     ActivityQualificationIdentity Qualification,

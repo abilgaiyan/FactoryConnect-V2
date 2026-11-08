@@ -115,3 +115,54 @@ Next: qualify an explicitly configured activity worker against retained accepted
 source, then production quantities and incremental shift metrics. Historical
 publication display does not imply automated processing, live connectivity,
 physical completeness, OEE availability or production commissioning.
+
+## FC2-035 merged; FC2-036 activity hosting candidate
+
+PR #35 merged at `164b726e`; final-head CI #42447566192 passed backend/dashboard,
+1,152 full SQL checks without skips, 240 history checks and 26 acquisition-host checks.
+The next increment is [FC2-036 explicit activity worker hosting](../implementation/FC2-036-activity-worker-host.md).
+It adds a separate serial, machine/source-scoped process, bounded metadata discovery,
+deterministic operation identities and real bootstrap/crash/restart/idle acceptance.
+Migration 020 supplies an exact-signal discovery index. Qualification is pending;
+production service setup, stronger continuity, source recovery and commissioning
+remain separate. Quantities and incremental shift metrics follow this hosting gate.
+
+## FC2-036 hosting mechanics versus operational acceptance
+
+The executable mechanics at `0260e60f` passed CI #42453004167 (225 accepted-host,
+245 history, 26 acquisition-host and 1,152 full SQL checks without skips). This
+qualifies the bounded host fixture; it does not close sustained activity hosting.
+Long quiet histories can exceed the existing 100-batch source-proof limit and
+must hold without silently skipping evidence. The implementation contract records
+a no-state frontier proposal and its required acceptance. PR #36 stays draft while
+that operating gate is open. Next: verified empty-source advancement and quiet
+bootstrap/restart qualification, before quantities or unattended service setup.
+
+
+FC2-036 now includes an implementation candidate for verified no-state advancement:
+100-batch / 4 MiB discovery windows, parsed exact-address absence proof, atomic
+versioned receipts/frontier, explicit absence before the first sample, bounded
+latest-generation checks and retained frontier-witness validation. Legacy nonempty
+fingerprints remain unchanged. Quiet bootstrap, post-wait expiry/projection races,
+101 quiet batches, corruption/replay, later observed output and deep hosting
+regressions are added to CI. This closes the implementation shape, not acceptance;
+PR #36 stays draft until the current executable and full regression qualify.
+
+## FC2-036 verified quiet-source hosting qualification
+
+`0836f324` passed [CI #42457523666](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42457523666):
+1,152 full SQL checks without skips, 233 activity-host checks, 91 quiet-bootstrap
+checks, 291 deep-history checks, 26 acquisition-host checks and 479 dashboard tests.
+The quiet-progress implementation gate is accepted: 101 quiet batches advance in
+bounded proof-bearing cuts before/after observations, without invented samples or
+intervals. Expiry/projection races, legacy/no-state replay, frontier corruption,
+checkpoint rewind and later exact observed output are qualified. The implementation
+contract records measured SQL work and limits. Final integrated head also preserves
+PR #37's Windows mTLS fixture changes and adds direct no-state crash acceptance;
+its CI/review/merge disposition is tracked in PR #36.
+
+Next: qualify stronger retained-source cross-batch acquisition continuity before
+claiming sustained activity across batches, then production quantities and incremental
+shift inputs. Physical completeness, automatic recovery, fleet service deployment
+and production commissioning are not established by the worker. Local developer
+setup remains the user's separate activity.

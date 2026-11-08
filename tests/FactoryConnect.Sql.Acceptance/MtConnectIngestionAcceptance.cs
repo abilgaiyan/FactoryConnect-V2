@@ -23,7 +23,7 @@ internal static class MtConnectIngestionAcceptance
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
             => assertion=="sql-evidence-proof" ? Task.FromResult(identity) : throw new SecurityDeniedException();
     }
-    internal static async Task<int> Run(InstallationTarget target,bool measureActivityHistory=false)
+    internal static async Task<int> Run(InstallationTarget target,bool measureActivityHistory=false,bool workerHosting=false,bool quietBootstrap=false)
     {
         var count=0;await using var c=new SqlConnection(target.ConnectionString);await c.OpenAsync();
         var now=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(SYSUTCDATETIME(),'+00:00')"))!;
@@ -415,6 +415,37 @@ internal static class MtConnectIngestionAcceptance
         await service.AcknowledgeActivationAsync(pair.Channel,ack);
         currentActivity=await mappingResolver.ResolveAsync(site,machine,
             currentActivity.Signal.MappingId,Stream);
+        if(quietBootstrap)
+        {
+            var emptyDeadline=(DateTimeOffset)(await Scalar("SELECT TODATETIMEOFFSET(DATEADD(second,8,SYSUTCDATETIME()),'+00:00')"))!;
+            activation=await Intent(until:emptyDeadline);ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);
+            var expiring=await mappingResolver.ResolveAsync(site,machine,currentActivity.Signal.MappingId,Stream);
+            var emptyBefore=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+            var begin=emptyBefore.Cursor!.NextSequence;agent.Reply=(position,size)=>(200,Frame(position,size),null);
+            var expiringFrame=await client.AcquireAsync(agent.Endpoint,Device,begin,2);await Transport(await Request(expiringFrame));
+            var expiringScope=new ActivityWorkerScope(target.InstallationId,site,machine,currentActivity.Signal.MappingId,Stream,expiringFrame.InstanceId,begin-1);
+            var emptyPending=(await atomicStore.DiscoverAcceptedWorkAsync(expiringScope,1)).Candidate!;
+            count+=await ActivityHostAcceptance.ExpiringEmptyCut(target,expiringScope,emptyPending,emptyDeadline);
+            activation=await Intent();ack=Ack(activation,1);await service.AcknowledgeActivationAsync(pair.Channel,ack);
+            currentActivity=await mappingResolver.ResolveAsync(site,machine,currentActivity.Signal.MappingId,Stream);
+            var quiet=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+            var from=quiet.Cursor!.NextSequence;agent.Reply=(position,size)=>(200,Frame(position,size),null);
+            var quietFrame=await client.AcquireAsync(agent.Endpoint,Device,from,2);await Transport(await Request(quietFrame));
+            for(var quietIndex=0;quietIndex<100;quietIndex++)
+            {
+                var additional=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+                var extra=await client.AcquireAsync(agent.Endpoint,Device,additional.Cursor!.NextSequence,2);await Transport(await Request(extra));
+            }
+            var scope=new ActivityWorkerScope(target.InstallationId,site,machine,currentActivity.Signal.MappingId,Stream,quietFrame.InstanceId,from-1);
+            count+=await ActivityHostAcceptance.QuietBootstrap(target,scope,AcceptedActivityContinuityQualifier.QualificationFor(currentActivity),async()=> {
+                var next=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+                var position=next.Cursor!.NextSequence;
+                agent.Reply=(start,size)=>(200,Frame(start,size,activity:true,activityStart:currentActivity.EffectiveFrom.AddSeconds(20),activityRepeats:true),null);
+                var frame=await client.AcquireAsync(agent.Endpoint,Device,position,6);await Transport(await Request(frame));
+                return await acceptedReader.ReadBoundedAsync(site,ActivityQualificationIdentity.From(currentActivity.Signal,"quiet-bootstrap-reader"),frame.InstanceId,position-1,frame.NextSequence-1,100);
+            },async()=>(await new SqlSecurityAuthority(target.ConnectionString,target.InstallationId).ReadActivitySeriesAsync(token,site,machine,Stream)).Count);
+            return count;
+        }
         // Generate eligible timestamps at the source, before acquisition and ingestion.
         // Retain the historical rejection above as an independent negative case.
         context=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
@@ -445,7 +476,17 @@ internal static class MtConnectIngestionAcceptance
                 await Count("activity.ClosedPeriod")==0 && await Count("activity.ProcessorOperation")==0,
                 "initial source cut cannot skip the acknowledged epoch's first retained transition");
         }
-        var positiveOperation=Guid.NewGuid();
+        var workerScope=new ActivityWorkerScope(target.InstallationId,site,machine,currentActivity.Signal.MappingId,
+            Stream,eligibleFrame.InstanceId,eligibleFrom-1);
+        var workerCandidate=workerHosting?(await atomicStore.DiscoverAcceptedWorkAsync(workerScope,2)).Candidate:null;
+        var positiveOperation=workerCandidate?.OperationId??Guid.NewGuid();
+        if(workerHosting)
+        {
+            try { await atomicStore.DiscoverAcceptedWorkAsync(workerScope with{BootstrapAfterSequence=eligibleFrom+1},2);throw new InvalidOperationException("Worker skipped initial source."); }
+            catch(InvalidDataException) { Check((await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)).NextGeneration==0,"worker discovery rejects a later bootstrap without publishing progress"); }
+            Check(workerCandidate is not null && workerCandidate.AfterSequence==eligibleFrom-1 && workerCandidate.ThroughSequence==eligibleFrom+3 &&
+                (await atomicStore.DiscoverAcceptedWorkAsync(workerScope,2)).Candidate==workerCandidate,"worker bootstrap candidate is exact bounded and stable across discovery retries");
+        }
         try
         {
             await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
@@ -460,9 +501,10 @@ internal static class MtConnectIngestionAcceptance
         Check((await atomicStore.ReadCheckpointAsync(eligibleCut.Qualification)).NextGeneration==0 &&
             await Count("activity.ClosedPeriod")==0 && await Count("activity.ProcessorOperation")==0,
             "eligible rollback leaves checkpoint periods and receipts unchanged");
-        var committed=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
-            site,machine,currentActivity.Signal.MappingId,Stream,
-            eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
+        var committed=workerHosting?await ActivityHostAcceptance.Bootstrap(target,workerScope,workerCandidate!):
+            await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
+                site,machine,currentActivity.Signal.MappingId,Stream,
+                eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
         var replay=await atomicStore.ApplyAcceptedAsync(positiveOperation,target.InstallationId,
             site,machine,currentActivity.Signal.MappingId,Stream,
             eligibleFrame.InstanceId,eligibleFrom-1,eligibleFrom+3,0);
@@ -540,7 +582,7 @@ internal static class MtConnectIngestionAcceptance
         foreach(var damaged in new[]{
             baselineCheckpoint with { LastConsumedSample=baselineCheckpoint.LastConsumedSample! with { RawValue="FORGED" } },
             baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with {
-                LastObservation=baselineCheckpoint.AcceptedSource.LastObservation with { BatchId=Guid.NewGuid() } } },
+                LastObservation=baselineCheckpoint.AcceptedSource.LastObservation! with { BatchId=Guid.NewGuid() } } },
             baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with { AcknowledgementId=Guid.NewGuid() } },
             baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with { InstanceId=8 } },
             baselineCheckpoint with { AcceptedSource=baselineCheckpoint.AcceptedSource! with {
@@ -632,7 +674,7 @@ internal static class MtConnectIngestionAcceptance
             split.NewPeriods[0].EndSequence==continuationFrom+3 &&
             split.NewPeriods[0].StartRawValue=="ACTIVE" && split.NewPeriods[0].EndRawValue=="READY" &&
             split.Checkpoint.NextGeneration==3 && split.Checkpoint.LastConsumedSample?.ContinuityFromPrevious==true &&
-            split.Checkpoint.AcceptedSource?.LastObservation.Sequence==continuationFrom+3 &&
+            split.Checkpoint.AcceptedSource?.LastObservation?.Sequence==continuationFrom+3 &&
             (await splitStore.ReadPeriodPageAsync(eligibleCut.Qualification)).Rows.Count==2,
             "split same-batch continuation revalidates exact retained predecessor and publishes one period");
         Check((await splitStore.ApplyAcceptedAsync(splitOperation,target.InstallationId,
@@ -682,6 +724,22 @@ internal static class MtConnectIngestionAcceptance
             count+=await ActivityHistoryMeasurementAcceptance.RunAsync(target,site,currentActivity,
                 eligibleCut.Qualification,processPending,HistorySource);
             count+=await ActivityWorkerMemoryAcceptance.RunAsync(target,site,eligibleCut.Qualification,HistorySource);
+            count+=await ActivityWorkDiscoveryAcceptance.Run(target,workerScope,HistorySource);
+            count+=await ActivityHistoryHttpAcceptance.Run(target.ConnectionString,target.InstallationId,site,machine,otherMachine,
+                currentActivity.Signal.MappingId,rootToken,Epoch);
+        }
+        if(workerHosting || measureActivityHistory)
+        {
+            count+=await ActivityHostAcceptance.Run(target,workerScope,eligibleCut.Qualification,
+                (seconds,repeated)=>ProcessSource(seconds,repeated),async batches=> {
+                    for(var i=0;i<batches;i++)
+                    {
+                        var quiet=await writer.ReadMtConnectAcquisitionContextAsync(pair.Channel,site,machine,Stream);
+                        agent.Reply=(from,count)=>(200,Frame(from,count),null);
+                        var frame=await client.AcquireAsync(agent.Endpoint,Device,quiet.Cursor!.NextSequence,2);
+                        await Transport(await Request(frame));
+                    }
+                });
             count+=await ActivityHistoryHttpAcceptance.Run(target.ConnectionString,target.InstallationId,site,machine,otherMachine,
                 currentActivity.Signal.MappingId,rootToken,Epoch);
         }

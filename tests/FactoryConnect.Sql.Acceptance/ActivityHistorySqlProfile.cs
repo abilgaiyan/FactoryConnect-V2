@@ -6,7 +6,7 @@ using Microsoft.Data.SqlClient;
 internal static class ActivityHistorySqlProfile
 {
     internal sealed record Access(string Phase,string Table,string? Index,string PhysicalOperator,
-        long? ActualRowsRead,long ActualRows,long Executions);
+        long? ActualRowsRead,long ActualRows,long Executions,long? LogicalReads=null);
     internal sealed record Statement(string EventName,string Phase,long LogicalReads,long PhysicalReads,long RowsAffectedOrReturned,double DurationMs);
     internal sealed record Profile(IReadOnlyList<Statement> Commands,IReadOnlyList<Statement> Statements,IReadOnlyList<Access> Accesses,
         int PlanEvents,long DroppedEvents,bool Truncated,string RawEvidenceFile);
@@ -111,7 +111,8 @@ internal static class ActivityHistorySqlProfile
                             accesses.Add(new(phase,tableName,(string?)table.Attribute("Index"),
                                 (string?)op.Attribute("PhysicalOp")??"unknown",read,
                                 counters.Sum(x=>Number((string?)x.Attribute("ActualRows"))),
-                                counters.Sum(x=>Number((string?)x.Attribute("ActualExecutions")))));
+                                counters.Sum(x=>Number((string?)x.Attribute("ActualExecutions"))),
+                                counters.All(x=>x.Attribute("ActualLogicalReads") is not null)?counters.Sum(x=>Number((string?)x.Attribute("ActualLogicalReads"))):null));
                         }
                     }
                 }
