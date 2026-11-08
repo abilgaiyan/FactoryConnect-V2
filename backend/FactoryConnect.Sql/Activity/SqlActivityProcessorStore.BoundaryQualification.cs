@@ -71,8 +71,16 @@ public sealed partial class SqlActivityProcessorStore
                     // ingestion requests and indexed endpoint projections in
                     // this transaction; a missing or conflicting witness throws.
                     // A negative RetainedLink remains a break, not continuity.
-                    proofs.Add(await AssessRetainedBoundaryInTransactionAsync(
-                        c,t,scope,previous,current,ct));
+                    var witness=await AssessRetainedBoundaryInTransactionAsync(
+                        c,t,scope,previous,current,ct);
+                    // A failed assessment is not a usable witness. Do not
+                    // accidentally interpret a non-throwing negative result as
+                    // permission to connect periods across this boundary.
+                    if(!witness.RetainedLink)
+                        throw new InvalidDataException(
+                            "Selected cross-batch boundary has no qualified direct retained predecessor: "+
+                            witness.Disposition);
+                    proofs.Add(witness);
                 }
             }
             previous=current;
