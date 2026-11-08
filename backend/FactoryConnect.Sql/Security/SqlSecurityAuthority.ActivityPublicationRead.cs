@@ -95,6 +95,19 @@ public sealed partial class SqlSecurityAuthority
             ("@stream",ActivityUtf8.GetBytes(identity.StreamKey)));
         witnesses.Parameters["@stream"].Size=512;
         var expected=proof.Batches.ToDictionary(x=>x.BatchId);
+        if(proof.AnchorWitness is {} anchor)
+        {
+            if(expected.TryGetValue(anchor.BatchId,out var existing))
+            {
+                if(existing!=anchor)throw new InvalidDataException("Version-4 anchor witness conflicts with source batch.");
+            }
+            else expected.Add(anchor.BatchId,anchor);
+        }
+        if((receipt.Checkpoint.OpenAnchor is null)!=(proof.AnchorWitness is null) ||
+            proof.AnchorWitness is {} anchored &&
+            (source.OpenAnchorObservation?.BatchId!=anchored.BatchId ||
+             source.OpenAnchorObservation.DocumentSha256!=anchored.DocumentSha256))
+            throw new InvalidDataException("Version-4 open-anchor witness mismatch.");
         var found=new HashSet<Guid>();
         await using var wr=await witnesses.ExecuteReaderAsync(ct);
         while(await wr.ReadAsync(ct))
