@@ -314,7 +314,7 @@ internal static class ActivityPublicationAcceptance
                     await using(var mutate=new SqlCommand(
                         "ALTER TABLE activity.ProcessorOperation NOCHECK CONSTRAINT CK_ActivityOperationRequestHash; "+
                         "DISABLE TRIGGER activity.TR_ProcessorOperationImmutable ON activity.ProcessorOperation; "+
-                        "UPDATE activity.ProcessorOperation SET RequestBytes=REPLICATE(CONVERT(varbinary(max),0x20),8388609) WHERE OperationId=@op",
+                        "UPDATE activity.ProcessorOperation SET RequestBytes=CONVERT(varbinary(max),REPLICATE(CONVERT(varchar(max),'X'),8388609)) WHERE OperationId=@op",
                         oversized,oversizedTx))
                     {
                         mutate.Parameters.AddWithValue("@op",latestOperation);
