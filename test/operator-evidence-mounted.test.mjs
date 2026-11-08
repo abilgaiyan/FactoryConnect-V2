@@ -43,6 +43,10 @@ test("authorized machine selection shows retained SQL-shaped values, then sessio
           sourceTimestamp: "2026-11-07T12:00:00+05:30",
           observedAt: "2026-11-07T06:30:00Z", receivedAt: "2026-11-07T06:30:01Z",
           batchId: "batch-7", acknowledgementId: "ack-7", documentHash: "hash-7" }] });
+    if (String(url).endsWith(`/machines/${machineId}/activity`))
+      return Response.json({ machineId, siteId, streamKey: "mtconnect:uuid:fixture", evidenceKind: "historical-derived-activity",
+        currentConnectivity: null, verification: "immutable-publication-receipts", continuity: "same-batch-only-not-physical-completeness",
+        status: "no-published-history", series: [] });
     throw Error("Unexpected request: " + url);
   };
   const view = sessionBearer => React.createElement(OperatorEvidencePage, { baseAddress, sessionBearer });
@@ -57,7 +61,7 @@ test("authorized machine selection shows retained SQL-shaped values, then sessio
     selector.value = machineId;
     selector.dispatchEvent(new h.window.Event("change", { bubbles: true }));
   });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.ok(calls.every(x => x.authorization === "Bearer fixture-session"));
   assert.equal(h.document.querySelector("tbody code").textContent, " 00042 ");
   assert.match(h.document.body.textContent, /18446744073709551615/);
@@ -66,5 +70,5 @@ test("authorized machine selection shows retained SQL-shaped values, then sessio
   assert.equal(h.document.querySelector("tbody"), null);
   assert.equal(h.document.querySelector("select"), null);
   assert.match(h.document.querySelector("[role=alert]").textContent, /Sign in/);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
 });

@@ -82,3 +82,36 @@ Finish the evidence-processing PR before developer-machine setup. The remaining 
 `5a7fa67a` passed [CI #42404994189](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42404994189): all three jobs, 188 dedicated performance-run checks, 1,126 full SQL checks without skips, and unchanged crash/corruption/replay coverage. Six cached/refreshed plans at 35/147/1,043 retained batches used seeks and 12 batch rows read, with 212 observation rows read per tail cut. The updated 1,031-period oracle matched. An isolated 640-cut worker plateaued near 1.55 MiB live managed memory and 123 MiB working set after warmup, without ingestion/profiler retention. The two scoped performance gates are accepted; detailed data and limitations are in the implementation contract.
 
 This evidence-processing slice is qualified for final-head CI/review and squash merge through PR #34. Developer-machine setup follows completion of that PR. Activity API/authenticated UI, production worker hosting, stronger cross-batch acquisition assurance and production commissioning remain separate roadmap increments; none is enabled by this merge.
+
+## FC2-034 merged; FC2-035 operator history delivery
+
+PR #34 squash merged at `f81837b1`. Final CI #42405857037 passed backend/dashboard,
+1,126 full SQL checks without skips and 188 performance-run checks. The evidence
+processing slice is closed; production worker hosting and commissioning remain open.
+
+The next authorized increment is [FC2-035 operator activity history](../implementation/FC2-035-operator-activity-history.md):
+read-only HTTPS pages of committed periods, existing OIDC/machine authority,
+immutable publication verification, bounded keyset navigation and actual browser
+acceptance. Its accepted executable qualification is recorded below. No HTTP-triggered processing or
+production enablement is introduced. After operator delivery, continue the roadmap
+with explicit worker hosting qualification, production quantity inputs and
+incremental shift metrics; local developer setup proceeds separately with the user.
+
+
+## FC2-035 executable qualification
+
+`0a343a29` passed [CI #42446914493](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42446914493):
+backend/dashboard (479 frontend tests), real OIDC → HTTPS → SQL → Chromium
+published-period display, 240 dedicated history checks, 26 host checks and 1,152
+full SQL checks without skips. Publication pages preserve exact strings/provenance,
+reject corruption and deny revoked/expired sessions. Matching the stream SQL
+parameter to `varbinary(512)` fixed a history-dependent residual seek: profiles at
+3 and 1,679 stored operations each read 22 period rows across discovery, newest
+and deep-page requests, with at most 17 SQL roundtrips per request. The implementation
+contract records measured limits. Final PR #35 head/review and merge disposition
+are tracked in its GitHub record.
+
+Next: qualify an explicitly configured activity worker against retained accepted
+source, then production quantities and incremental shift metrics. Historical
+publication display does not imply automated processing, live connectivity,
+physical completeness, OEE availability or production commissioning.

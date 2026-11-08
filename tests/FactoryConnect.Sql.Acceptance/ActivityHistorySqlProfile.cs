@@ -12,7 +12,7 @@ internal static class ActivityHistorySqlProfile
         int PlanEvents,long DroppedEvents,bool Truncated,string RawEvidenceFile);
 
     internal static async Task<Profile> CaptureAsync(SqlConnection control,string application,
-        Func<Task<IReadOnlyList<ActivityHistoryMeasurementAcceptance.Span>>> action,string evidenceFile)
+        Func<Task<IReadOnlyList<ActivityHistoryMeasurementAcceptance.Span>>> action,string evidenceFile,string requiredTable="MtConnectObservation")
     {
         var name="fc2_activity_profile_"+Guid.NewGuid().ToString("N");
         // Both identifiers are generated locally, not supplied by a caller.
@@ -116,8 +116,8 @@ internal static class ActivityHistorySqlProfile
                     }
                 }
             }
-            if(commands.Count==0 || statements.Count==0 || plans==0 || !accesses.Any(x=>x.Table=="MtConnectObservation" && x.ActualRowsRead>0))
-                throw new InvalidDataException($"Activity SQL profile incomplete: commands={commands.Count}, statements={statements.Count}, plans={plans}, accesses={accesses.Count}, observationRowsReadCounters={accesses.Count(x=>x.Table=="MtConnectObservation" && x.ActualRowsRead>0)}.");
+            if(commands.Count==0 || statements.Count==0 || plans==0 || !accesses.Any(x=>x.Table==requiredTable && x.ActualRowsRead>0))
+                throw new InvalidDataException($"Activity SQL profile incomplete: commands={commands.Count}, statements={statements.Count}, plans={plans}, accesses={accesses.Count}, requiredTableRowsReadCounters={accesses.Count(x=>x.Table==requiredTable && x.ActualRowsRead>0)}.");
             await File.WriteAllTextAsync(evidenceFile,System.Text.Json.JsonSerializer.Serialize(new {
                 schemaVersion=1,fixture=true,application,sqlExtendedEventsXml=xml,
                 correlation="Server event UTC within the narrowest client diagnostic span; unmatched events are retained explicitly.",
