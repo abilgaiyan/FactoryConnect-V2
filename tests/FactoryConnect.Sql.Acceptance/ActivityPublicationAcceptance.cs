@@ -251,6 +251,47 @@ internal static class ActivityPublicationAcceptance
             finally {await Scalar("ENABLE TRIGGER security.TR_Operation_Immutable ON security.SecurityOperation; ENABLE TRIGGER acquisition.TR_MtConnectBatch_Immutable ON acquisition.MtConnectBatch");}
             Check(await Snapshot()==beforeAncestry && (await store.DiscoverAcceptedWorkAsync(scope)).Candidate is null,
                 "all earlier-generation attacks preserve complete history and safe bounded resume");
+            // Exercise the exact FC2-040 read guard against transaction-local corruption.
+            // Every attack is rolled back before the next fixture; no production SQL is touched.
+            var verifyRead=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetMethod(
+                "VerifyActivityPublicationReceiptAsync",BindingFlags.NonPublic|BindingFlags.Static)
+                ?? throw new InvalidOperationException("Activity publication read verifier missing.");
+            var latestOperation=(Guid)(await Scalar(
+                "SELECT TOP(1) OperationId FROM activity.PublicationReceiptAncestry WHERE MachineId=@m AND MappingId=@s ORDER BY Generation DESC",
+                ("@m",scope.MachineId),("@s",scope.MappingId)) ?? throw new InvalidOperationException("No publication ancestry."));
+            async Task RejectCorruptRead(string mutation,string label)
+            {
+                await using var tamper=new SqlConnection(target.ConnectionString);
+                await tamper.OpenAsync();
+                await using var tx=(SqlTransaction)await tamper.BeginTransactionAsync(IsolationLevel.Serializable);
+                try
+                {
+                    await using(var command=new SqlCommand(mutation,tamper,tx))
+                    {
+                        command.Parameters.AddWithValue("@op",latestOperation);
+                        await command.ExecuteNonQueryAsync();
+                    }
+                    try
+                    {
+                        await ((Task)verifyRead.Invoke(null,new object[]{tamper,tx,latestOperation,identity,CancellationToken.None})!);
+                    }
+                    catch(InvalidDataException)
+                    {
+                        Check(true,label);return;
+                    }
+                    throw new InvalidOperationException("Corrupt publication was accepted: "+label);
+                }
+                finally {await tx.RollbackAsync();}
+            }
+            await RejectCorruptRead(
+                "DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness; "+
+                "DELETE TOP(1) FROM activity.PublicationSourceWitness WHERE OperationId=@op",
+                "FC2-040 read rejects a missing retained source witness");
+            await RejectCorruptRead(
+                "DISABLE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry; "+
+                "DELETE FROM activity.PublicationReceiptAncestry WHERE OperationId=@op",
+                "FC2-040 read rejects missing latest publication ancestry");
+            Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
             Check(await Snapshot()==beforeRevocation,"revocation denial advances no checkpoint receipt or period");
