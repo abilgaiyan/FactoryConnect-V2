@@ -34,6 +34,44 @@ public sealed partial class SqlActivityProcessorStore
         var proof=await AssessRetainedBoundaryInTransactionAsync(c,t,scope,prior,next,ct);
         await t.CommitAsync(ct);return proof;
     }
+    // Reconstruct every selected cross-batch boundary on the caller's writer
+    // connection. No PR #38 assessment object is accepted as input. This is
+    // intentionally not wired to publication until the policy-specific
+    // checkpoint, receipt and quiet-cut contracts are implemented.
+    private async Task<IReadOnlyList<AcceptedActivityBoundaryProof>> VerifySelectedBoundariesInTransactionAsync(
+        SqlConnection c,SqlTransaction t,ActivityWorkerScope scope,
+        SqlAcceptedActivityEvidenceReader.AcceptedRow? predecessor,
+        IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow> selected,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(selected);
+        if(selected.Count is <1 or >100)
+            throw new InvalidDataException("Exact bounded cross-batch source cut required.");
+        var proofs=new List<AcceptedActivityBoundaryProof>();
+        var previous=predecessor;
+        foreach(var current in selected)
+        {
+            if(previous is not null)
+            {
+                if(previous.InstanceId!=current.InstanceId ||
+                   previous.Sequence>=current.Sequence ||
+                   previous.ObservedAt>current.ObservedAt)
+                    throw new InvalidDataException("Cross-batch source order changed.");
+                if(previous.BatchId!=current.BatchId)
+                {
+                    // The verifier reopens both original documents, immutable
+                    // ingestion requests and indexed endpoint projections in
+                    // this transaction; a missing or conflicting witness throws.
+                    // A negative RetainedLink remains a break, not continuity.
+                    proofs.Add(await AssessRetainedBoundaryInTransactionAsync(
+                        c,t,scope,previous,current,ct));
+                }
+            }
+            previous=current;
+        }
+        return proofs.AsReadOnly();
+    }
+
     // This overload performs no independent lock acquisition or commit.
     // A future publisher MUST call it only after obtaining its security,
     // machine and exclusive processor gates in the publishing transaction.
