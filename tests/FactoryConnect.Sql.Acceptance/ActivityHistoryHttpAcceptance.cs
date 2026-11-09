@@ -366,38 +366,86 @@ internal static class ActivityHistoryHttpAcceptance
                 var machineDescription=await FixtureDescription(machineResource);
                 var processorDescription=await FixtureDescription(processorResource);
                 Check(machineDescription!=processorDescription,"machine and processor SQL applock descriptions are distinct");
-                async Task<(int Session,string Mode,string Status,string Resource)[]> Observe()
+                // Materialize one DMV lock snapshot and attribute rows only to an
+                // actively executing LockInOrder batch, never to program_name alone.
+                async Task<(int Session,string Command,string Mode,string Status,string Resource)[]> Observe()
                 {
                     await using var query=new SqlCommand("""
-                        SELECT l.request_session_id,l.request_mode,l.request_status,l.resource_description
-                        FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id=l.request_session_id
-                        WHERE s.program_name=@app AND l.resource_type='APPLICATION'
-                        ORDER BY l.request_session_id,l.resource_description,l.request_status
+                        SELECT request_session_id,request_mode,request_status,resource_description
+                        INTO #activity_lock_snapshot FROM sys.dm_tran_locks WHERE resource_type='APPLICATION';
+                        SELECT r.session_id,CONVERT(nvarchar(max),st.text) AS command_text,
+                               COALESCE(l.request_mode,''),COALESCE(l.request_status,''),
+                               COALESCE(l.resource_description,'')
+                        FROM sys.dm_exec_requests r
+                        JOIN sys.dm_exec_sessions sess ON sess.session_id=r.session_id
+                        CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) st
+                        LEFT JOIN #activity_lock_snapshot l ON l.request_session_id=r.session_id
+                        WHERE sess.program_name=@app
+                          AND CONVERT(nvarchar(max),st.text) LIKE '%sp_getapplock @Resource=@first%'
+                        ORDER BY r.session_id,l.resource_description,l.request_status;
+                        DROP TABLE #activity_lock_snapshot;
                         """,c);
                     query.Parameters.AddWithValue("@app",appName);
-                    var rows=new List<(int Session,string Mode,string Status,string Resource)>();
+                    var rows=new List<(int Session,string Command,string Mode,string Status,string Resource)>();
                     await using(var reader=await query.ExecuteReaderAsync())
                         while(await reader.ReadAsync())
-                            rows.Add((reader.GetInt32(0),reader.GetString(1),reader.GetString(2),reader.GetString(3)));
+                        {
+                            var command=reader.GetString(1);
+                            rows.Add((reader.GetInt32(0),command.Length>60?command[..60]:command,
+                                reader.GetString(2),reader.GetString(3),reader.GetString(4).TrimEnd()));
+                        }
                     foreach(var row in rows)
-                        Console.WriteLine($"TRACE: lock session={row.Session} mode={row.Mode} status={row.Status} resource={row.Resource}");
+                        Console.WriteLine($"TRACE: lock session={row.Session} command={row.Command} mode={row.Mode} status={row.Status} resource={row.Resource}");
                     return rows.ToArray();
                 }
-                async Task<(int Session,string Mode,string Status,string Resource)[]> WaitBlocked(Task<HttpResponseMessage> request,string description)
+                async Task<(int Session,string Command,string Mode,string Status,string Resource)[]> WaitBlocked(
+                    Task<HttpResponseMessage> request,string description,bool expectMachineGrant)
                 {
                     var watch=Stopwatch.StartNew();
+                    var stable=0;int? stableSession=null;
                     while(watch.Elapsed<TimeSpan.FromSeconds(5) && !request.IsCompleted)
                     {
                         var locks=await Observe();
-                        if(locks.Any(x=>x.Resource==description && x.Status=="WAIT"))return locks;
-                        await Task.Delay(30);
+                        var readers=locks.Select(x=>x.Session).Distinct().ToArray();
+                        if(readers.Length>1)throw new InvalidOperationException("Activity HTTP: ambiguous active LockInOrder reader sessions");
+                        if(readers.Length==1)
+                        {
+                            var session=readers[0];
+                            var own=locks.Where(x=>x.Session==session).ToArray();
+                            var waiting=own.Any(x=>x.Resource==description && x.Status=="WAIT");
+                            var machineGranted=own.Any(x=>x.Resource==machineDescription && x.Status=="GRANT");
+                            var processorGranted=own.Any(x=>x.Resource==processorDescription && x.Status=="GRANT");
+                            var expected=waiting && !processorGranted &&
+                                (expectMachineGrant?machineGranted:!machineGranted);
+                            if(expected)
+                            {
+                                stable=stableSession==session?stable+1:1;
+                                stableSession=session;
+                                if(stable>=3)return own;
+                            }
+                            else
+                            {
+                                // Three consecutive contradictory observations of the same
+                                // blocked reader constitute a real ordering violation.
+                                if(waiting && (processorGranted || (expectMachineGrant?!machineGranted:machineGranted)))
+                                {
+                                    stable=stableSession==session?stable-1:-1;
+                                    stableSession=session;
+                                    if(stable<=-3)throw new InvalidOperationException(
+                                        $"Activity HTTP: stable lock ordering violation in reader session {session}");
+                                }
+                                else {stable=0;stableSession=null;}
+                            }
+                        }
+                        else {stable=0;stableSession=null;}
+                        await Task.Delay(50);
                     }
-                    throw new InvalidOperationException("Activity HTTP: expected resource-specific blocked applock not observed");
+                    throw new InvalidOperationException("Activity HTTP: attributed reader lock state not stable or not observable");
                 }
                 await using(var hold=await HoldExclusive(sql,processorResource))
                 {
                     var pending=Get(page);
-                    var locks=await WaitBlocked(pending,processorDescription);
+                    var locks=await WaitBlocked(pending,processorDescription,true);
                     Check(locks.Any(x=>x.Resource==processorDescription && x.Status=="WAIT") &&
                         locks.Any(x=>x.Resource==machineDescription && x.Status=="GRANT") &&
                         !locks.Any(x=>x.Resource==processorDescription && x.Status=="GRANT"),
@@ -409,7 +457,7 @@ internal static class ActivityHistoryHttpAcceptance
                 await using(var hold=await HoldExclusive(sql,machineResource))
                 {
                     var pending=Get(page);
-                    var locks=await WaitBlocked(pending,machineDescription);
+                    var locks=await WaitBlocked(pending,machineDescription,false);
                     Check(locks.Any(x=>x.Resource==machineDescription && x.Status=="WAIT") &&
                         !locks.Any(x=>x.Resource==processorDescription && x.Status=="GRANT"),
                         "blocked machine lock prevents processor applock acquisition");
