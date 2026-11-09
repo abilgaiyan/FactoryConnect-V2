@@ -1,6 +1,6 @@
 # FC2-040 — Activity publication read compatibility
 
-Status: draft implementation; CI SUCCESS at 2e3a293 (run #42626285326: backend, dashboard, SQL acceptance). NOT merge-qualified. No production enablement.
+Status: draft implementation; CI SUCCESS at 615d895 (run #42647985475: backend, dashboard, SQL acceptance). NOT merge-qualified. No production enablement.
 
 ## Implemented scope and explicit deferrals
 
@@ -44,9 +44,9 @@ CI uses disposable SQL. The user's `FactoryConnect_V2_Dev` on `DESKTOP-1PJK2OB\\
 ## Merge qualification register — 2026-11-09
 
 - **PASS:** SQL lock-order acceptance after resource-and-session attribution; SQL Server exposes `xp_userlock` during waits. Three stable snapshots, timeout/release checks and fail-closed behavior remain in acceptance.
-- **PASS:** CI run [#42626285326](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42626285326) at `2e3a293`: backend, dashboard and SQL acceptance.
+- **PASS:** CI run [#42647985475](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42647985475) at `615d895`: backend, dashboard and SQL acceptance.\n- **PASS (genuine 100-witness fixture):** the normal publisher retained exactly 100 source witnesses for one operation; the SQL reader verified that operation and rejected a transaction-local deletion of one witness. The 101 quiet batches in this acceptance are drained across two bounded publication cuts. This does not prove a legitimate 101-witness single operation.
 - **PASS (small fixture only):** authenticated series discovery 15 and history page 17 SQL roundtrips, cap 17 each.
-- **OPEN:** construct legitimate single-operation 101-source-witness fixture, prove 102 rejects at SQL pre-read boundary without bypassing immutable provenance. Existing 101/102 receipt-selection checks are a different boundary.
+- **OPEN:** establish whether the publisher can legitimately produce 101 source witnesses in one operation under its bounded cut contract. If reachable, construct and verify that operation; if not, record the writer's true bound rather than fabricating provenance. Independently prove that a 102-witness corrupted receipt is rejected by the reader's SQL pre-read guard (51091) in disposable SQL, with the mutation rolled back. Existing 101/102 receipt-selection checks are a different boundary.
 - **OPEN:** genuine version-4 published history operation with corrupted retained witness must produce fail-closed authenticated HTTP response. Transaction-local SQL tamper tests do not substitute.
 - **OPEN:** authenticated 100-distinct-operation history page and series discovery, with measured command starts, roundtrips, bytes and budget, each <=17 roundtrips.
 - **OPEN:** final full-diff review, fresh SQL installation confirmation and acceptance register refresh at final head.
