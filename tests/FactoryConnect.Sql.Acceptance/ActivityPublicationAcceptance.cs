@@ -441,6 +441,30 @@ internal static class ActivityPublicationAcceptance
                 "Gate 2 rejects foreign-machine history cursor");
             RejectCursor(foreignCursor,scope.MachineId,Guid.NewGuid(),
                 "Gate 2 rejects foreign-mapping history cursor");
+            // Gate 5: an oversized selection is rejected before SQL materialization.
+            var tooManyInputs=Array.CreateInstance(batchedInputType,102);
+            for(var index=0;index<tooManyInputs.Length;index++)
+                tooManyInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                    Guid.NewGuid(),identity,null),index);
+            await using(var boundedConnection=new SqlConnection(target.ConnectionString))
+            {
+                await boundedConnection.OpenAsync();
+                await using var boundedTx=(SqlTransaction)await boundedConnection.BeginTransactionAsync(IsolationLevel.Serializable);
+                try
+                {
+                    try
+                    {
+                        await ((Task)batchedVerifier.Invoke(null,new object[]{
+                            boundedConnection,boundedTx,tooManyInputs,CancellationToken.None})!);
+                        throw new InvalidOperationException("Oversized publication selection was accepted.");
+                    }
+                    catch(TargetInvocationException e)when(e.InnerException is InvalidDataException)
+                    {
+                        Check(true,"Gate 5 rejects more than 101 selected receipt operations before SQL");
+                    }
+                }
+                finally {await boundedTx.RollbackAsync();}
+            }
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
