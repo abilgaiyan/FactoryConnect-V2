@@ -434,6 +434,15 @@ internal static class ActivityPublicationAcceptance
                 "Gate 2 rejects foreign-machine history cursor");
             RejectCursor(foreignCursor,scope.MachineId,Guid.NewGuid(),
                 "Gate 2 rejects foreign-mapping history cursor");
+            var wrongQualificationCursor=Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new {
+                MachineId=scope.MachineId,StreamKey=identity.StreamKey,MappingId=scope.MappingId,
+                Qualification=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("wrong qualification"))),
+                StartedAt=DateTimeOffset.UtcNow.ToString("O"),InstanceId="1",
+                StartSequence="1",EffectId=Guid.NewGuid()}));
+            RejectCursor(wrongQualificationCursor,scope.MachineId,scope.MappingId,
+                "Gate 2 rejects cursor with incorrect qualification digest");
+            RejectCursor(new string('A',2049),scope.MachineId,scope.MappingId,
+                "Gate 2 rejects oversized cursor before decoding");
             // Gate 5: an oversized selection is rejected before SQL materialization.
             var tooManyInputs=Array.CreateInstance(batchedInputType,102);
             for(var index=0;index<tooManyInputs.Length;index++)
