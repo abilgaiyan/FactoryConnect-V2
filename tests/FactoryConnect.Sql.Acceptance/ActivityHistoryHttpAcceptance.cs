@@ -99,6 +99,9 @@ internal static class ActivityHistoryHttpAcceptance
                 "keyset continuation returns a distinct older exact period");
             // Traverse the complete retained history rather than validating only
             // the first continuation. The keyset must neither repeat nor omit rows.
+            var expectedPeriodCount=Convert.ToInt32(await Scalar(
+                "SELECT COUNT(*) FROM activity.ClosedPeriod WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@machine",machine),("@mapping",mapping)));
             var traversed=new HashSet<Guid>{row.GetProperty("effectId").GetGuid()};
             var nextCursor=cursor;
             while(nextCursor is not null)
@@ -113,11 +116,9 @@ internal static class ActivityHistoryHttpAcceptance
                     "complete keyset traversal never duplicates a period");
                 var next=continuationJson.RootElement.GetProperty("nextCursor");
                 nextCursor=next.ValueKind==JsonValueKind.Null?null:next.GetString();
-                Check(traversed.Count<=1000,"complete keyset traversal terminates within fixture bound");
+                Check(traversed.Count<=expectedPeriodCount,
+                    "complete keyset traversal cannot exceed retained period count");
             }
-            var expectedPeriodCount=Convert.ToInt32(await Scalar(
-                "SELECT COUNT(*) FROM activity.ClosedPeriod WHERE MachineId=@machine AND MappingId=@mapping",
-                ("@machine",machine),("@mapping",mapping)));
             Check(traversed.Count==expectedPeriodCount,
                 "complete keyset traversal returns every retained period exactly once");
             string deepCursor;
