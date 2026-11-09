@@ -304,7 +304,7 @@ internal static class ActivityPublicationAcceptance
             var latestOperation=(Guid)(await Scalar(
                 "SELECT TOP(1) OperationId FROM activity.PublicationReceiptAncestry WHERE MachineId=@m AND MappingId=@s ORDER BY Generation DESC",
                 ("@m",scope.MachineId),("@s",scope.MappingId)) ?? throw new InvalidOperationException("No publication ancestry."));
-            async Task RejectCorruptRead(string mutation,string label)
+            async Task RejectCorruptRead(string mutation,string label,Guid? operation=null)
             {
                 await using var tamper=new SqlConnection(target.ConnectionString);
                 await tamper.OpenAsync();
@@ -313,12 +313,12 @@ internal static class ActivityPublicationAcceptance
                 {
                     await using(var command=new SqlCommand(mutation,tamper,tx))
                     {
-                        command.Parameters.AddWithValue("@op",latestOperation);
+                        command.Parameters.AddWithValue("@op",operation??latestOperation);
                         await command.ExecuteNonQueryAsync();
                     }
                     try
                     {
-                        await ((Task)verifyRead.Invoke(null,new object[]{tamper,tx,latestOperation,identity,CancellationToken.None})!);
+                        await ((Task)verifyRead.Invoke(null,new object[]{tamper,tx,operation??latestOperation,identity,CancellationToken.None})!);
                     }
                     catch(InvalidDataException)
                     {
@@ -332,6 +332,11 @@ internal static class ActivityPublicationAcceptance
                 "DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness; "+
                 "DELETE TOP(1) FROM activity.PublicationSourceWitness WHERE OperationId=@op",
                 "FC2-040 read rejects a missing retained source witness");
+            await RejectCorruptRead(
+                "DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness; "+
+                "DELETE TOP(1) FROM activity.PublicationSourceWitness WHERE OperationId=@op",
+                "FC2-040 reader rejects one missing witness from genuine 100-witness operation",
+                (Guid)hundredWitnessOperation!);
             await RejectCorruptRead(
                 "ALTER TABLE activity.PublicationSourceWitness NOCHECK CONSTRAINT FK_PublicationWitness_Owner; "+
                 "DISABLE TRIGGER activity.TR_PublicationReceiptAncestryImmutable ON activity.PublicationReceiptAncestry; "+
