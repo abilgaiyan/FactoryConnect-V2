@@ -159,6 +159,19 @@ internal static class ActivityHistoryHttpAcceptance
             var altered=JsonNode.Parse(Convert.FromBase64String(decoded))!;altered["MappingId"]=Guid.NewGuid();
             var forged=Convert.ToBase64String(Encoding.UTF8.GetBytes(altered.ToJsonString())).TrimEnd('=').Replace('+','-').Replace('/','_');
             using(var invalid=await Get(page+"?cursor="+forged))Check(invalid.StatusCode==HttpStatusCode.BadRequest,"cross-qualification cursor cannot silently query another history");
+            // A cursor is bound to the exact immutable qualification digest, not
+            // merely to the machine/mapping identifiers. Reject a syntactically
+            // valid cursor from a different qualification before reading history.
+            var foreignQualification=JsonNode.Parse(Convert.FromBase64String(decoded))!;
+            foreignQualification["Qualification"]=Convert.ToHexString(SHA256.HashData(Guid.NewGuid().ToByteArray()));
+            var wrongQualification=Convert.ToBase64String(Encoding.UTF8.GetBytes(foreignQualification.ToJsonString()))
+                .TrimEnd('=').Replace('+','-').Replace('/','_');
+            using(var wrong=await Get(page+"?cursor="+Uri.EscapeDataString(wrongQualification)))
+                Check(wrong.StatusCode==HttpStatusCode.BadRequest,
+                    "HTTP cursor with foreign qualification digest fails closed");
+            using(var tooLong=await Get(page+"?cursor="+new string('A',2049)))
+                Check(tooLong.StatusCode==HttpStatusCode.BadRequest,
+                    "HTTP oversized cursor is rejected before base64 decoding");
             using(var oversized=await Get(page+"?take=101"))Check(oversized.StatusCode==HttpStatusCode.BadRequest,"activity page count is explicitly bounded");
             using(var denied=await Get($"/api/commissioning/v2/machines/{other}/activity"))Check(denied.StatusCode==HttpStatusCode.Unauthorized,"activity series cannot disclose an unassigned machine");
             using(var plaintext=await Get("http://localhost"+page))Check(plaintext.StatusCode==HttpStatusCode.Forbidden,"activity bearer is refused over plaintext HTTP");
