@@ -227,7 +227,7 @@ internal static class ActivityPublicationAcceptance
                 {
                     var count=reader.GetInt64(1);
                     maximum=Math.Max(maximum,count);
-                    Check(count<=101,"normal publication does not exceed per-operation 101-witness SQL bound");
+                    Check(count<=100,"normal publication respects the 100-witness worker cut bound");
                 }
                 Console.WriteLine($"MEASURE: publication maximum retained source witnesses per operation={maximum}");
             }
