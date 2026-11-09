@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using FactoryConnect.Sql.Security;
+using Microsoft.Data.SqlClient;
 
 namespace FactoryConnect.Api;
 
@@ -58,6 +59,13 @@ internal static class ActivityHistoryApi
         catch(SecurityDeniedException){return Results.Unauthorized();}
         catch(KeyNotFoundException){return Results.NotFound(new { error="No published activity series" });}
         catch(ArgumentException){return Results.BadRequest(new { error="Invalid activity page or cursor" });}
+        catch(SqlException error)when(error.Number==51091)
+        {
+            logger.LogError(error,
+                "Activity history bounded SQL budget rejected read. Guard={Guard} SqlNumber={SqlNumber} Path={Path} TraceId={TraceId}",
+                error.Message,error.Number,http.Request.Path,http.TraceIdentifier);
+            return Results.Problem(statusCode:503,title:"Activity history read exceeds bounded budget");
+        }
         catch(InvalidDataException error)
         {
             logger.LogError(error,"Activity history integrity verification rejected read. Path={Path} TraceId={TraceId}",
