@@ -403,6 +403,36 @@ internal static class ActivityPublicationAcceptance
             var legacyRequest=JsonSerializer.SerializeToUtf8Bytes(new {version=3});
             var legacyHash=SHA256.HashData(legacyRequest);
             var emptyWitnesses=Array.CreateInstance(legacyWitnessType,0);
+            // Historical v2 and v3 receipts have no generation/result hash or
+            // source-witness ancestry. Keep their intentional read compatibility.
+            foreach(var legacyVersion in new[]{2,3})
+            {
+                var compatibleRequest=JsonSerializer.SerializeToUtf8Bytes(new {version=legacyVersion});
+                var compatibleRow=Activator.CreateInstance(legacyRowType,
+                    compatibleRequest,SHA256.HashData(compatibleRequest),Array.Empty<byte>(),
+                    null,null,null,null,null,null,null,null)
+                    ?? throw new InvalidOperationException("Could not construct compatible legacy receipt.");
+                legacyVerifier.Invoke(null,new object[]{legacyOperation,identity,compatibleRow,emptyWitnesses});
+                Check(true,"Legacy version-"+legacyVersion+" receipt remains readable without v4 ancestry");
+            }
+            // Unknown versions must never silently acquire legacy privileges.
+            foreach(var unsupportedVersion in new[]{1,5})
+            {
+                var unsupportedRequest=JsonSerializer.SerializeToUtf8Bytes(new {version=unsupportedVersion});
+                var unsupportedRow=Activator.CreateInstance(legacyRowType,
+                    unsupportedRequest,SHA256.HashData(unsupportedRequest),Array.Empty<byte>(),
+                    null,null,null,null,null,null,null,null)
+                    ?? throw new InvalidOperationException("Could not construct unsupported receipt.");
+                try
+                {
+                    legacyVerifier.Invoke(null,new object[]{legacyOperation,identity,unsupportedRow,emptyWitnesses});
+                    throw new InvalidOperationException("Unsupported receipt version was accepted.");
+                }
+                catch(TargetInvocationException e)when(e.InnerException is InvalidDataException)
+                {
+                    Check(true,"Unsupported publication receipt version "+unsupportedVersion+" fails closed");
+                }
+            }
             foreach(var caseName in new[]{"generation","result-hash"})
             {
                 var legacyRow=Activator.CreateInstance(legacyRowType,
