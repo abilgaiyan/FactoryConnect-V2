@@ -85,6 +85,11 @@ internal static class ActivityHistoryHttpAcceptance
             using var first=await Get(page+"?take=1");using var fj=JsonDocument.Parse(await first.Content.ReadAsStringAsync());
             var pageTrips=MeasureReadTrips("history page");
             Console.WriteLine($"MEASURE: activity HTTP history page SQL roundtrips={pageTrips}");
+            // This is a small-fixture regression guard, not the required
+            // 100-distinct-operation benchmark. Keep the latter gate open.
+            Check(discoveryTrips<=17 && pageTrips<=17,
+                "small-fixture authenticated series and page reads remain within 17 SQL roundtrips");
+
             var row=fj.RootElement.GetProperty("rows")[0];
             Check(first.StatusCode==HttpStatusCode.OK && first.Headers.CacheControl?.NoStore==true &&
                 row.GetProperty("state").GetString()=="Running" && row.GetProperty("startRawValue").GetString()=="ACTIVE" &&
