@@ -757,6 +757,21 @@ internal static class ActivityPublicationAcceptance
                 finally {await mixedTx.RollbackAsync();}
             }
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
+            // Gate 5: 100 separate committed publisher operations, not 100
+            // witnesses in one operation. Use normal acquisition and worker APIs.
+            var operationsBefore=Convert.ToInt32(await Scalar(
+                "SELECT COUNT(*) FROM activity.ProcessorOperation WHERE MachineId=@m AND MappingId=@s",
+                ("@m",scope.MachineId),("@s",scope.MappingId)));
+            for(var i=0;i<100;i++)
+            {
+                await ingest(0,false,true);
+                await store.ApplyAcceptedWorkAsync(await Work());
+            }
+            var operationsAfter=Convert.ToInt32(await Scalar(
+                "SELECT COUNT(*) FROM activity.ProcessorOperation WHERE MachineId=@m AND MappingId=@s",
+                ("@m",scope.MachineId),("@s",scope.MappingId)));
+            Check(operationsAfter-operationsBefore==100,
+                "Gate 5 creates 100 distinct committed publication operations through normal worker path");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
             Check(await Snapshot()==beforeRevocation,"revocation denial advances no checkpoint receipt or period");
