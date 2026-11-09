@@ -130,8 +130,15 @@ internal static class ActivityHistoryHttpAcceptance
                 await Exec("UPDATE activity.ClosedPeriod SET StartRawValue=N'FORGED' WHERE EffectId=@effect",("@effect",effect));
                 using(var corrupt=await Get(page))Check(corrupt.StatusCode==HttpStatusCode.ServiceUnavailable,"altered published value fails receipt integrity without disclosing a partial page");
                 await Exec("UPDATE activity.ClosedPeriod SET StartRawValue=REPLICATE(CONVERT(nvarchar(max),N'X'),5000000) WHERE EffectId=@effect",("@effect",effect));
-                using(var big=await Get(page))Check(big.StatusCode==HttpStatusCode.ServiceUnavailable && (await big.Content.ReadAsByteArrayAsync()).Length<4096,
-                    "SQL byte budget rejects oversized period data before HTTP transfer");
+                using(var big=await Get(page))
+                {
+                    var payload=await big.Content.ReadAsByteArrayAsync();
+                    using var problem=JsonDocument.Parse(payload);
+                    Check(big.StatusCode==HttpStatusCode.ServiceUnavailable && payload.Length<4096 &&
+                        problem.RootElement.GetProperty("title").GetString()=="Activity history read exceeds bounded budget" &&
+                        !Encoding.UTF8.GetString(payload).Contains("FORGED",StringComparison.Ordinal),
+                        "SQL byte budget returns distinct bounded 503 without exposing period contents");
+                }
             }
             finally
             {
