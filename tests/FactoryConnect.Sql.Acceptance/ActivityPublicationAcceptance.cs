@@ -400,18 +400,11 @@ internal static class ActivityPublicationAcceptance
             for(var index=0;index<2;index++)
                 repeatedInputs.SetValue(Activator.CreateInstance(batchedInputType,
                     latestOperation,identity,null),index);
+            // Closed connection proves selection validation happens before SQL.
             await using(var duplicateConnection=new SqlConnection(target.ConnectionString))
-            {
-                await duplicateConnection.OpenAsync();
-                await using var duplicateTx=(SqlTransaction)await duplicateConnection.BeginTransactionAsync(IsolationLevel.Serializable);
-                try
-                {
-                    await Reject(async()=>await ((Task)batchedVerifier.Invoke(null,new object[]{
-                        duplicateConnection,duplicateTx,repeatedInputs,CancellationToken.None})!),
-                        "Gate 5 rejects duplicate operation IDs in a bounded batch");
-                }
-                finally {await duplicateTx.RollbackAsync();}
-            }
+                await Reject(async()=>await ((Task)batchedVerifier.Invoke(null,new object?[]{
+                    duplicateConnection,null,repeatedInputs,CancellationToken.None})!),
+                    "Bounded selection rejects duplicate operation IDs before SQL");
             // Gate 2: malformed, foreign-scope and oversized cursors fail closed.
             var cursorDecoder=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetMethod(
                 "DecodeCursor",BindingFlags.NonPublic|BindingFlags.Static)
@@ -448,22 +441,16 @@ internal static class ActivityPublicationAcceptance
                     Guid.NewGuid(),identity,null),index);
             await using(var boundedConnection=new SqlConnection(target.ConnectionString))
             {
-                await boundedConnection.OpenAsync();
-                await using var boundedTx=(SqlTransaction)await boundedConnection.BeginTransactionAsync(IsolationLevel.Serializable);
                 try
                 {
-                    try
-                    {
-                        await ((Task)batchedVerifier.Invoke(null,new object[]{
-                            boundedConnection,boundedTx,tooManyInputs,CancellationToken.None})!);
-                        throw new InvalidOperationException("Oversized publication selection was accepted.");
-                    }
-                    catch(InvalidDataException)
-                    {
-                        Check(true,"Gate 5 rejects more than 101 selected receipt operations before SQL");
-                    }
+                    await ((Task)batchedVerifier.Invoke(null,new object?[]{
+                        boundedConnection,null,tooManyInputs,CancellationToken.None})!);
+                    throw new InvalidOperationException("Oversized publication selection was accepted.");
                 }
-                finally {await boundedTx.RollbackAsync();}
+                catch(InvalidDataException)
+                {
+                    Check(true,"Bounded selection rejects more than 101 receipt operations before SQL");
+                }
             }
             // A syntactically valid but nonexistent receipt must never be treated
             // as a successful partial batch. The SQL result must match selection.
