@@ -178,9 +178,13 @@ internal static class ActivityHistoryHttpAcceptance
             Bind(command,("@hash",value),("@operation",witness.Value),("@batch",batch));
             if(await command.ExecuteNonQueryAsync()!=1)throw new InvalidOperationException("Witness update did not affect exactly one row");
         }
-        await using(var trigger=new SqlCommand(
-            "DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness",c))
-            await trigger.ExecuteNonQueryAsync();
+        // Only the disposable acceptance database is modified. The witness hash
+        // participates in a document FK; restore it and revalidate before exit.
+        await using(var prepare=new SqlCommand("""
+            ALTER TABLE activity.PublicationSourceWitness NOCHECK CONSTRAINT FK_PublicationWitness_Document;
+            DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness;
+            """,c))
+            await prepare.ExecuteNonQueryAsync();
         try
         {
             await UpdateHash(corrupted);
@@ -195,8 +199,10 @@ internal static class ActivityHistoryHttpAcceptance
             try { await UpdateHash(original); }
             finally
             {
-                await using var enable=new SqlCommand(
-                    "ENABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness",c);
+                await using var enable=new SqlCommand("""
+                    ENABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness;
+                    ALTER TABLE activity.PublicationSourceWitness WITH CHECK CHECK CONSTRAINT FK_PublicationWitness_Document;
+                    """,c);
                 await enable.ExecuteNonQueryAsync();
             }
         }
