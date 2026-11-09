@@ -394,7 +394,7 @@ internal static class ActivityHistoryHttpAcceptance
                         {
                             var command=reader.GetString(1);
                             var prefix=command.Length>60?command[..60]:command;
-                            var row=(Session:reader.GetInt32(0),Command:prefix,Mode:reader.GetString(2),
+                            var row=(Session:Convert.ToInt32(reader.GetValue(0)),Command:prefix,Mode:reader.GetString(2),
                                 Status:reader.GetString(3),Resource:reader.GetString(4).TrimEnd());
                             rows.Add(row);
                             Console.WriteLine($"TRACE: request session={row.Session} command={prefix.Replace('\n',' ')} waitType={reader.GetString(5)} waitResource={reader.GetString(6)} mode={row.Mode} status={row.Status} resource={row.Resource}");
