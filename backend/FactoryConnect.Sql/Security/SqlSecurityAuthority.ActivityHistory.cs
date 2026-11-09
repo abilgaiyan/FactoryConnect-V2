@@ -147,8 +147,6 @@ public sealed partial class SqlSecurityAuthority
                     await Authorize(c,t,actor,"commissioning.read",AuthorizationScope.Machine(site,machine),state.Now,ct);
                 }
                 await Validate();
-                await using(var master=Command(c,t,"SELECT 1 FROM [master].Machine m JOIN [master].Site s ON s.SiteId=m.SiteId WHERE m.MachineId=@machine AND m.SiteId=@site AND m.IsRetired=0 AND s.IsRetired=0"))
-                { Add(master,("@site",site),("@machine",machine));if(await master.ExecuteScalarAsync(ct) is null)throw new SecurityDeniedException(); }
                 var result=await read(c,t);
                 await Validate(); // Expiry after row/processor waits cannot release data.
                 return result;
@@ -161,6 +159,10 @@ public sealed partial class SqlSecurityAuthority
         Guid site,Guid machine,string stream,Guid? mapping,CancellationToken ct)
     {
         await using var q=Command(c,t,"""
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM [master].Machine m JOIN [master].Site s ON s.SiteId=m.SiteId
+                WHERE m.MachineId=@machine AND m.SiteId=@site AND m.IsRetired=0 AND s.IsRetired=0
+            ) THEN 1 ELSE 0 END;
             DECLARE @selected TABLE(MappingId uniqueidentifier NOT NULL PRIMARY KEY);
             INSERT @selected SELECT TOP(101) MappingId FROM activity.ProcessorCheckpoint WITH(HOLDLOCK)
                 WHERE MachineId=@machine AND StreamKeyBytes=@stream AND (@mapping IS NULL OR MappingId=@mapping)
@@ -182,12 +184,14 @@ public sealed partial class SqlSecurityAuthority
                     AND o.MachineId=p.MachineId AND o.StreamKeyBytes=p.StreamKeyBytes AND o.MappingId=p.MappingId
             ORDER BY p.MappingId;
             """);
-        Add(q,("@machine",machine),("@stream",ActivityUtf8.GetBytes(stream)),("@mapping",(object?)mapping??DBNull.Value));
+        Add(q,("@site",site),("@machine",machine),("@stream",ActivityUtf8.GetBytes(stream)),("@mapping",(object?)mapping??DBNull.Value));
         q.Parameters["@stream"].Size=512;
         q.Parameters["@mapping"].SqlDbType=SqlDbType.UniqueIdentifier;
         var result=new List<StoredActivity>();
         var sourceOperations=new List<(Guid OperationId,ActivityQualificationIdentity Qualification,byte[] ResultBytes)>();
         await using var r=await q.ExecuteReaderAsync(ct);
+        if(!await r.ReadAsync(ct) || r.GetInt32(0)!=1)throw new SecurityDeniedException();
+        if(!await r.NextResultAsync(ct))throw new InvalidDataException("Missing activity checkpoint result.");
         while(await r.ReadAsync(ct))
         {
             var json=r.GetString(3);
