@@ -196,12 +196,17 @@ internal static class ActivityPublicationAcceptance
             await Reject(()=>store.DiscoverAcceptedWorkAsync(scope with{PublicationProfile=ActivityPublicationPolicy.Legacy}),"legacy worker cannot adopt new-policy checkpoint");
             var countBefore=(await store.ReadPeriodPageAsync(identity)).Rows.Count;
             for(var i=0;i<101;i++)await ingest(0,false,true);
-            // Probe a genuine 101-request candidate before the host drains its
-            // default 100-row cut. This does not fabricate retained witnesses.
-            var requested101=await Work(101);
-            Check(requested101.OperationId!=Guid.Empty,
-                "101-request publisher discovery returns a real immutable operation identity");
-            Console.WriteLine($"MEASURE: publication 101-request candidate operation={requested101.OperationId}");
+            // The worker API itself caps a discovery cut at 100. A request for
+            // 101 is invalid; never treat this as a genuine 101-witness operation.
+            try
+            {
+                await Work(101);
+                throw new InvalidOperationException("oversized discovery unexpectedly succeeded");
+            }
+            catch(ArgumentException)
+            {
+                Check(true,"101-request discovery rejects above the explicit 100-row worker bound");
+            }
             var quietOne=await Work();await ActivityHostAcceptance.DrainPublication(target,scope,2);var quietResult=await store.ApplyAcceptedWorkAsync(quietOne);
             // Inspect genuine immutable witness rows produced by the normal publisher,
             // rather than treating the separate receipt-selection bound as witness proof.
