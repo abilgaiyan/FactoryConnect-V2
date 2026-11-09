@@ -138,8 +138,9 @@ public sealed partial class SqlSecurityAuthority
         {
             return await Transaction(null,false,async(c,t)=> {
                 Activity.Current?.SetTag("security.activity.read",true);
-                await Lock(c,t,ConfigurationLockResources.Machine(installationId,machine),false,ct);
-                if(mapping.HasValue)await Lock(c,t,SqlActivityProcessorStore.ProcessorLockResource(machine,mapping.Value,stream),false,ct);
+                var machineLock=ConfigurationLockResources.Machine(installationId,machine);
+                if(mapping.HasValue)await LockInOrder(c,t,machineLock,SqlActivityProcessorStore.ProcessorLockResource(machine,mapping.Value,stream),false,ct);
+                else await Lock(c,t,machineLock,false,ct);
                 async Task Validate()
                 {
                     var state=await State(c,t,ct);var actor=await Session(c,t,token,state.Now,ct);
