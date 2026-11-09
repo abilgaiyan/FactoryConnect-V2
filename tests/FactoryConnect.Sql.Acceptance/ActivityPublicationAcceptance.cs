@@ -458,7 +458,7 @@ internal static class ActivityPublicationAcceptance
                             boundedConnection,boundedTx,tooManyInputs,CancellationToken.None})!);
                         throw new InvalidOperationException("Oversized publication selection was accepted.");
                     }
-                    catch(TargetInvocationException e)when(e.InnerException is InvalidDataException)
+                    catch(InvalidDataException)
                     {
                         Check(true,"Gate 5 rejects more than 101 selected receipt operations before SQL");
                     }
