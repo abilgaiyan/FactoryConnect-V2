@@ -279,6 +279,28 @@ internal static class ActivityPublicationAcceptance
             var verifyRead=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetMethod(
                 "VerifyActivityPublicationReceiptAsync",BindingFlags.NonPublic|BindingFlags.Static)
                 ?? throw new InvalidOperationException("Activity publication read verifier missing.");
+            // Exercise the actual read verifier against a genuine 100-witness
+            // publication, not only against the writer's witness-count query.
+            var hundredWitnessOperation=await Scalar("""
+                SELECT TOP(1) w.OperationId
+                FROM activity.PublicationSourceWitness w
+                JOIN activity.ProcessorOperation p ON p.OperationId=w.OperationId
+                WHERE p.MachineId=@m AND p.MappingId=@s
+                GROUP BY w.OperationId
+                HAVING COUNT_BIG(*)=100
+                ORDER BY w.OperationId
+                """,("@m",scope.MachineId),("@s",scope.MappingId));
+            Check(hundredWitnessOperation is Guid,
+                "normal publisher produces a genuine exactly-100-witness operation");
+            await using(var verifiedConnection=new SqlConnection(target.ConnectionString))
+            {
+                await verifiedConnection.OpenAsync();
+                await using var verifiedTx=(SqlTransaction)await verifiedConnection.BeginTransactionAsync(IsolationLevel.Serializable);
+                await ((Task)verifyRead.Invoke(null,new object[]{
+                    verifiedConnection,verifiedTx,(Guid)hundredWitnessOperation!,identity,CancellationToken.None})!);
+                await verifiedTx.RollbackAsync();
+                Check(true,"FC2-040 reader verifies a genuine 100-witness publication");
+            }
             var latestOperation=(Guid)(await Scalar(
                 "SELECT TOP(1) OperationId FROM activity.PublicationReceiptAncestry WHERE MachineId=@m AND MappingId=@s ORDER BY Generation DESC",
                 ("@m",scope.MachineId),("@s",scope.MappingId)) ?? throw new InvalidOperationException("No publication ancestry."));
