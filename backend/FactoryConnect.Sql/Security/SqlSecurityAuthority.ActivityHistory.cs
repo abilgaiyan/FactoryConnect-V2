@@ -224,6 +224,7 @@ public sealed partial class SqlSecurityAuthority
     private static HistoryCursor? DecodeCursor(string? value,Guid machine,string stream,Guid mapping,string qualification)
     {
         if(value is null)return null;
+        if(value.Length>2048)throw new ArgumentException("Activity cursor exceeds bounded length.");
         try
         {
             var raw=value.Replace('-','+').Replace('_','/');raw=raw.PadRight((raw.Length+3)/4*4,'=');
