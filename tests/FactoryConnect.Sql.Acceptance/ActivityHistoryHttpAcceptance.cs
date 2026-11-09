@@ -57,6 +57,36 @@ internal static class ActivityHistoryHttpAcceptance
         }
     }
 
+    private sealed class FixtureHold(SqlConnection connection,SqlTransaction transaction):IAsyncDisposable
+    {
+        private bool released;
+        public async ValueTask DisposeAsync()
+        {
+            if(released)return;
+            released=true;
+            try{await transaction.RollbackAsync();}
+            finally{await transaction.DisposeAsync();await connection.DisposeAsync();}
+        }
+    }
+    private static async Task<FixtureHold> HoldExclusive(string sql,string resource)
+    {
+        var connection=new SqlConnection(sql);
+        try
+        {
+            await connection.OpenAsync();
+            var transaction=(SqlTransaction)await connection.BeginTransactionAsync();
+            try
+            {
+                await using var gate=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=0; IF @r<0 THROW 51099,'Fixture gate unavailable.',1;",connection,transaction);
+                gate.Parameters.AddWithValue("@resource",resource);
+                await gate.ExecuteNonQueryAsync();
+                return new FixtureHold(connection,transaction);
+            }
+            catch{await transaction.DisposeAsync();throw;}
+        }
+        catch{await connection.DisposeAsync();throw;}
+    }
+
     private sealed class Verifier(string subject):IHumanIdentityVerifier
     {
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
@@ -305,6 +335,83 @@ internal static class ActivityHistoryHttpAcceptance
                     using var expired=await waiting;
                     Check(expired.StatusCode==HttpStatusCode.Unauthorized,"session expiring during processor wait cannot release historical data");
                 }
+            }
+
+            // Observe transaction-owned application locks on the HTTP connection from a separate
+            // SQL session. Identify the exact resources, not an aggregate count of unrelated locks.
+            {
+                var processorResource=SqlActivityProcessorStore.ProcessorLockResource(machine,mapping,"mtconnect:uuid:fixture-device");
+                var machineResource=FactoryConnect.Sql.Configuration.ConfigurationLockResources.Machine(installation,machine);
+                async Task<(int Granted,int Waiting)> Observe()
+                {
+                    await using var query=new SqlCommand("""
+                        SELECT COALESCE(SUM(CASE WHEN l.request_status='GRANT' THEN 1 ELSE 0 END),0),
+                               COALESCE(SUM(CASE WHEN l.request_status='WAIT' THEN 1 ELSE 0 END),0)
+                        FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id=l.request_session_id
+                        WHERE s.program_name=@app AND l.resource_type='APPLICATION'
+                        """,c);
+                    query.Parameters.AddWithValue("@app",appName);
+                    await using var reader=await query.ExecuteReaderAsync();
+                    await reader.ReadAsync();
+                    return (Convert.ToInt32(reader[0]),Convert.ToInt32(reader[1]));
+                }
+                async Task<(int Granted,int Waiting)> WaitBlocked(Task<HttpResponseMessage> request)
+                {
+                    var watch=Stopwatch.StartNew();
+                    while(watch.Elapsed<TimeSpan.FromSeconds(5) && !request.IsCompleted)
+                    {
+                        var locks=await Observe();
+                        if(locks.Waiting>0)return locks;
+                        await Task.Delay(30);
+                    }
+                    throw new InvalidOperationException("Activity HTTP: blocked applock not observed");
+                }
+                await using(var hold=await HoldExclusive(sql,processorResource))
+                {
+                    var pending=Get(page);
+                    var locks=await WaitBlocked(pending);
+                    Check(locks.Granted>=2 && locks.Waiting>=1,"machine applock is acquired before blocked processor applock");
+                    await hold.DisposeAsync();
+                    using var response=await pending;
+                    Check(response.StatusCode==HttpStatusCode.OK,"processor lock release resumes history read");
+                }
+                await using(var hold=await HoldExclusive(sql,machineResource))
+                {
+                    var pending=Get(page);
+                    var locks=await WaitBlocked(pending);
+                    Check(locks.Granted>=1 && locks.Waiting>=1,"processor lock is not acquired ahead of blocked machine lock");
+                    await hold.DisposeAsync();
+                    using var response=await pending;
+                    Check(response.StatusCode==HttpStatusCode.OK,"machine lock release resumes history read");
+                }
+                await using(var hold=await HoldExclusive(sql,processorResource))
+                {
+                    var watch=Stopwatch.StartNew();
+                    using var response=await Get(page);
+                    watch.Stop();
+                    Check(response.StatusCode==HttpStatusCode.ServiceUnavailable &&
+                        watch.Elapsed>=TimeSpan.FromSeconds(9) && watch.Elapsed<TimeSpan.FromSeconds(25),
+                        "processor contention preserves ten-second timeout and authority-unavailable response");
+                    var locks=await Observe();
+                    Check(locks.Granted==0 && locks.Waiting==0,"processor timeout releases all HTTP session applocks");
+                    await using var probe=await HoldExclusive(sql,machineResource);
+                    Check(true,"machine applock is immediately available after processor timeout");
+                }
+                await using(var hold=await HoldExclusive(sql,machineResource))
+                {
+                    var watch=Stopwatch.StartNew();
+                    using var response=await Get(page);
+                    watch.Stop();
+                    Check(response.StatusCode==HttpStatusCode.ServiceUnavailable &&
+                        watch.Elapsed>=TimeSpan.FromSeconds(9) && watch.Elapsed<TimeSpan.FromSeconds(25),
+                        "machine contention preserves ten-second timeout and authority-unavailable response");
+                    var locks=await Observe();
+                    Check(locks.Granted==0 && locks.Waiting==0,"machine timeout releases all HTTP session applocks");
+                    await using var probe=await HoldExclusive(sql,processorResource);
+                    Check(true,"processor applock is available after machine timeout");
+                }
+                using var recovered=await Get(page);
+                Check(recovered.StatusCode==HttpStatusCode.OK,"history read recovers after both lock timeouts");
             }
 
             await authority.RevokeGrantAsync(admin,Guid.NewGuid(),grant,await epoch(),"activity read grant revoked");
