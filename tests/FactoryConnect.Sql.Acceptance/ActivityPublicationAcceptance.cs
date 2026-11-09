@@ -489,6 +489,32 @@ internal static class ActivityPublicationAcceptance
                 }
                 finally {await missingTx.RollbackAsync();}
             }
+            // Gate 5: a valid receipt must not mask a missing receipt in the
+            // same batch. No partial verification success is permitted.
+            var mixedInputs=Array.CreateInstance(batchedInputType,2);
+            mixedInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                latestOperation,identity,null),0);
+            mixedInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                Guid.NewGuid(),identity,null),1);
+            await using(var mixedConnection=new SqlConnection(target.ConnectionString))
+            {
+                await mixedConnection.OpenAsync();
+                await using var mixedTx=(SqlTransaction)await mixedConnection.BeginTransactionAsync(IsolationLevel.Serializable);
+                try
+                {
+                    try
+                    {
+                        await ((Task)batchedVerifier.Invoke(null,new object[]{
+                            mixedConnection,mixedTx,mixedInputs,CancellationToken.None})!);
+                        throw new InvalidOperationException("Partially populated publication batch was accepted.");
+                    }
+                    catch(InvalidDataException)
+                    {
+                        Check(true,"Gate 5 rejects mixed valid and missing receipt batch atomically");
+                    }
+                }
+                finally {await mixedTx.RollbackAsync();}
+            }
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
