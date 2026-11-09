@@ -389,6 +389,38 @@ internal static class ActivityPublicationAcceptance
                 }
                 finally {await aggregateTx.RollbackAsync();}
             }
+            // Legacy v2/v3 deliberately have no v4 ancestry/witness profile.
+            // They must nevertheless reject v4-only generation/result-hash fields.
+            var authorityTypeForLegacy=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority);
+            var legacyRowType=authorityTypeForLegacy.GetNestedType("PublicationReadRow",BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("Publication read row type missing.");
+            var legacyWitnessType=authorityTypeForLegacy.GetNestedType("PublicationWitness",BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("Publication witness type missing.");
+            var legacyVerifier=authorityTypeForLegacy.GetMethod("VerifyActivityPublicationReceiptInMemory",
+                BindingFlags.NonPublic|BindingFlags.Static)
+                ?? throw new InvalidOperationException("Production in-memory receipt verifier missing.");
+            var legacyOperation=Guid.NewGuid();
+            var legacyRequest=JsonSerializer.SerializeToUtf8Bytes(new {version=3});
+            var legacyHash=SHA256.HashData(legacyRequest);
+            var emptyWitnesses=Array.CreateInstance(legacyWitnessType,0);
+            foreach(var caseName in new[]{"generation","result-hash"})
+            {
+                var legacyRow=Activator.CreateInstance(legacyRowType,
+                    legacyRequest,legacyHash,Array.Empty<byte>(),
+                    caseName=="result-hash"?SHA256.HashData(Array.Empty<byte>()):null,
+                    caseName=="generation"?(long?)1:null,
+                    null,null,null,null,null,null)
+                    ?? throw new InvalidOperationException("Could not construct legacy receipt fixture.");
+                try
+                {
+                    legacyVerifier.Invoke(null,new object[]{legacyOperation,identity,legacyRow,emptyWitnesses});
+                    throw new InvalidOperationException("Legacy receipt accepted v4-only "+caseName);
+                }
+                catch(TargetInvocationException e)when(e.InnerException is InvalidDataException)
+                {
+                    Check(true,"Legacy version-3 receipt rejects v4-only "+caseName);
+                }
+            }
             // Gate 5: malformed batch inputs must fail before any SQL query executes.
             var batchedVerifier=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetMethod(
                 "VerifyActivityPublicationReceiptsAsync",BindingFlags.NonPublic|BindingFlags.Static)
