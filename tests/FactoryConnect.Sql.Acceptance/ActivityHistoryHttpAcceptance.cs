@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using FactoryConnect.Api;
 using FactoryConnect.Sql.ActivityProcessing;
 using FactoryConnect.Sql.Security;
@@ -17,6 +18,45 @@ using Microsoft.Extensions.DependencyInjection;
 
 internal static class ActivityHistoryHttpAcceptance
 {
+    // Acceptance-only command-start capture. Parameters, tokens and result data are excluded.
+    private sealed class SqlCommandCapture:IObserver<DiagnosticListener>,IObserver<KeyValuePair<string,object?>>,IDisposable
+    {
+        private readonly List<IDisposable> subscriptions=new();
+        private readonly List<(Activity Owner,string Text)> commands=new();
+        private readonly IDisposable discovery;
+        public SqlCommandCapture(){discovery=DiagnosticListener.AllListeners.Subscribe(this);}
+        public void OnNext(DiagnosticListener listener)
+        {
+            if(listener.Name!="SqlClientDiagnosticListener")return;
+            lock(subscriptions)subscriptions.Add(listener.Subscribe((IObserver<KeyValuePair<string,object?>>)this));
+        }
+        public void OnNext(KeyValuePair<string,object?> value)
+        {
+            if(value.Key!="Microsoft.Data.SqlClient.WriteCommandBefore" || value.Value is null)return;
+            if(value.Value.GetType().GetProperty("Command")?.GetValue(value.Value) is not SqlCommand command)return;
+            var owner=Activity.Current;
+            while(owner is not null && owner.OperationName!="security.transaction")owner=owner.Parent;
+            if(owner is null)return;
+            var sql=Regex.Replace(command.CommandText,@"\\s+"," ").Trim();
+            // Static SQL text only; never include parameter values.
+            var prefix=sql.Length>110?sql[..110]+"...":sql;
+            lock(commands)commands.Add((owner,prefix));
+        }
+        public void OnError(Exception error){}
+        public void OnCompleted(){}
+        public void Clear(){lock(commands)commands.Clear();}
+        public string[] For(Activity owner)
+        {
+            lock(commands)return commands.Where(x=>ReferenceEquals(x.Owner,owner)).Select(x=>x.Text).ToArray();
+        }
+        public int Total{get{lock(commands)return commands.Count;}}
+        public void Dispose()
+        {
+            discovery.Dispose();
+            lock(subscriptions)foreach(var subscription in subscriptions)subscription.Dispose();
+        }
+    }
+
     private sealed class Verifier(string subject):IHumanIdentityVerifier
     {
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
@@ -42,6 +82,7 @@ internal static class ActivityHistoryHttpAcceptance
             Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
             ActivityStopped=a=>{lock(traces)traces.Add(a);}
         };ActivitySource.AddActivityListener(listener);
+        using var commandCapture=new SqlCommandCapture();
         var appName="fc2-activity-history-http-"+Guid.NewGuid().ToString("N");
         using var factory=new WebApplicationFactory<HostAssemblyMarker>().WithWebHostBuilder(host=> {
             host.UseContentRoot(Directory.GetCurrentDirectory());
@@ -67,26 +108,38 @@ internal static class ActivityHistoryHttpAcceptance
             // Existing security.transaction telemetry measures actual server roundtrips.
             // Capture each endpoint separately; the 100-distinct-operation Gate 5
             // threshold is not asserted against this small correctness fixture.
-            long MeasureReadTrips(string path)
+            long MeasureReadTrips(string path,out Activity owner)
             {
                 Activity[] selected;
                 lock(traces)selected=traces.Where(x=>x.GetTagItem("security.activity.read") is true &&
                     x.GetTagItem("security.sql.roundtrips") is not null).ToArray();
                 if(selected.Length==0)throw new InvalidOperationException("Missing activity read SQL telemetry: "+path);
-                return Convert.ToInt64(selected[^1].GetTagItem("security.sql.roundtrips"));
+                Check(selected.Length==1,"exactly one activity read transaction belongs to "+path);
+                owner=selected[0];
+                return Convert.ToInt64(owner.GetTagItem("security.sql.roundtrips"));
             }
-            lock(traces)traces.Clear();
+            void ReportCommands(string path,Activity owner,long roundtrips)
+            {
+                var commands=commandCapture.For(owner);
+                Console.WriteLine($"MEASURE: activity HTTP {path} SQL commandStarts={commands.Length} serverRoundtrips={roundtrips} roundtripMinusCommandStarts={roundtrips-commands.Length} unattributedCommandStarts={commandCapture.Total-commands.Length}");
+                for(var i=0;i<commands.Length;i++)
+                    Console.WriteLine($"TRACE: {path} command {i+1:00}: {commands[i]}");
+                Check(commands.Length>0,"SqlClient diagnostic command-start capture correlated to "+path);
+            }
+            lock(traces)traces.Clear();commandCapture.Clear();
             using var series=await Get(list);using var sj=JsonDocument.Parse(await series.Content.ReadAsStringAsync());
-            var discoveryTrips=MeasureReadTrips("series discovery");
+            var discoveryTrips=MeasureReadTrips("series discovery",out var discoveryOwner);
             Console.WriteLine($"MEASURE: activity HTTP series discovery SQL roundtrips={discoveryTrips}");
+            ReportCommands("series discovery",discoveryOwner,discoveryTrips);
             Check(series.StatusCode==HttpStatusCode.OK && sj.RootElement.GetProperty("series").GetArrayLength()==1 &&
                 sj.RootElement.GetProperty("currentConnectivity").ValueKind==JsonValueKind.Null &&
                 sj.RootElement.GetProperty("verification").GetString()=="immutable-publication-receipts",
                 "authorized series discovery exposes exact persisted qualification without live-state claims");
-            lock(traces)traces.Clear();
+            lock(traces)traces.Clear();commandCapture.Clear();
             using var first=await Get(page+"?take=1");using var fj=JsonDocument.Parse(await first.Content.ReadAsStringAsync());
-            var pageTrips=MeasureReadTrips("history page");
+            var pageTrips=MeasureReadTrips("history page",out var pageOwner);
             Console.WriteLine($"MEASURE: activity HTTP history page SQL roundtrips={pageTrips}");
+            ReportCommands("history page",pageOwner,pageTrips);
             // This is a small-fixture regression guard, not the required
             // 100-distinct-operation benchmark. Keep the latter gate open.
             Check(discoveryTrips<=17 && pageTrips<=17,
