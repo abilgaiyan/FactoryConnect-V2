@@ -370,18 +370,20 @@ internal static class ActivityHistoryHttpAcceptance
                 // actively executing LockInOrder batch, never to program_name alone.
                 async Task<(int Session,string Command,string Mode,string Status,string Resource)[]> Observe()
                 {
+                    // Diagnostic-only: capture every active API SQL request, including
+                    // those whose current sql_handle resolves to the inner stored procedure.
                     await using var query=new SqlCommand("""
                         SELECT request_session_id,request_mode,request_status,resource_description
                         INTO #activity_lock_snapshot FROM sys.dm_tran_locks WHERE resource_type='APPLICATION';
-                        SELECT r.session_id,CONVERT(nvarchar(max),st.text) AS command_text,
+                        SELECT r.session_id,COALESCE(CONVERT(nvarchar(max),st.text),'') AS command_text,
                                COALESCE(l.request_mode,''),COALESCE(l.request_status,''),
-                               COALESCE(l.resource_description,'')
+                               COALESCE(l.resource_description,''),
+                               COALESCE(r.wait_type,''),COALESCE(r.wait_resource,'')
                         FROM sys.dm_exec_requests r
                         JOIN sys.dm_exec_sessions sess ON sess.session_id=r.session_id
-                        CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) st
+                        OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) st
                         LEFT JOIN #activity_lock_snapshot l ON l.request_session_id=r.session_id
                         WHERE sess.program_name=@app
-                          AND CONVERT(nvarchar(max),st.text) LIKE '%sp_getapplock @Resource=@first%'
                         ORDER BY r.session_id,l.resource_description,l.request_status;
                         DROP TABLE #activity_lock_snapshot;
                         """,c);
@@ -391,12 +393,13 @@ internal static class ActivityHistoryHttpAcceptance
                         while(await reader.ReadAsync())
                         {
                             var command=reader.GetString(1);
-                            rows.Add((reader.GetInt32(0),command.Length>60?command[..60]:command,
-                                reader.GetString(2),reader.GetString(3),reader.GetString(4).TrimEnd()));
+                            var prefix=command.Length>60?command[..60]:command;
+                            var row=(Session:reader.GetInt32(0),Command:prefix,Mode:reader.GetString(2),
+                                Status:reader.GetString(3),Resource:reader.GetString(4).TrimEnd());
+                            rows.Add(row);
+                            Console.WriteLine($"TRACE: request session={row.Session} command={prefix.Replace('\n',' ')} waitType={reader.GetString(5)} waitResource={reader.GetString(6)} mode={row.Mode} status={row.Status} resource={row.Resource}");
                         }
-                    foreach(var row in rows)
-                        Console.WriteLine($"TRACE: lock session={row.Session} command={row.Command} mode={row.Mode} status={row.Status} resource={row.Resource}");
-                    return rows.ToArray();
+                    return rows.Where(x=>x.Command.Contains("sp_getapplock @Resource=@first",StringComparison.Ordinal)).ToArray();
                 }
                 async Task<(int Session,string Command,string Mode,string Status,string Resource)[]> WaitBlocked(
                     Task<HttpResponseMessage> request,string description,bool expectMachineGrant)
