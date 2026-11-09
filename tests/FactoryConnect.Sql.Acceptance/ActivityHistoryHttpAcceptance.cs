@@ -99,6 +99,114 @@ internal static class ActivityHistoryHttpAcceptance
                 Guid.NewGuid().ToString("N"),"activity-http-mfa",now.AddSeconds(-1),assertion=="activity-http-expiring"?now.AddSeconds(4):now.AddMinutes(3)));
         }
     }
+    // CrossBatch-only HTTP fixture. Run after genuine v4 publication, before revocation.
+    // All mutations are reversible on the generated disposable acceptance database.
+    internal static async Task<int> VerifyV4WitnessTamper(string sql,Guid installation,Guid site,
+        Guid machine,Guid mapping,byte[] admin,Func<Task<long>> epoch)
+    {
+        var authority=new SqlSecurityAuthority(sql,installation);
+        var principal=Guid.NewGuid();
+        var subject="activity-v4-http-"+principal.ToString("N");
+        await authority.EnrollHumanAsync(admin,new(Guid.NewGuid(),principal,
+            "https://certificate.fixture/tenant",subject,await epoch(),"v4 HTTP acceptance"));
+        await using var c=new SqlConnection(sql);await c.OpenAsync();
+        async Task<object?> Scalar(string statement,params (string Name,object Value)[] args)
+        {
+            await using var command=new SqlCommand(statement,c);
+            Bind(command,args);
+            return await command.ExecuteScalarAsync();
+        }
+        var parent=(Guid)(await Scalar("""
+            SELECT TOP(1) g.GrantId FROM security.PermissionGrant g
+            JOIN security.SessionAuthority s ON s.PrincipalId=g.GranteeId
+            WHERE s.TokenHash=@token AND g.Permission='commissioning.read'
+            """,("@token",admin)) ?? throw new InvalidOperationException("v4 parent read grant missing"));
+        var now=DateTimeOffset.UtcNow;
+        await authority.GrantPermissionAsync(admin,new(Guid.NewGuid(),Guid.NewGuid(),principal,parent,
+            "commissioning.read",AuthorizationScope.Machine(site,machine),true,false,
+            now.AddSeconds(-1),now.AddMinutes(10),await epoch(),"v4 HTTP read grant"));
+        var witness=(Guid?)await Scalar("""
+            SELECT TOP(1) w.OperationId FROM activity.PublicationSourceWitness w
+            JOIN activity.ProcessorOperation p ON p.OperationId=w.OperationId
+            WHERE p.MachineId=@machine AND p.MappingId=@mapping
+            ORDER BY p.AppliedGeneration DESC
+            """,("@machine",machine),("@mapping",mapping));
+        if(witness is null)throw new InvalidOperationException("No genuine v4 witnessed publication");
+        var batch=(Guid)(await Scalar("""
+            SELECT TOP(1) BatchId FROM activity.PublicationSourceWitness
+            WHERE OperationId=@operation ORDER BY BatchId
+            """,("@operation",witness.Value))!);
+        var original=(byte[])(await Scalar("""
+            SELECT DocumentHash FROM activity.PublicationSourceWitness
+            WHERE OperationId=@operation AND BatchId=@batch
+            """,("@operation",witness.Value),("@batch",batch))!);
+        using var factory=new WebApplicationFactory<HostAssemblyMarker>().WithWebHostBuilder(host=>{
+            host.UseContentRoot(Directory.GetCurrentDirectory());
+            host.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{
+                ["ConnectionStrings:Evidence"]=sql,["Evidence:InstallationId"]=installation.ToString(),
+                ["Evidence:SiteId"]=site.ToString(),["Evidence:StreamKey"]="mtconnect:uuid:fixture-device"
+            }));
+            host.ConfigureTestServices(services=>services.AddSingleton<IHumanIdentityVerifier>(new Verifier(subject)));
+        });
+        using var http=factory.CreateClient(new WebApplicationFactoryClientOptions{
+            BaseAddress=new("https://localhost/"),AllowAutoRedirect=false});
+        using var login=await http.PostAsync("/api/security/v2/human-sessions",
+            new StringContent("activity-http-proof"));
+        if(login.StatusCode!=HttpStatusCode.OK)throw new InvalidOperationException("v4 human login failed");
+        using var identity=JsonDocument.Parse(await login.Content.ReadAsStringAsync());
+        var bearer=identity.RootElement.GetProperty("bearer").GetString()!;
+        async Task<HttpResponseMessage> Get()
+        {
+            using var request=new HttpRequestMessage(HttpMethod.Get,
+                $"/api/commissioning/v2/machines/{machine}/activity");
+            request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bearer);
+            return await http.SendAsync(request);
+        }
+        using(var baseline=await Get())
+            if(baseline.StatusCode!=HttpStatusCode.OK)
+                throw new InvalidOperationException("v4 HTTP baseline: "+baseline.StatusCode);
+        // Alter only a retained witness hash, preserving row identity and foreign keys.
+        // Restore the exact original bytes in finally, even if HTTP assertion fails.
+        var corrupted=new byte[original.Length];Array.Copy(original,corrupted,original.Length);
+        corrupted[0]^=0xFF;
+        async Task UpdateHash(byte[] value)
+        {
+            await using var command=new SqlCommand("""
+                UPDATE activity.PublicationSourceWitness SET DocumentHash=@hash
+                WHERE OperationId=@operation AND BatchId=@batch
+                """,c);
+            Bind(command,("@hash",value),("@operation",witness.Value),("@batch",batch));
+            if(await command.ExecuteNonQueryAsync()!=1)throw new InvalidOperationException("Witness update did not affect exactly one row");
+        }
+        await using(var trigger=new SqlCommand(
+            "DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness",c))
+            await trigger.ExecuteNonQueryAsync();
+        try
+        {
+            await UpdateHash(corrupted);
+            using var response=await Get();
+            var payload=await response.Content.ReadAsByteArrayAsync();
+            if(response.StatusCode!=HttpStatusCode.ServiceUnavailable || payload.Length>=4096)
+                throw new InvalidOperationException("v4 HTTP tamper must return bounded 503");
+            Console.WriteLine("PASS: authenticated v4 witness hash tamper fails closed with bounded HTTP 503");
+        }
+        finally
+        {
+            try { await UpdateHash(original); }
+            finally
+            {
+                await using var enable=new SqlCommand(
+                    "ENABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness",c);
+                await enable.ExecuteNonQueryAsync();
+            }
+        }
+        using(var restored=await Get())
+            if(restored.StatusCode!=HttpStatusCode.OK)
+                throw new InvalidOperationException("v4 HTTP did not recover after exact witness restoration");
+        Console.WriteLine("PASS: authenticated v4 HTTP recovers after witness restoration");
+        return 2;
+    }
+
     internal static async Task<int> Run(string sql,Guid installation,Guid site,Guid machine,Guid other,
         Guid mapping,byte[] admin,Func<Task<long>> epoch)
     {
