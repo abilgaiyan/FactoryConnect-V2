@@ -301,6 +301,64 @@ internal static class ActivityPublicationAcceptance
                 await verifiedTx.RollbackAsync();
                 Check(true,"FC2-040 reader verifies a genuine 100-witness publication");
             }
+            // Corruption-only boundary: two otherwise retained source witnesses are
+            // temporarily rebound to the genuine 100-witness operation. This is
+            // deliberately NOT presented as a legitimate publisher output.
+            // The SQL guard must reject 102 rows before materializing receipt bytes.
+            await using(var overflowConnection=new SqlConnection(target.ConnectionString))
+            {
+                await overflowConnection.OpenAsync();
+                await using var overflowTx=(SqlTransaction)await overflowConnection.BeginTransactionAsync(IsolationLevel.Serializable);
+                try
+                {
+                    await using(var mutate=new SqlCommand("""
+                        ALTER TABLE activity.PublicationSourceWitness NOCHECK CONSTRAINT FK_PublicationWitness_Owner;
+                        DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness;
+                        ;WITH extra AS (
+                            SELECT TOP(2) OperationId
+                            FROM activity.PublicationSourceWitness
+                            WHERE MachineId=@machine AND OperationId<>@op
+                            ORDER BY OperationId,BatchId
+                        )
+                        SELECT COUNT_BIG(*) FROM extra;
+                        """,overflowConnection,overflowTx))
+                    {
+                        mutate.Parameters.AddWithValue("@machine",scope.MachineId);
+                        mutate.Parameters.AddWithValue("@op",(Guid)hundredWitnessOperation!);
+                        var available=Convert.ToInt64(await mutate.ExecuteScalarAsync());
+                        Check(available==2,"two distinct retained witnesses available for defensive overflow fixture");
+                    }
+                    await using(var rebind=new SqlCommand("""
+                        ;WITH extra AS (
+                            SELECT TOP(2) OperationId,BatchId
+                            FROM activity.PublicationSourceWitness
+                            WHERE MachineId=@machine AND OperationId<>@op
+                            ORDER BY OperationId,BatchId
+                        )
+                        UPDATE w SET OperationId=@op
+                        FROM activity.PublicationSourceWitness w
+                        JOIN extra x ON x.OperationId=w.OperationId AND x.BatchId=w.BatchId;
+                        SELECT COUNT_BIG(*) FROM activity.PublicationSourceWitness WHERE OperationId=@op;
+                        """,overflowConnection,overflowTx))
+                    {
+                        rebind.Parameters.AddWithValue("@machine",scope.MachineId);
+                        rebind.Parameters.AddWithValue("@op",(Guid)hundredWitnessOperation!);
+                        var count=Convert.ToInt64(await rebind.ExecuteScalarAsync());
+                        Check(count==102,"corruption fixture contains exactly 102 source witnesses in one receipt");
+                    }
+                    try
+                    {
+                        await ((Task)verifyRead.Invoke(null,new object[]{
+                            overflowConnection,overflowTx,(Guid)hundredWitnessOperation!,identity,CancellationToken.None})!);
+                        throw new InvalidOperationException("102-witness SQL pre-read guard accepted corrupted receipt.");
+                    }
+                    catch(SqlException e)when(e.Number==51091)
+                    {
+                        Check(true,"FC2-040 SQL pre-read rejects 102 witnesses with error 51091");
+                    }
+                }
+                finally {await overflowTx.RollbackAsync();}
+            }
             var latestOperation=(Guid)(await Scalar(
                 "SELECT TOP(1) OperationId FROM activity.PublicationReceiptAncestry WHERE MachineId=@m AND MappingId=@s ORDER BY Generation DESC",
                 ("@m",scope.MachineId),("@s",scope.MappingId)) ?? throw new InvalidOperationException("No publication ancestry."));
