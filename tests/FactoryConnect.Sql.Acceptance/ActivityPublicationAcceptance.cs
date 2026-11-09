@@ -36,7 +36,7 @@ internal static class ActivityPublicationAcceptance
     }
     internal static async Task<int> Run(InstallationTarget target,ActivityWorkerScope scope,ApprovedActivitySignal approved,
         Func<int,bool,bool,Task<IReadOnlyList<SqlAcceptedActivityEvidenceReader.AcceptedRow>>> ingest,
-        Func<Task<ActivityWorkCandidate>> independent,Func<Task> revoke)
+        Func<Task<ActivityWorkCandidate>> independent,Func<Task> revoke,Func<Task<int>> verifyAuthenticatedHttp)
     {
         RequireDisposable(target.Database);var checks=0;var children=new List<Child>();var events=new List<Event>();
         var store=new SqlActivityProcessorStore(target.ConnectionString);var identity=AcceptedActivityContinuityQualifier.QualificationFor(approved,scope.PublicationProfile);
@@ -757,6 +757,7 @@ internal static class ActivityPublicationAcceptance
                 finally {await mixedTx.RollbackAsync();}
             }
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
+            checks+=await verifyAuthenticatedHttp();
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
             Check(await Snapshot()==beforeRevocation,"revocation denial advances no checkpoint receipt or period");
