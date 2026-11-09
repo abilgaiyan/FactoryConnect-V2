@@ -135,11 +135,11 @@ internal static class ActivityHistoryHttpAcceptance
         var batch=(Guid)(await Scalar("""
             SELECT TOP(1) BatchId FROM activity.PublicationSourceWitness
             WHERE OperationId=@operation ORDER BY BatchId
-            """,("@operation",witness.Value))!);
+            """,("@operation",witness.Value)) ?? throw new InvalidOperationException("Missing v4 witness batch"));
         var original=(byte[])(await Scalar("""
             SELECT DocumentHash FROM activity.PublicationSourceWitness
             WHERE OperationId=@operation AND BatchId=@batch
-            """,("@operation",witness.Value),("@batch",batch))!);
+            """,("@operation",witness.Value),("@batch",batch)) ?? throw new InvalidOperationException("Missing v4 witness hash"));
         using var factory=new WebApplicationFactory<HostAssemblyMarker>().WithWebHostBuilder(host=>{
             host.UseContentRoot(Directory.GetCurrentDirectory());
             host.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{
