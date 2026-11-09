@@ -162,6 +162,46 @@ internal static class ActivityHistoryHttpAcceptance
             request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bearer);
             return await http.SendAsync(request);
         }
+        var distinctOperations=Convert.ToInt32(await Scalar("""
+            SELECT COUNT(DISTINCT OperationId) FROM activity.ProcessorOperation
+            WHERE MachineId=@machine AND MappingId=@mapping
+            """,("@machine",machine),("@mapping",mapping)));
+        if(distinctOperations<100)
+            throw new InvalidOperationException("Gate 5 requires at least 100 distinct committed publication operations");
+        var measurements=new List<Activity>();
+        using var activityListener=new ActivityListener{
+            ShouldListenTo=source=>source.Name=="FactoryConnect.V2.Security",
+            Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped=activity=>{lock(measurements)measurements.Add(activity);}
+        };
+        ActivitySource.AddActivityListener(activityListener);
+        using var commandCapture=new SqlCommandCapture();
+        async Task Benchmark(string path,string label)
+        {
+            lock(measurements)measurements.Clear();
+            commandCapture.Clear();
+            using var response=await GetPath(path);
+            if(response.StatusCode!=HttpStatusCode.OK)
+                throw new InvalidOperationException("Gate 5 "+label+" HTTP status "+response.StatusCode);
+            Activity[] selected;
+            lock(measurements)selected=measurements.Where(x=>
+                x.GetTagItem("security.activity.read") is true &&
+                x.GetTagItem("security.sql.roundtrips") is not null).ToArray();
+            if(selected.Length!=1)throw new InvalidOperationException("Gate 5 missing unique SQL read telemetry for "+label);
+            var roundtrips=Convert.ToInt64(selected[0].GetTagItem("security.sql.roundtrips"));
+            var commands=commandCapture.For(selected[0]);
+            Console.WriteLine($"MEASURE: Gate 5 {label} distinctOperations={distinctOperations} SQL commandStarts={commands.Length} serverRoundtrips={roundtrips}");
+            if(commands.Length==0 || roundtrips>17)
+                throw new InvalidOperationException("Gate 5 "+label+" exceeds 17 SQL roundtrips or lacks diagnostic command starts");
+        }
+        async Task<HttpResponseMessage> GetPath(string path)
+        {
+            using var request=new HttpRequestMessage(HttpMethod.Get,path);
+            request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bearer);
+            return await http.SendAsync(request);
+        }
+        await Benchmark($"/api/commissioning/v2/machines/{machine}/activity","100-operation series discovery");
+        await Benchmark($"/api/commissioning/v2/machines/{machine}/activity/{mapping}?take=100","100-operation history page");
         using(var baseline=await Get())
             if(baseline.StatusCode!=HttpStatusCode.OK)
                 throw new InvalidOperationException("v4 HTTP baseline: "+baseline.StatusCode);
