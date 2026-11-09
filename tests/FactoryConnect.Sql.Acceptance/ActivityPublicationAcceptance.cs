@@ -543,6 +543,28 @@ internal static class ActivityPublicationAcceptance
                     Check(true,"Bounded selection rejects more than 101 receipt operations before SQL");
                 }
             }
+            // The upper legal operation-selection boundary must pass preflight.
+            // A closed connection is deliberate: reaching SQL produces an
+            // InvalidOperationException, while rejecting the selection early
+            // would produce InvalidDataException. This does not claim that the
+            // separate per-operation source-witness boundary is qualified.
+            var maximumInputs=Array.CreateInstance(batchedInputType,101);
+            for(var index=0;index<maximumInputs.Length;index++)
+                maximumInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                    Guid.NewGuid(),identity,null),index);
+            await using(var closedMaximumConnection=new SqlConnection(target.ConnectionString))
+            {
+                try
+                {
+                    await ((Task)batchedVerifier.Invoke(null,new object?[]{
+                        closedMaximumConnection,null,maximumInputs,CancellationToken.None})!);
+                    throw new InvalidOperationException("Closed SQL connection unexpectedly executed.");
+                }
+                catch(InvalidOperationException e)when(e.Message!="Closed SQL connection unexpectedly executed.")
+                {
+                    Check(true,"Exactly 101 distinct receipt operations pass bounded preflight and reach SQL");
+                }
+            }
             // A syntactically valid but nonexistent receipt must never be treated
             // as a successful partial batch. The SQL result must match selection.
             var missingInputs=Array.CreateInstance(batchedInputType,1);
