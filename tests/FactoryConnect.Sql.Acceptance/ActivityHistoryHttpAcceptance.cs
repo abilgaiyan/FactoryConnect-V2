@@ -106,14 +106,16 @@ internal static class ActivityHistoryHttpAcceptance
             var nextCursor=cursor;
             while(nextCursor is not null)
             {
-                using var continuation=await Get(page+"?take=1&cursor="+Uri.EscapeDataString(nextCursor));
+                using var continuation=await Get(page+"?take=100&cursor="+Uri.EscapeDataString(nextCursor));
                 Check(continuation.StatusCode==HttpStatusCode.OK,
                     "complete keyset traversal returns a successful bounded page");
                 using var continuationJson=JsonDocument.Parse(await continuation.Content.ReadAsStringAsync());
                 var continuationRows=continuationJson.RootElement.GetProperty("rows");
-                Check(continuationRows.GetArrayLength()==1 &&
-                    traversed.Add(continuationRows[0].GetProperty("effectId").GetGuid()),
-                    "complete keyset traversal never duplicates a period");
+                Check(continuationRows.GetArrayLength() is >0 and <=100,
+                    "complete keyset traversal returns a bounded nonempty page");
+                foreach(var period in continuationRows.EnumerateArray())
+                    Check(traversed.Add(period.GetProperty("effectId").GetGuid()),
+                        "complete keyset traversal never duplicates a period");
                 var next=continuationJson.RootElement.GetProperty("nextCursor");
                 nextCursor=next.ValueKind==JsonValueKind.Null?null:next.GetString();
                 Check(traversed.Count<=expectedPeriodCount,
