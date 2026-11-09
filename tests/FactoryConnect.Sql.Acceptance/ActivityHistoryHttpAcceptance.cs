@@ -379,7 +379,7 @@ internal static class ActivityHistoryHttpAcceptance
                 {
                     var pending=Get(page);
                     var locks=await WaitBlocked(pending);
-                    Check(locks.Granted>=1 && locks.Waiting>=1,"processor lock is not acquired ahead of blocked machine lock");
+                    Check(locks.Granted==0 && locks.Waiting>=1,"blocked machine lock prevents any processor applock acquisition");
                     await hold.DisposeAsync();
                     using var response=await pending;
                     Check(response.StatusCode==HttpStatusCode.OK,"machine lock release resumes history read");
