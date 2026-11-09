@@ -467,6 +467,26 @@ internal static class ActivityPublicationAcceptance
                 await Reject(async()=>await ((Task)batchedVerifier.Invoke(null,new object?[]{
                     duplicateConnection,null,repeatedInputs,CancellationToken.None})!),
                     "Bounded selection rejects duplicate operation IDs before SQL");
+            // Cross-stream selections must be rejected before any SQL is opened,
+            // even when both operation IDs are individually well formed.
+            var foreignStreamIdentity=identity with { StreamKey=identity.StreamKey+"-foreign" };
+            var mixedStreamInputs=Array.CreateInstance(batchedInputType,2);
+            mixedStreamInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                latestOperation,identity,null),0);
+            mixedStreamInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                Guid.NewGuid(),foreignStreamIdentity,null),1);
+            await using(var closedStreamConnection=new SqlConnection(target.ConnectionString))
+                await Reject(async()=>await ((Task)batchedVerifier.Invoke(null,new object?[]{
+                    closedStreamConnection,null,mixedStreamInputs,CancellationToken.None})!),
+                    "Batched publication verifier rejects cross-stream operation selection before SQL");
+            // Invalid previously loaded receipt bytes are rejected before SQL.
+            var oversizedReuseInputs=Array.CreateInstance(batchedInputType,1);
+            oversizedReuseInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                latestOperation,identity,new byte[8388609]),0);
+            await using(var closedReuseConnection=new SqlConnection(target.ConnectionString))
+                await Reject(async()=>await ((Task)batchedVerifier.Invoke(null,new object?[]{
+                    closedReuseConnection,null,oversizedReuseInputs,CancellationToken.None})!),
+                    "Batched publication verifier rejects oversized reused result before SQL");
             // Gate 2: malformed, foreign-scope and oversized cursors fail closed.
             var cursorDecoder=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetMethod(
                 "DecodeCursor",BindingFlags.NonPublic|BindingFlags.Static)
