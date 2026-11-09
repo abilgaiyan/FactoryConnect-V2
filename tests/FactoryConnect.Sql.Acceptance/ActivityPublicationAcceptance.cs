@@ -465,6 +465,30 @@ internal static class ActivityPublicationAcceptance
                 }
                 finally {await boundedTx.RollbackAsync();}
             }
+            // A syntactically valid but nonexistent receipt must never be treated
+            // as a successful partial batch. The SQL result must match selection.
+            var missingInputs=Array.CreateInstance(batchedInputType,1);
+            missingInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                Guid.NewGuid(),identity,null),0);
+            await using(var missingConnection=new SqlConnection(target.ConnectionString))
+            {
+                await missingConnection.OpenAsync();
+                await using var missingTx=(SqlTransaction)await missingConnection.BeginTransactionAsync(IsolationLevel.Serializable);
+                try
+                {
+                    try
+                    {
+                        await ((Task)batchedVerifier.Invoke(null,new object[]{
+                            missingConnection,missingTx,missingInputs,CancellationToken.None})!);
+                        throw new InvalidOperationException("Missing publication receipt was accepted.");
+                    }
+                    catch(InvalidDataException)
+                    {
+                        Check(true,"Gate 5 rejects a missing receipt instead of accepting a partial batch");
+                    }
+                }
+                finally {await missingTx.RollbackAsync();}
+            }
             Check(await Snapshot()==beforeAncestry,"read-corruption fixtures rollback without changing durable publication history");
             var pending=await ingest(70,false,false);var denied=await Work();var beforeRevocation=await Snapshot();await revoke();
             await Reject(()=>store.ApplyAcceptedWorkAsync(denied),"revoked mapping eligibility rejects new publication");
