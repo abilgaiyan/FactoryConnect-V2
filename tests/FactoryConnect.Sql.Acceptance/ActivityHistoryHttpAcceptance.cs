@@ -64,12 +64,27 @@ internal static class ActivityHistoryHttpAcceptance
         var cp=(string)(await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",("@machine",machine),("@mapping",mapping)))!;
         try
         {
+            // Existing security.transaction telemetry measures actual server roundtrips.
+            // Capture each endpoint separately; the 100-distinct-operation Gate 5
+            // threshold is not asserted against this small correctness fixture.
+            long MeasureReadTrips(string path)
+            {
+                Activity[] selected;
+                lock(traces)selected=traces.Where(x=>x.GetTagItem("security.activity.read") is true &&
+                    x.GetTagItem("security.sql.roundtrips") is not null).ToArray();
+                if(selected.Length==0)throw new InvalidOperationException("Missing activity read SQL telemetry: "+path);
+                return Convert.ToInt64(selected[^1].GetTagItem("security.sql.roundtrips"));
+            }
             using var series=await Get(list);using var sj=JsonDocument.Parse(await series.Content.ReadAsStringAsync());
+            var discoveryTrips=MeasureReadTrips("series discovery");
+            Console.WriteLine($"MEASURE: activity HTTP series discovery SQL roundtrips={discoveryTrips}");
             Check(series.StatusCode==HttpStatusCode.OK && sj.RootElement.GetProperty("series").GetArrayLength()==1 &&
                 sj.RootElement.GetProperty("currentConnectivity").ValueKind==JsonValueKind.Null &&
                 sj.RootElement.GetProperty("verification").GetString()=="immutable-publication-receipts",
                 "authorized series discovery exposes exact persisted qualification without live-state claims");
             using var first=await Get(page+"?take=1");using var fj=JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+            var pageTrips=MeasureReadTrips("history page");
+            Console.WriteLine($"MEASURE: activity HTTP history page SQL roundtrips={pageTrips}");
             var row=fj.RootElement.GetProperty("rows")[0];
             Check(first.StatusCode==HttpStatusCode.OK && first.Headers.CacheControl?.NoStore==true &&
                 row.GetProperty("state").GetString()=="Running" && row.GetProperty("startRawValue").GetString()=="ACTIVE" &&
