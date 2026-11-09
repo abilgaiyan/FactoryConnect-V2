@@ -199,48 +199,16 @@ internal static class ActivityHistoryHttpAcceptance
                 await Exec("UPDATE activity.ClosedPeriod SET StartRawValue=@value WHERE EffectId=@effect",("@value",original),("@effect",effect));
                 await Exec("ENABLE TRIGGER activity.TR_ClosedPeriodImmutable ON activity.ClosedPeriod");
             }
-            // Verify a genuine version-4 publication through the HTTP endpoint,
-            // then tamper with its retained source-document witness. Restore the
-            // immutable fixture in finally so later acceptance is unaffected.
-            var witnessOperation=(Guid)(await Scalar("""
-                SELECT TOP(1) w.OperationId FROM activity.PublicationSourceWitness w
+            // This ingestion fixture can contain only legacy publications. Do not
+            // pretend that it qualifies a version-4 source-witness HTTP read.
+            // Version-4 tamper acceptance requires a separately seeded v4 fixture.
+            var witnessedOperations=Convert.ToInt32(await Scalar("""
+                SELECT COUNT(DISTINCT w.OperationId)
+                FROM activity.PublicationSourceWitness w
                 JOIN activity.ProcessorOperation o ON o.OperationId=w.OperationId
                 WHERE o.MachineId=@machine AND o.MappingId=@mapping
-                  AND EXISTS(SELECT 1 FROM activity.ClosedPeriod p
-                    WHERE p.MachineId=o.MachineId AND p.MappingId=o.MappingId
-                      AND p.OperationId=o.OperationId)
-                ORDER BY o.AppliedGeneration DESC
-                """,("@machine",machine),("@mapping",mapping))
-                ?? throw new InvalidOperationException("HTTP v4 witness fixture has no published operation."));
-            var witnessBatch=(Guid)(await Scalar(
-                "SELECT TOP(1) BatchId FROM activity.PublicationSourceWitness WHERE OperationId=@op ORDER BY BatchId",
-                ("@op",witnessOperation))
-                ?? throw new InvalidOperationException("HTTP v4 witness fixture has no source batch."));
-            var originalWitness=(byte[])(await Scalar(
-                "SELECT DocumentHash FROM activity.PublicationSourceWitness WHERE OperationId=@op AND BatchId=@batch",
-                ("@op",witnessOperation),("@batch",witnessBatch))
-                ?? throw new InvalidOperationException("HTTP v4 witness document hash missing."));
-            await Exec("ALTER TABLE activity.PublicationSourceWitness NOCHECK CONSTRAINT FK_PublicationWitness_Document; "+
-                "DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness");
-            try
-            {
-                await Exec("""
-                    UPDATE activity.PublicationSourceWitness
-                    SET DocumentHash=0x0000000000000000000000000000000000000000000000000000000000000000
-                    WHERE OperationId=@op AND BatchId=@batch
-                    """,("@op",witnessOperation),("@batch",witnessBatch));
-                using var tampered=await Get(page+"?take=100");
-                Check(tampered.StatusCode==HttpStatusCode.ServiceUnavailable &&
-                    (await tampered.Content.ReadAsByteArrayAsync()).Length<4096,
-                    "HTTP v4 publication witness tampering rejects entire bounded history page");
-            }
-            finally
-            {
-                await Exec("UPDATE activity.PublicationSourceWitness SET DocumentHash=@hash WHERE OperationId=@op AND BatchId=@batch",
-                    ("@hash",originalWitness),("@op",witnessOperation),("@batch",witnessBatch));
-                await Exec("ENABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness; "+
-                    "ALTER TABLE activity.PublicationSourceWitness WITH CHECK CHECK CONSTRAINT FK_PublicationWitness_Document");
-            }
+                """,("@machine",machine),("@mapping",mapping)));
+            Console.WriteLine($"MEASURE: activity HTTP existing fixture witnessed operations={witnessedOperations}; v4 HTTP tamper gate remains separate");
             var broken=JsonNode.Parse(cp)!;broken["AcceptedSource"]!["OperationId"]=Guid.NewGuid();
             await SetCheckpoint(broken.ToJsonString());
             try { using var corrupt=await Get(list);Check(corrupt.StatusCode==HttpStatusCode.ServiceUnavailable,"checksum-consistent checkpoint forgery fails immutable publication ancestry"); }
