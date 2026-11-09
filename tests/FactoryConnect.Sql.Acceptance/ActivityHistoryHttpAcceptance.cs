@@ -360,8 +360,8 @@ internal static class ActivityHistoryHttpAcceptance
                     await using(var reader=await query.ExecuteReaderAsync())
                         while(await reader.ReadAsync())descriptions.Add(reader.GetString(0));
                     Check(descriptions.Count==1,"fixture exclusive applock has one SQL resource description");
-                    Console.WriteLine($"TRACE: fixture session={session} resource={descriptions[0]}");
-                    return descriptions[0];
+                    Console.WriteLine($"TRACE: fixture session={session} resource={descriptions[0].TrimEnd()}");
+                    return descriptions[0].TrimEnd();
                 }
                 var machineDescription=await FixtureDescription(machineResource);
                 var processorDescription=await FixtureDescription(processorResource);
