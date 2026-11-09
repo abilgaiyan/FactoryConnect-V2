@@ -75,6 +75,7 @@ internal static class ActivityHistoryHttpAcceptance
                 if(selected.Length==0)throw new InvalidOperationException("Missing activity read SQL telemetry: "+path);
                 return Convert.ToInt64(selected[^1].GetTagItem("security.sql.roundtrips"));
             }
+            lock(traces)traces.Clear();
             using var series=await Get(list);using var sj=JsonDocument.Parse(await series.Content.ReadAsStringAsync());
             var discoveryTrips=MeasureReadTrips("series discovery");
             Console.WriteLine($"MEASURE: activity HTTP series discovery SQL roundtrips={discoveryTrips}");
@@ -82,6 +83,7 @@ internal static class ActivityHistoryHttpAcceptance
                 sj.RootElement.GetProperty("currentConnectivity").ValueKind==JsonValueKind.Null &&
                 sj.RootElement.GetProperty("verification").GetString()=="immutable-publication-receipts",
                 "authorized series discovery exposes exact persisted qualification without live-state claims");
+            lock(traces)traces.Clear();
             using var first=await Get(page+"?take=1");using var fj=JsonDocument.Parse(await first.Content.ReadAsStringAsync());
             var pageTrips=MeasureReadTrips("history page");
             Console.WriteLine($"MEASURE: activity HTTP history page SQL roundtrips={pageTrips}");
