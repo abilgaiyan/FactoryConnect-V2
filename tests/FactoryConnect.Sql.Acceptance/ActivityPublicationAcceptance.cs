@@ -197,6 +197,29 @@ internal static class ActivityPublicationAcceptance
             var countBefore=(await store.ReadPeriodPageAsync(identity)).Rows.Count;
             for(var i=0;i<101;i++)await ingest(0,false,true);
             var quietOne=await Work();await ActivityHostAcceptance.DrainPublication(target,scope,2);var quietResult=await store.ApplyAcceptedWorkAsync(quietOne);
+            // Inspect genuine immutable witness rows produced by the normal publisher,
+            // rather than treating the separate receipt-selection bound as witness proof.
+            await using(var witnessCounts=new SqlCommand("""
+                SELECT p.OperationId,COUNT_BIG(w.BatchId) AS WitnessCount
+                FROM activity.ProcessorOperation p
+                JOIN activity.PublicationSourceWitness w ON w.OperationId=p.OperationId
+                WHERE p.MachineId=@machine AND p.MappingId=@mapping
+                GROUP BY p.OperationId
+                ORDER BY WitnessCount DESC
+                """,c))
+            {
+                witnessCounts.Parameters.AddWithValue("@machine",scope.MachineId);
+                witnessCounts.Parameters.AddWithValue("@mapping",scope.MappingId);
+                var maximum=0L;
+                await using var reader=await witnessCounts.ExecuteReaderAsync();
+                while(await reader.ReadAsync())
+                {
+                    var count=reader.GetInt64(1);
+                    maximum=Math.Max(maximum,count);
+                    Check(count<=101,"normal publication does not exceed per-operation 101-witness SQL bound");
+                }
+                Console.WriteLine($"MEASURE: publication maximum retained source witnesses per operation={maximum}");
+            }
             var quietCheckpoint=await store.ReadCheckpointAsync(identity);
             Check(quietOne.IsEmpty && quietResult.Replayed && quietResult.NewPeriods.Count==0 && quietCheckpoint.OpenAnchor is null &&
                 (await store.ReadPeriodPageAsync(identity)).Rows.Count==countBefore && (await store.DiscoverAcceptedWorkAsync(scope)).Candidate is null,
