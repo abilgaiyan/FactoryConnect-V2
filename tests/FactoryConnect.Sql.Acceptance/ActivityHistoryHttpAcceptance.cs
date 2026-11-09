@@ -366,19 +366,17 @@ internal static class ActivityHistoryHttpAcceptance
                 var machineDescription=await FixtureDescription(machineResource);
                 var processorDescription=await FixtureDescription(processorResource);
                 Check(machineDescription!=processorDescription,"machine and processor SQL applock descriptions are distinct");
-                // Materialize one DMV lock snapshot and attribute rows only to an
-                // actively executing LockInOrder batch, never to program_name alone.
-                async Task<(int Session,string Command,string Mode,string Status,string Resource)[]> Observe()
+                // Capture application locks once and correlate by the exact blocked
+                // resource and SQL session. During sp_getapplock SQL exposes xp_userlock,
+                // not the outer LockInOrder command text.
+                async Task<(int Session,string Command,string Mode,string Status,string Resource,string WaitResource)[]> Observe()
                 {
-                    // Diagnostic-only: capture every active API SQL request, including
-                    // those whose current sql_handle resolves to the inner stored procedure.
                     await using var query=new SqlCommand("""
                         SELECT request_session_id,request_mode,request_status,resource_description
                         INTO #activity_lock_snapshot FROM sys.dm_tran_locks WHERE resource_type='APPLICATION';
-                        SELECT r.session_id,COALESCE(CONVERT(nvarchar(max),st.text),'') AS command_text,
+                        SELECT r.session_id,COALESCE(CONVERT(nvarchar(max),st.text),''),
                                COALESCE(l.request_mode,''),COALESCE(l.request_status,''),
-                               COALESCE(l.resource_description,''),
-                               COALESCE(r.wait_type,''),COALESCE(r.wait_resource,'')
+                               COALESCE(l.resource_description,''),COALESCE(r.wait_resource,'')
                         FROM sys.dm_exec_requests r
                         JOIN sys.dm_exec_sessions sess ON sess.session_id=r.session_id
                         OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) st
@@ -388,62 +386,62 @@ internal static class ActivityHistoryHttpAcceptance
                         DROP TABLE #activity_lock_snapshot;
                         """,c);
                     query.Parameters.AddWithValue("@app",appName);
-                    var rows=new List<(int Session,string Command,string Mode,string Status,string Resource)>();
+                    var rows=new List<(int Session,string Command,string Mode,string Status,string Resource,string WaitResource)>();
                     await using(var reader=await query.ExecuteReaderAsync())
                         while(await reader.ReadAsync())
                         {
                             var command=reader.GetString(1);
-                            var prefix=command.Length>60?command[..60]:command;
-                            var row=(Session:Convert.ToInt32(reader.GetValue(0)),Command:prefix,Mode:reader.GetString(2),
-                                Status:reader.GetString(3),Resource:reader.GetString(4).TrimEnd());
+                            var row=(Session:Convert.ToInt32(reader.GetValue(0)),
+                                Command:command.Length>60?command[..60]:command,
+                                Mode:reader.GetString(2),Status:reader.GetString(3),
+                                Resource:reader.GetString(4).TrimEnd(),WaitResource:reader.GetString(5).TrimEnd());
                             rows.Add(row);
-                            Console.WriteLine($"TRACE: request session={row.Session} command={prefix.Replace('\n',' ')} waitType={reader.GetString(5)} waitResource={reader.GetString(6)} mode={row.Mode} status={row.Status} resource={row.Resource}");
+                            Console.WriteLine($"TRACE: request session={row.Session} command={row.Command.Replace('\n',' ')} mode={row.Mode} status={row.Status} resource={row.Resource} waitResource={row.WaitResource}");
                         }
-                    return rows.Where(x=>x.Command.Contains("sp_getapplock @Resource=@first",StringComparison.Ordinal)).ToArray();
+                    return rows.ToArray();
                 }
-                async Task<(int Session,string Command,string Mode,string Status,string Resource)[]> WaitBlocked(
+                async Task<(int Session,string Command,string Mode,string Status,string Resource,string WaitResource)[]> WaitBlocked(
                     Task<HttpResponseMessage> request,string description,bool expectMachineGrant)
                 {
                     var watch=Stopwatch.StartNew();
-                    var stable=0;int? stableSession=null;
+                    int? lastSession=null;
+                    var expectedCount=0;
+                    var violationCount=0;
                     while(watch.Elapsed<TimeSpan.FromSeconds(5) && !request.IsCompleted)
                     {
                         var locks=await Observe();
-                        var readers=locks.Select(x=>x.Session).Distinct().ToArray();
-                        if(readers.Length>1)throw new InvalidOperationException("Activity HTTP: ambiguous active LockInOrder reader sessions");
-                        if(readers.Length==1)
+                        var candidates=locks.Where(x=>x.Status=="WAIT" && x.Resource==description &&
+                            x.WaitResource.Contains(description,StringComparison.Ordinal))
+                            .Select(x=>x.Session).Distinct().ToArray();
+                        if(candidates.Length>1)
+                            throw new InvalidOperationException("Activity HTTP: ambiguous sessions waiting on fixture resource");
+                        if(candidates.Length==1)
                         {
-                            var session=readers[0];
+                            var session=candidates[0];
                             var own=locks.Where(x=>x.Session==session).ToArray();
-                            var waiting=own.Any(x=>x.Resource==description && x.Status=="WAIT");
                             var machineGranted=own.Any(x=>x.Resource==machineDescription && x.Status=="GRANT");
                             var processorGranted=own.Any(x=>x.Resource==processorDescription && x.Status=="GRANT");
-                            var expected=waiting && !processorGranted &&
-                                (expectMachineGrant?machineGranted:!machineGranted);
+                            var expected=!processorGranted && (expectMachineGrant?machineGranted:!machineGranted);
+                            if(lastSession!=session){expectedCount=0;violationCount=0;}
+                            lastSession=session;
                             if(expected)
                             {
-                                stable=stableSession==session?stable+1:1;
-                                stableSession=session;
-                                if(stable>=3)return own;
+                                expectedCount++;
+                                violationCount=0;
+                                if(expectedCount>=3)return own;
                             }
                             else
                             {
-                                // Three consecutive contradictory observations of the same
-                                // blocked reader constitute a real ordering violation.
-                                if(waiting && (processorGranted || (expectMachineGrant?!machineGranted:machineGranted)))
-                                {
-                                    stable=stableSession==session?stable-1:-1;
-                                    stableSession=session;
-                                    if(stable<=-3)throw new InvalidOperationException(
-                                        $"Activity HTTP: stable lock ordering violation in reader session {session}");
-                                }
-                                else {stable=0;stableSession=null;}
+                                expectedCount=0;
+                                violationCount++;
+                                if(violationCount>=3)
+                                    throw new InvalidOperationException($"Activity HTTP: stable lock ordering violation in session {session}");
                             }
                         }
-                        else {stable=0;stableSession=null;}
+                        else {lastSession=null;expectedCount=0;violationCount=0;}
                         await Task.Delay(50);
                     }
-                    throw new InvalidOperationException("Activity HTTP: attributed reader lock state not stable or not observable");
+                    throw new InvalidOperationException("Activity HTTP: fixture-resource reader state not stable or not observable");
                 }
                 await using(var hold=await HoldExclusive(sql,processorResource))
                 {
