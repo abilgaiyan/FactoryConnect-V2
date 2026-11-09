@@ -160,6 +160,16 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
             IF @r<0 THROW 51020,'Security transaction lock unavailable.',1;
             """,ct,("@resource",resource),("@mode",exclusive?"Exclusive":"Shared"));
 
+    // Ordered transaction-owned applocks; preserve individual 10-second waits and failure mapping.
+    private static async Task LockInOrder(SqlConnection c,SqlTransaction t,string first,string second,bool exclusive,CancellationToken ct)
+        => await Exec(c,t,"""
+            DECLARE @r int;
+            EXEC @r=sys.sp_getapplock @Resource=@first,@LockMode=@mode,@LockOwner='Transaction',@LockTimeout=10000;
+            IF @r<0 THROW 51020,'Security transaction lock unavailable.',1;
+            EXEC @r=sys.sp_getapplock @Resource=@second,@LockMode=@mode,@LockOwner='Transaction',@LockTimeout=10000;
+            IF @r<0 THROW 51020,'Security transaction lock unavailable.',1;
+            """,ct,("@first",first),("@second",second),("@mode",exclusive?"Exclusive":"Shared"));
+
     private sealed record AuthorityState(long Epoch,DateTimeOffset Now);
     private static async Task<AuthorityState> State(SqlConnection c,SqlTransaction t,CancellationToken ct)
     {
