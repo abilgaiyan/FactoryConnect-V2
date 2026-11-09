@@ -97,6 +97,29 @@ internal static class ActivityHistoryHttpAcceptance
             using var secondJson=JsonDocument.Parse(await second.Content.ReadAsStringAsync());
             Check(second.StatusCode==HttpStatusCode.OK && secondJson.RootElement.GetProperty("rows")[0].GetProperty("effectId").GetGuid()!=row.GetProperty("effectId").GetGuid(),
                 "keyset continuation returns a distinct older exact period");
+            // Traverse the complete retained history rather than validating only
+            // the first continuation. The keyset must neither repeat nor omit rows.
+            var traversed=new HashSet<Guid>{row.GetProperty("effectId").GetGuid()};
+            var nextCursor=cursor;
+            while(nextCursor is not null)
+            {
+                using var continuation=await Get(page+"?take=1&cursor="+Uri.EscapeDataString(nextCursor));
+                Check(continuation.StatusCode==HttpStatusCode.OK,
+                    "complete keyset traversal returns a successful bounded page");
+                using var continuationJson=JsonDocument.Parse(await continuation.Content.ReadAsStringAsync());
+                var continuationRows=continuationJson.RootElement.GetProperty("rows");
+                Check(continuationRows.GetArrayLength()==1 &&
+                    traversed.Add(continuationRows[0].GetProperty("effectId").GetGuid()),
+                    "complete keyset traversal never duplicates a period");
+                var next=continuationJson.RootElement.GetProperty("nextCursor");
+                nextCursor=next.ValueKind==JsonValueKind.Null?null:next.GetString();
+                Check(traversed.Count<=1000,"complete keyset traversal terminates within fixture bound");
+            }
+            var expectedPeriodCount=Convert.ToInt32(await Scalar(
+                "SELECT COUNT(*) FROM activity.ClosedPeriod WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@machine",machine),("@mapping",mapping)));
+            Check(traversed.Count==expectedPeriodCount,
+                "complete keyset traversal returns every retained period exactly once");
             string deepCursor;
             await using(var deep=new SqlCommand("SELECT EffectId,StartedAt,InstanceId,StartSequence FROM activity.ClosedPeriod WHERE MachineId=@machine AND MappingId=@mapping ORDER BY StartedAt,InstanceId,StartSequence,EffectId OFFSET 1 ROWS FETCH NEXT 1 ROWS ONLY",c))
             {
