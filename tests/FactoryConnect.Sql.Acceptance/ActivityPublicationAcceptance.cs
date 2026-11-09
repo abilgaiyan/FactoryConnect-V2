@@ -487,6 +487,28 @@ internal static class ActivityPublicationAcceptance
                 await Reject(async()=>await ((Task)batchedVerifier.Invoke(null,new object?[]{
                     closedReuseConnection,null,oversizedReuseInputs,CancellationToken.None})!),
                     "Batched publication verifier rejects oversized reused result before SQL");
+            // Empty operation and scope identifiers must fail before opening SQL.
+            foreach(var invalidCase in new[]{
+                (OperationId:Guid.Empty,Identity:identity,Label:"empty operation ID"),
+                (OperationId:Guid.NewGuid(),Identity:identity with { MachineId=Guid.Empty },Label:"empty machine ID"),
+                (OperationId:Guid.NewGuid(),Identity:identity with { MappingId=Guid.Empty },Label:"empty mapping ID")
+            })
+            {
+                var invalidInputs=Array.CreateInstance(batchedInputType,1);
+                invalidInputs.SetValue(Activator.CreateInstance(batchedInputType,
+                    invalidCase.OperationId,invalidCase.Identity,null),0);
+                await using var invalidConnection=new SqlConnection(target.ConnectionString);
+                try
+                {
+                    await ((Task)batchedVerifier.Invoke(null,new object?[]{
+                        invalidConnection,null,invalidInputs,CancellationToken.None})!);
+                    throw new InvalidOperationException("Invalid publication selection was accepted.");
+                }
+                catch(InvalidDataException)
+                {
+                    Check(true,"Batched publication verifier rejects "+invalidCase.Label+" before SQL");
+                }
+            }
             // Gate 2: malformed, foreign-scope and oversized cursors fail closed.
             var cursorDecoder=typeof(FactoryConnect.Sql.Security.SqlSecurityAuthority).GetMethod(
                 "DecodeCursor",BindingFlags.NonPublic|BindingFlags.Static)
