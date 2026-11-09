@@ -464,6 +464,9 @@ internal static class MtConnectIngestionAcceptance
             }
             count+=await ActivityPublicationAcceptance.Run(target,publicationScope,currentActivity,Source,OtherWork,
                 async()=>{await enabling.WithdrawConfigurationApprovalAsync(reviewToken,await Withdrawal());});
+            count+=await ActivityHistoryHttpAcceptance.VerifyV4WitnessTamper(
+                target.ConnectionString,target.InstallationId,site,machine,
+                currentActivity.Signal.MappingId,rootToken,Epoch);
             return count;
         }
         if(quietBootstrap)
