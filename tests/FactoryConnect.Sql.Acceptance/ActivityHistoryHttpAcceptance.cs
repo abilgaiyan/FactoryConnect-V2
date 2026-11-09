@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using FactoryConnect.Api;
 using FactoryConnect.Sql.ActivityProcessing;
 using FactoryConnect.Sql.Security;
@@ -17,6 +18,77 @@ using Microsoft.Extensions.DependencyInjection;
 
 internal static class ActivityHistoryHttpAcceptance
 {
+    // Acceptance-only command-start capture. Parameters, tokens and result data are excluded.
+    private sealed class SqlCommandCapture:IObserver<DiagnosticListener>,IObserver<KeyValuePair<string,object?>>,IDisposable
+    {
+        private readonly List<IDisposable> subscriptions=new();
+        private readonly List<(Activity Owner,string Text)> commands=new();
+        private readonly IDisposable discovery;
+        public SqlCommandCapture(){discovery=DiagnosticListener.AllListeners.Subscribe(this);}
+        public void OnNext(DiagnosticListener listener)
+        {
+            if(listener.Name!="SqlClientDiagnosticListener")return;
+            lock(subscriptions)subscriptions.Add(listener.Subscribe((IObserver<KeyValuePair<string,object?>>)this));
+        }
+        public void OnNext(KeyValuePair<string,object?> value)
+        {
+            if(value.Key!="Microsoft.Data.SqlClient.WriteCommandBefore" || value.Value is null)return;
+            if(value.Value.GetType().GetProperty("Command")?.GetValue(value.Value) is not SqlCommand command)return;
+            var owner=Activity.Current;
+            while(owner is not null && owner.OperationName!="security.transaction")owner=owner.Parent;
+            if(owner is null)return;
+            var sql=Regex.Replace(command.CommandText,@"\\s+"," ").Trim();
+            // Static SQL text only; never include parameter values.
+            var prefix=sql.Length>110?sql[..110]+"...":sql;
+            lock(commands)commands.Add((owner,prefix));
+        }
+        public void OnError(Exception error){}
+        public void OnCompleted(){}
+        public void Clear(){lock(commands)commands.Clear();}
+        public string[] For(Activity owner)
+        {
+            lock(commands)return commands.Where(x=>ReferenceEquals(x.Owner,owner)).Select(x=>x.Text).ToArray();
+        }
+        public int Total{get{lock(commands)return commands.Count;}}
+        public void Dispose()
+        {
+            discovery.Dispose();
+            lock(subscriptions)foreach(var subscription in subscriptions)subscription.Dispose();
+        }
+    }
+
+    private sealed class FixtureHold(SqlConnection connection,SqlTransaction transaction):IAsyncDisposable
+    {
+        private bool released;
+        public SqlConnection Connection=>connection;
+        public SqlTransaction Transaction=>transaction;
+        public async ValueTask DisposeAsync()
+        {
+            if(released)return;
+            released=true;
+            try{await transaction.RollbackAsync();}
+            finally{await transaction.DisposeAsync();await connection.DisposeAsync();}
+        }
+    }
+    private static async Task<FixtureHold> HoldExclusive(string sql,string resource)
+    {
+        var connection=new SqlConnection(sql);
+        try
+        {
+            await connection.OpenAsync();
+            var transaction=(SqlTransaction)await connection.BeginTransactionAsync();
+            try
+            {
+                await using var gate=new SqlCommand("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=0; IF @r<0 THROW 51099,'Fixture gate unavailable.',1;",connection,transaction);
+                gate.Parameters.AddWithValue("@resource",resource);
+                await gate.ExecuteNonQueryAsync();
+                return new FixtureHold(connection,transaction);
+            }
+            catch{await transaction.DisposeAsync();throw;}
+        }
+        catch{await connection.DisposeAsync();throw;}
+    }
+
     private sealed class Verifier(string subject):IHumanIdentityVerifier
     {
         public Task<VerifiedHumanIdentity> VerifyAsync(string assertion,CancellationToken ct)
@@ -27,6 +99,160 @@ internal static class ActivityHistoryHttpAcceptance
                 Guid.NewGuid().ToString("N"),"activity-http-mfa",now.AddSeconds(-1),assertion=="activity-http-expiring"?now.AddSeconds(4):now.AddMinutes(3)));
         }
     }
+    // CrossBatch-only HTTP fixture. Run after genuine v4 publication, before revocation.
+    // All mutations are reversible on the generated disposable acceptance database.
+    internal static async Task<int> VerifyV4WitnessTamper(string sql,Guid installation,Guid site,
+        Guid machine,Guid mapping,byte[] admin,Func<Task<long>> epoch)
+    {
+        var authority=new SqlSecurityAuthority(sql,installation);
+        var principal=Guid.NewGuid();
+        var subject="activity-v4-http-"+principal.ToString("N");
+        await authority.EnrollHumanAsync(admin,new(Guid.NewGuid(),principal,
+            "https://certificate.fixture/tenant",subject,await epoch(),"v4 HTTP acceptance"));
+        await using var c=new SqlConnection(sql);await c.OpenAsync();
+        async Task<object?> Scalar(string statement,params (string Name,object Value)[] args)
+        {
+            await using var command=new SqlCommand(statement,c);
+            Bind(command,args);
+            return await command.ExecuteScalarAsync();
+        }
+        var parent=(Guid)(await Scalar("""
+            SELECT TOP(1) g.GrantId FROM security.PermissionGrant g
+            JOIN security.SessionAuthority s ON s.PrincipalId=g.GranteeId
+            WHERE s.TokenHash=@token AND g.Permission='commissioning.read'
+            """,("@token",admin)) ?? throw new InvalidOperationException("v4 parent read grant missing"));
+        var now=DateTimeOffset.UtcNow;
+        await authority.GrantPermissionAsync(admin,new(Guid.NewGuid(),Guid.NewGuid(),principal,parent,
+            "commissioning.read",AuthorizationScope.Machine(site,machine),true,false,
+            now.AddSeconds(-1),now.AddMinutes(10),await epoch(),"v4 HTTP read grant"));
+        var witness=(Guid?)await Scalar("""
+            SELECT TOP(1) w.OperationId FROM activity.PublicationSourceWitness w
+            JOIN activity.ProcessorOperation p ON p.OperationId=w.OperationId
+            WHERE p.MachineId=@machine AND p.MappingId=@mapping
+            ORDER BY p.AppliedGeneration DESC
+            """,("@machine",machine),("@mapping",mapping));
+        if(witness is null)throw new InvalidOperationException("No genuine v4 witnessed publication");
+        var batch=(Guid)(await Scalar("""
+            SELECT TOP(1) BatchId FROM activity.PublicationSourceWitness
+            WHERE OperationId=@operation ORDER BY BatchId
+            """,("@operation",witness.Value)) ?? throw new InvalidOperationException("Missing v4 witness batch"));
+        var original=(byte[])(await Scalar("""
+            SELECT DocumentHash FROM activity.PublicationSourceWitness
+            WHERE OperationId=@operation AND BatchId=@batch
+            """,("@operation",witness.Value),("@batch",batch)) ?? throw new InvalidOperationException("Missing v4 witness hash"));
+        using var factory=new WebApplicationFactory<HostAssemblyMarker>().WithWebHostBuilder(host=>{
+            host.UseContentRoot(Directory.GetCurrentDirectory());
+            host.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{
+                ["ConnectionStrings:Evidence"]=sql,["Evidence:InstallationId"]=installation.ToString(),
+                ["Evidence:SiteId"]=site.ToString(),["Evidence:StreamKey"]="mtconnect:uuid:fixture-device"
+            }));
+            host.ConfigureTestServices(services=>services.AddSingleton<IHumanIdentityVerifier>(new Verifier(subject)));
+        });
+        using var http=factory.CreateClient(new WebApplicationFactoryClientOptions{
+            BaseAddress=new("https://localhost/"),AllowAutoRedirect=false});
+        using var login=await http.PostAsync("/api/security/v2/human-sessions",
+            new StringContent("activity-http-proof"));
+        if(login.StatusCode!=HttpStatusCode.OK)throw new InvalidOperationException("v4 human login failed");
+        using var identity=JsonDocument.Parse(await login.Content.ReadAsStringAsync());
+        var bearer=identity.RootElement.GetProperty("bearer").GetString()!;
+        async Task<HttpResponseMessage> Get()
+        {
+            using var request=new HttpRequestMessage(HttpMethod.Get,
+                $"/api/commissioning/v2/machines/{machine}/activity");
+            request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bearer);
+            return await http.SendAsync(request);
+        }
+        var distinctOperations=Convert.ToInt32(await Scalar("""
+            SELECT COUNT(DISTINCT OperationId) FROM activity.ProcessorOperation
+            WHERE MachineId=@machine AND MappingId=@mapping
+            """,("@machine",machine),("@mapping",mapping)));
+        if(distinctOperations<100)
+            throw new InvalidOperationException("Gate 5 requires at least 100 distinct committed publication operations");
+        var measurements=new List<Activity>();
+        using var activityListener=new ActivityListener{
+            ShouldListenTo=source=>source.Name=="FactoryConnect.V2.Security",
+            Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped=activity=>{lock(measurements)measurements.Add(activity);}
+        };
+        ActivitySource.AddActivityListener(activityListener);
+        using var commandCapture=new SqlCommandCapture();
+        async Task Benchmark(string path,string label)
+        {
+            lock(measurements)measurements.Clear();
+            commandCapture.Clear();
+            using var response=await GetPath(path);
+            if(response.StatusCode!=HttpStatusCode.OK)
+                throw new InvalidOperationException("Gate 5 "+label+" HTTP status "+response.StatusCode);
+            Activity[] selected;
+            lock(measurements)selected=measurements.Where(x=>
+                x.GetTagItem("security.activity.read") is true &&
+                x.GetTagItem("security.sql.roundtrips") is not null).ToArray();
+            if(selected.Length!=1)throw new InvalidOperationException("Gate 5 missing unique SQL read telemetry for "+label);
+            var roundtrips=Convert.ToInt64(selected[0].GetTagItem("security.sql.roundtrips"));
+            var commands=commandCapture.For(selected[0]);
+            Console.WriteLine($"MEASURE: Gate 5 {label} distinctOperations={distinctOperations} SQL commandStarts={commands.Length} serverRoundtrips={roundtrips}");
+            if(commands.Length==0 || roundtrips>17)
+                throw new InvalidOperationException("Gate 5 "+label+" exceeds 17 SQL roundtrips or lacks diagnostic command starts");
+        }
+        async Task<HttpResponseMessage> GetPath(string path)
+        {
+            using var request=new HttpRequestMessage(HttpMethod.Get,path);
+            request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bearer);
+            return await http.SendAsync(request);
+        }
+        await Benchmark($"/api/commissioning/v2/machines/{machine}/activity","100-operation series discovery");
+        await Benchmark($"/api/commissioning/v2/machines/{machine}/activity/{mapping}?take=100","100-operation history page");
+        using(var baseline=await Get())
+            if(baseline.StatusCode!=HttpStatusCode.OK)
+                throw new InvalidOperationException("v4 HTTP baseline: "+baseline.StatusCode);
+        // Alter only a retained witness hash, preserving row identity and foreign keys.
+        // Restore the exact original bytes in finally, even if HTTP assertion fails.
+        var corrupted=new byte[original.Length];Array.Copy(original,corrupted,original.Length);
+        corrupted[0]^=0xFF;
+        async Task UpdateHash(byte[] value)
+        {
+            await using var command=new SqlCommand("""
+                UPDATE activity.PublicationSourceWitness SET DocumentHash=@hash
+                WHERE OperationId=@operation AND BatchId=@batch
+                """,c);
+            Bind(command,("@hash",value),("@operation",witness.Value),("@batch",batch));
+            if(await command.ExecuteNonQueryAsync()!=1)throw new InvalidOperationException("Witness update did not affect exactly one row");
+        }
+        // Only the disposable acceptance database is modified. The witness hash
+        // participates in a document FK; restore it and revalidate before exit.
+        await using(var prepare=new SqlCommand("""
+            ALTER TABLE activity.PublicationSourceWitness NOCHECK CONSTRAINT FK_PublicationWitness_Document;
+            DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness;
+            """,c))
+            await prepare.ExecuteNonQueryAsync();
+        try
+        {
+            await UpdateHash(corrupted);
+            using var response=await Get();
+            var payload=await response.Content.ReadAsByteArrayAsync();
+            if(response.StatusCode!=HttpStatusCode.ServiceUnavailable || payload.Length>=4096)
+                throw new InvalidOperationException("v4 HTTP tamper must return bounded 503");
+            Console.WriteLine("PASS: authenticated v4 witness hash tamper fails closed with bounded HTTP 503");
+        }
+        finally
+        {
+            try { await UpdateHash(original); }
+            finally
+            {
+                await using var enable=new SqlCommand("""
+                    ENABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness;
+                    ALTER TABLE activity.PublicationSourceWitness WITH CHECK CHECK CONSTRAINT FK_PublicationWitness_Document;
+                    """,c);
+                await enable.ExecuteNonQueryAsync();
+            }
+        }
+        using(var restored=await Get())
+            if(restored.StatusCode!=HttpStatusCode.OK)
+                throw new InvalidOperationException("v4 HTTP did not recover after exact witness restoration");
+        Console.WriteLine("PASS: authenticated v4 HTTP recovers after witness restoration");
+        return 2;
+    }
+
     internal static async Task<int> Run(string sql,Guid installation,Guid site,Guid machine,Guid other,
         Guid mapping,byte[] admin,Func<Task<long>> epoch)
     {
@@ -42,6 +268,7 @@ internal static class ActivityHistoryHttpAcceptance
             Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded,
             ActivityStopped=a=>{lock(traces)traces.Add(a);}
         };ActivitySource.AddActivityListener(listener);
+        using var commandCapture=new SqlCommandCapture();
         var appName="fc2-activity-history-http-"+Guid.NewGuid().ToString("N");
         using var factory=new WebApplicationFactory<HostAssemblyMarker>().WithWebHostBuilder(host=> {
             host.UseContentRoot(Directory.GetCurrentDirectory());
@@ -64,12 +291,46 @@ internal static class ActivityHistoryHttpAcceptance
         var cp=(string)(await Scalar("SELECT CheckpointJson FROM activity.ProcessorCheckpoint WHERE MachineId=@machine AND MappingId=@mapping",("@machine",machine),("@mapping",mapping)))!;
         try
         {
+            // Existing security.transaction telemetry measures actual server roundtrips.
+            // Capture each endpoint separately; the 100-distinct-operation Gate 5
+            // threshold is not asserted against this small correctness fixture.
+            long MeasureReadTrips(string path,out Activity owner)
+            {
+                Activity[] selected;
+                lock(traces)selected=traces.Where(x=>x.GetTagItem("security.activity.read") is true &&
+                    x.GetTagItem("security.sql.roundtrips") is not null).ToArray();
+                if(selected.Length==0)throw new InvalidOperationException("Missing activity read SQL telemetry: "+path);
+                Check(selected.Length==1,"exactly one activity read transaction belongs to "+path);
+                owner=selected[0];
+                return Convert.ToInt64(owner.GetTagItem("security.sql.roundtrips"));
+            }
+            void ReportCommands(string path,Activity owner,long roundtrips)
+            {
+                var commands=commandCapture.For(owner);
+                Console.WriteLine($"MEASURE: activity HTTP {path} SQL commandStarts={commands.Length} serverRoundtrips={roundtrips} roundtripMinusCommandStarts={roundtrips-commands.Length} unattributedCommandStarts={commandCapture.Total-commands.Length}");
+                for(var i=0;i<commands.Length;i++)
+                    Console.WriteLine($"TRACE: {path} command {i+1:00}: {commands[i]}");
+                Check(commands.Length>0,"SqlClient diagnostic command-start capture correlated to "+path);
+            }
+            lock(traces)traces.Clear();commandCapture.Clear();
             using var series=await Get(list);using var sj=JsonDocument.Parse(await series.Content.ReadAsStringAsync());
+            var discoveryTrips=MeasureReadTrips("series discovery",out var discoveryOwner);
+            Console.WriteLine($"MEASURE: activity HTTP series discovery SQL roundtrips={discoveryTrips}");
+            ReportCommands("series discovery",discoveryOwner,discoveryTrips);
             Check(series.StatusCode==HttpStatusCode.OK && sj.RootElement.GetProperty("series").GetArrayLength()==1 &&
                 sj.RootElement.GetProperty("currentConnectivity").ValueKind==JsonValueKind.Null &&
                 sj.RootElement.GetProperty("verification").GetString()=="immutable-publication-receipts",
                 "authorized series discovery exposes exact persisted qualification without live-state claims");
+            lock(traces)traces.Clear();commandCapture.Clear();
             using var first=await Get(page+"?take=1");using var fj=JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+            var pageTrips=MeasureReadTrips("history page",out var pageOwner);
+            Console.WriteLine($"MEASURE: activity HTTP history page SQL roundtrips={pageTrips}");
+            ReportCommands("history page",pageOwner,pageTrips);
+            // This is a small-fixture regression guard, not the required
+            // 100-distinct-operation benchmark. Keep the latter gate open.
+            Check(discoveryTrips<=17 && pageTrips<=17,
+                "small-fixture authenticated series and page reads remain within 17 SQL roundtrips");
+
             var row=fj.RootElement.GetProperty("rows")[0];
             Check(first.StatusCode==HttpStatusCode.OK && first.Headers.CacheControl?.NoStore==true &&
                 row.GetProperty("state").GetString()=="Running" && row.GetProperty("startRawValue").GetString()=="ACTIVE" &&
@@ -82,6 +343,32 @@ internal static class ActivityHistoryHttpAcceptance
             using var secondJson=JsonDocument.Parse(await second.Content.ReadAsStringAsync());
             Check(second.StatusCode==HttpStatusCode.OK && secondJson.RootElement.GetProperty("rows")[0].GetProperty("effectId").GetGuid()!=row.GetProperty("effectId").GetGuid(),
                 "keyset continuation returns a distinct older exact period");
+            // Traverse the complete retained history rather than validating only
+            // the first continuation. The keyset must neither repeat nor omit rows.
+            var expectedPeriodCount=Convert.ToInt32(await Scalar(
+                "SELECT COUNT(*) FROM activity.ClosedPeriod WHERE MachineId=@machine AND MappingId=@mapping",
+                ("@machine",machine),("@mapping",mapping)));
+            var traversed=new HashSet<Guid>{row.GetProperty("effectId").GetGuid()};
+            var nextCursor=cursor;
+            while(nextCursor is not null)
+            {
+                using var continuation=await Get(page+"?take=100&cursor="+Uri.EscapeDataString(nextCursor));
+                Check(continuation.StatusCode==HttpStatusCode.OK,
+                    "complete keyset traversal returns a successful bounded page");
+                using var continuationJson=JsonDocument.Parse(await continuation.Content.ReadAsStringAsync());
+                var continuationRows=continuationJson.RootElement.GetProperty("rows");
+                Check(continuationRows.GetArrayLength() is >0 and <=100,
+                    "complete keyset traversal returns a bounded nonempty page");
+                foreach(var period in continuationRows.EnumerateArray())
+                    Check(traversed.Add(period.GetProperty("effectId").GetGuid()),
+                        "complete keyset traversal never duplicates a period");
+                var next=continuationJson.RootElement.GetProperty("nextCursor");
+                nextCursor=next.ValueKind==JsonValueKind.Null?null:next.GetString();
+                Check(traversed.Count<=expectedPeriodCount,
+                    "complete keyset traversal cannot exceed retained period count");
+            }
+            Check(traversed.Count==expectedPeriodCount,
+                "complete keyset traversal returns every retained period exactly once");
             string deepCursor;
             await using(var deep=new SqlCommand("SELECT EffectId,StartedAt,InstanceId,StartSequence FROM activity.ClosedPeriod WHERE MachineId=@machine AND MappingId=@mapping ORDER BY StartedAt,InstanceId,StartSequence,EffectId OFFSET 1 ROWS FETCH NEXT 1 ROWS ONLY",c))
             {
@@ -118,6 +405,19 @@ internal static class ActivityHistoryHttpAcceptance
             var altered=JsonNode.Parse(Convert.FromBase64String(decoded))!;altered["MappingId"]=Guid.NewGuid();
             var forged=Convert.ToBase64String(Encoding.UTF8.GetBytes(altered.ToJsonString())).TrimEnd('=').Replace('+','-').Replace('/','_');
             using(var invalid=await Get(page+"?cursor="+forged))Check(invalid.StatusCode==HttpStatusCode.BadRequest,"cross-qualification cursor cannot silently query another history");
+            // A cursor is bound to the exact immutable qualification digest, not
+            // merely to the machine/mapping identifiers. Reject a syntactically
+            // valid cursor from a different qualification before reading history.
+            var foreignQualification=JsonNode.Parse(Convert.FromBase64String(decoded))!;
+            foreignQualification["Qualification"]=Convert.ToHexString(SHA256.HashData(Guid.NewGuid().ToByteArray()));
+            var wrongQualification=Convert.ToBase64String(Encoding.UTF8.GetBytes(foreignQualification.ToJsonString()))
+                .TrimEnd('=').Replace('+','-').Replace('/','_');
+            using(var wrong=await Get(page+"?cursor="+Uri.EscapeDataString(wrongQualification)))
+                Check(wrong.StatusCode==HttpStatusCode.BadRequest,
+                    "HTTP cursor with foreign qualification digest fails closed");
+            using(var tooLong=await Get(page+"?cursor="+new string('A',2049)))
+                Check(tooLong.StatusCode==HttpStatusCode.BadRequest,
+                    "HTTP oversized cursor is rejected before base64 decoding");
             using(var oversized=await Get(page+"?take=101"))Check(oversized.StatusCode==HttpStatusCode.BadRequest,"activity page count is explicitly bounded");
             using(var denied=await Get($"/api/commissioning/v2/machines/{other}/activity"))Check(denied.StatusCode==HttpStatusCode.Unauthorized,"activity series cannot disclose an unassigned machine");
             using(var plaintext=await Get("http://localhost"+page))Check(plaintext.StatusCode==HttpStatusCode.Forbidden,"activity bearer is refused over plaintext HTTP");
@@ -130,14 +430,31 @@ internal static class ActivityHistoryHttpAcceptance
                 await Exec("UPDATE activity.ClosedPeriod SET StartRawValue=N'FORGED' WHERE EffectId=@effect",("@effect",effect));
                 using(var corrupt=await Get(page))Check(corrupt.StatusCode==HttpStatusCode.ServiceUnavailable,"altered published value fails receipt integrity without disclosing a partial page");
                 await Exec("UPDATE activity.ClosedPeriod SET StartRawValue=REPLICATE(CONVERT(nvarchar(max),N'X'),5000000) WHERE EffectId=@effect",("@effect",effect));
-                using(var big=await Get(page))Check(big.StatusCode==HttpStatusCode.ServiceUnavailable && (await big.Content.ReadAsByteArrayAsync()).Length<4096,
-                    "SQL byte budget rejects oversized period data before HTTP transfer");
+                using(var big=await Get(page))
+                {
+                    var payload=await big.Content.ReadAsByteArrayAsync();
+                    using var problem=JsonDocument.Parse(payload);
+                    Check(big.StatusCode==HttpStatusCode.ServiceUnavailable && payload.Length<4096 &&
+                        problem.RootElement.GetProperty("title").GetString()=="Activity history read exceeds bounded budget" &&
+                        !Encoding.UTF8.GetString(payload).Contains("FORGED",StringComparison.Ordinal),
+                        "SQL byte budget returns distinct bounded 503 without exposing period contents");
+                }
             }
             finally
             {
                 await Exec("UPDATE activity.ClosedPeriod SET StartRawValue=@value WHERE EffectId=@effect",("@value",original),("@effect",effect));
                 await Exec("ENABLE TRIGGER activity.TR_ClosedPeriodImmutable ON activity.ClosedPeriod");
             }
+            // This ingestion fixture can contain only legacy publications. Do not
+            // pretend that it qualifies a version-4 source-witness HTTP read.
+            // Version-4 tamper acceptance requires a separately seeded v4 fixture.
+            var witnessedOperations=Convert.ToInt32(await Scalar("""
+                SELECT COUNT(DISTINCT w.OperationId)
+                FROM activity.PublicationSourceWitness w
+                JOIN activity.ProcessorOperation o ON o.OperationId=w.OperationId
+                WHERE o.MachineId=@machine AND o.MappingId=@mapping
+                """,("@machine",machine),("@mapping",mapping)));
+            Console.WriteLine($"MEASURE: activity HTTP existing fixture witnessed operations={witnessedOperations}; v4 HTTP tamper gate remains separate");
             var broken=JsonNode.Parse(cp)!;broken["AcceptedSource"]!["OperationId"]=Guid.NewGuid();
             await SetCheckpoint(broken.ToJsonString());
             try { using var corrupt=await Get(list);Check(corrupt.StatusCode==HttpStatusCode.ServiceUnavailable,"checksum-consistent checkpoint forgery fails immutable publication ancestry"); }
@@ -174,6 +491,163 @@ internal static class ActivityHistoryHttpAcceptance
                     using var expired=await waiting;
                     Check(expired.StatusCode==HttpStatusCode.Unauthorized,"session expiring during processor wait cannot release historical data");
                 }
+            }
+
+            // Observe transaction-owned application locks on the HTTP connection from a separate
+            // SQL session. Identify the exact resources, not an aggregate count of unrelated locks.
+            {
+                var processorResource=SqlActivityProcessorStore.ProcessorLockResource(machine,mapping,"mtconnect:uuid:fixture-device");
+                var machineResource=FactoryConnect.Sql.Configuration.ConfigurationLockResources.Machine(installation,machine);
+                // Learn SQL Server's own lock descriptions from fixture-owned sessions.
+                async Task<string> FixtureDescription(string resource)
+                {
+                    await using var hold=await HoldExclusive(sql,resource);
+                    await using var spid=new SqlCommand("SELECT @@SPID",hold.Connection,hold.Transaction);
+                    var session=Convert.ToInt32(await spid.ExecuteScalarAsync());
+                    await using var query=new SqlCommand("""
+                        SELECT resource_description FROM sys.dm_tran_locks
+                        WHERE request_session_id=@session AND resource_type='APPLICATION'
+                          AND request_status='GRANT' AND request_mode='X'
+                        """,c);
+                    query.Parameters.AddWithValue("@session",session);
+                    var descriptions=new List<string>();
+                    await using(var reader=await query.ExecuteReaderAsync())
+                        while(await reader.ReadAsync())descriptions.Add(reader.GetString(0));
+                    Check(descriptions.Count==1,"fixture exclusive applock has one SQL resource description");
+                    Console.WriteLine($"TRACE: fixture session={session} resource={descriptions[0].TrimEnd()}");
+                    return descriptions[0].TrimEnd();
+                }
+                var machineDescription=await FixtureDescription(machineResource);
+                var processorDescription=await FixtureDescription(processorResource);
+                Check(machineDescription!=processorDescription,"machine and processor SQL applock descriptions are distinct");
+                // Capture application locks once and correlate by the exact blocked
+                // resource and SQL session. During sp_getapplock SQL exposes xp_userlock,
+                // not the outer LockInOrder command text.
+                async Task<(int Session,string Command,string Mode,string Status,string Resource,string WaitResource)[]> Observe()
+                {
+                    await using var query=new SqlCommand("""
+                        SELECT request_session_id,request_mode,request_status,resource_description
+                        INTO #activity_lock_snapshot FROM sys.dm_tran_locks WHERE resource_type='APPLICATION';
+                        SELECT r.session_id,COALESCE(CONVERT(nvarchar(max),st.text),''),
+                               COALESCE(l.request_mode,''),COALESCE(l.request_status,''),
+                               COALESCE(l.resource_description,''),COALESCE(r.wait_resource,'')
+                        FROM sys.dm_exec_requests r
+                        JOIN sys.dm_exec_sessions sess ON sess.session_id=r.session_id
+                        OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) st
+                        LEFT JOIN #activity_lock_snapshot l ON l.request_session_id=r.session_id
+                        WHERE sess.program_name=@app
+                        ORDER BY r.session_id,l.resource_description,l.request_status;
+                        DROP TABLE #activity_lock_snapshot;
+                        """,c);
+                    query.Parameters.AddWithValue("@app",appName);
+                    var rows=new List<(int Session,string Command,string Mode,string Status,string Resource,string WaitResource)>();
+                    await using(var reader=await query.ExecuteReaderAsync())
+                        while(await reader.ReadAsync())
+                        {
+                            var command=reader.GetString(1);
+                            var row=(Session:Convert.ToInt32(reader.GetValue(0)),
+                                Command:command.Length>60?command[..60]:command,
+                                Mode:reader.GetString(2),Status:reader.GetString(3),
+                                Resource:reader.GetString(4).TrimEnd(),WaitResource:reader.GetString(5).TrimEnd());
+                            rows.Add(row);
+                            Console.WriteLine($"TRACE: request session={row.Session} command={row.Command.Replace('\n',' ')} mode={row.Mode} status={row.Status} resource={row.Resource} waitResource={row.WaitResource}");
+                        }
+                    return rows.ToArray();
+                }
+                async Task<(int Session,string Command,string Mode,string Status,string Resource,string WaitResource)[]> WaitBlocked(
+                    Task<HttpResponseMessage> request,string description,bool expectMachineGrant)
+                {
+                    var watch=Stopwatch.StartNew();
+                    int? lastSession=null;
+                    var expectedCount=0;
+                    var violationCount=0;
+                    while(watch.Elapsed<TimeSpan.FromSeconds(5) && !request.IsCompleted)
+                    {
+                        var locks=await Observe();
+                        var candidates=locks.Where(x=>x.Status=="WAIT" && x.Resource==description &&
+                            x.WaitResource.Contains(description,StringComparison.Ordinal))
+                            .Select(x=>x.Session).Distinct().ToArray();
+                        if(candidates.Length>1)
+                            throw new InvalidOperationException("Activity HTTP: ambiguous sessions waiting on fixture resource");
+                        if(candidates.Length==1)
+                        {
+                            var session=candidates[0];
+                            var own=locks.Where(x=>x.Session==session).ToArray();
+                            var machineGranted=own.Any(x=>x.Resource==machineDescription && x.Status=="GRANT");
+                            var processorGranted=own.Any(x=>x.Resource==processorDescription && x.Status=="GRANT");
+                            var expected=!processorGranted && (expectMachineGrant?machineGranted:!machineGranted);
+                            if(lastSession!=session){expectedCount=0;violationCount=0;}
+                            lastSession=session;
+                            if(expected)
+                            {
+                                expectedCount++;
+                                violationCount=0;
+                                if(expectedCount>=3)return own;
+                            }
+                            else
+                            {
+                                expectedCount=0;
+                                violationCount++;
+                                if(violationCount>=3)
+                                    throw new InvalidOperationException($"Activity HTTP: stable lock ordering violation in session {session}");
+                            }
+                        }
+                        else {lastSession=null;expectedCount=0;violationCount=0;}
+                        await Task.Delay(50);
+                    }
+                    throw new InvalidOperationException("Activity HTTP: fixture-resource reader state not stable or not observable");
+                }
+                await using(var hold=await HoldExclusive(sql,processorResource))
+                {
+                    var pending=Get(page);
+                    var locks=await WaitBlocked(pending,processorDescription,true);
+                    Check(locks.Any(x=>x.Resource==processorDescription && x.Status=="WAIT") &&
+                        locks.Any(x=>x.Resource==machineDescription && x.Status=="GRANT") &&
+                        !locks.Any(x=>x.Resource==processorDescription && x.Status=="GRANT"),
+                        "machine applock is acquired before blocked processor applock");
+                    await hold.DisposeAsync();
+                    using var response=await pending;
+                    Check(response.StatusCode==HttpStatusCode.OK,"processor lock release resumes history read");
+                }
+                await using(var hold=await HoldExclusive(sql,machineResource))
+                {
+                    var pending=Get(page);
+                    var locks=await WaitBlocked(pending,machineDescription,false);
+                    Check(locks.Any(x=>x.Resource==machineDescription && x.Status=="WAIT") &&
+                        !locks.Any(x=>x.Resource==processorDescription && x.Status=="GRANT"),
+                        "blocked machine lock prevents processor applock acquisition");
+                    await hold.DisposeAsync();
+                    using var response=await pending;
+                    Check(response.StatusCode==HttpStatusCode.OK,"machine lock release resumes history read");
+                }
+                await using(var hold=await HoldExclusive(sql,processorResource))
+                {
+                    var watch=Stopwatch.StartNew();
+                    using var response=await Get(page);
+                    watch.Stop();
+                    Check(response.StatusCode==HttpStatusCode.ServiceUnavailable &&
+                        watch.Elapsed>=TimeSpan.FromSeconds(9) && watch.Elapsed<TimeSpan.FromSeconds(25),
+                        "processor contention preserves ten-second timeout and authority-unavailable response");
+                    var locks=await Observe();
+                    Check(!locks.Any(x=>x.Resource==machineDescription || x.Resource==processorDescription),"processor timeout releases machine and processor HTTP applocks");
+                    await using var probe=await HoldExclusive(sql,machineResource);
+                    Check(true,"machine applock is immediately available after processor timeout");
+                }
+                await using(var hold=await HoldExclusive(sql,machineResource))
+                {
+                    var watch=Stopwatch.StartNew();
+                    using var response=await Get(page);
+                    watch.Stop();
+                    Check(response.StatusCode==HttpStatusCode.ServiceUnavailable &&
+                        watch.Elapsed>=TimeSpan.FromSeconds(9) && watch.Elapsed<TimeSpan.FromSeconds(25),
+                        "machine contention preserves ten-second timeout and authority-unavailable response");
+                    var locks=await Observe();
+                    Check(!locks.Any(x=>x.Resource==machineDescription || x.Resource==processorDescription),"machine timeout releases machine and processor HTTP applocks");
+                    await using var probe=await HoldExclusive(sql,processorResource);
+                    Check(true,"processor applock is available after machine timeout");
+                }
+                using var recovered=await Get(page);
+                Check(recovered.StatusCode==HttpStatusCode.OK,"history read recovers after both lock timeouts");
             }
 
             await authority.RevokeGrantAsync(admin,Guid.NewGuid(),grant,await epoch(),"activity read grant revoked");

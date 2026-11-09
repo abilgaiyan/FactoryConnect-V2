@@ -68,7 +68,7 @@ function ActivityPeriods({ machineId, mappingId, baseAddress, bearer }: {
     {view.kind === "loading" && <p role="status">Loading closed activity periods…</p>}
     {(view.kind === "denied" || view.kind === "unavailable" || view.kind === "failed") && <ErrorState kind={view.kind} />}
     {view.kind === "ready" && <>
-      <p>Newest periods first. Times use your browser timezone. Continuity is qualified within accepted batches; unproven batch boundaries remain breaks.</p>
+      <p>Newest periods first. Times use your browser timezone. Closed periods are historical derived evidence, not proof of physical observation completeness. Cross-batch publication provenance is not yet exposed per period.</p>
       {view.data.rows.length === 0 ? <p>No closed periods have been published for this history source.</p>
         : <div style={{ overflowX: "auto" }} tabIndex={0} role="region" aria-label="Published activity period table"><table style={{ minWidth: "62rem" }}>
           <thead><tr><th>Recorded interpretation</th><th>Started</th><th>Ended</th><th style={{ whiteSpace: "nowrap" }}>Duration</th><th>Source values</th><th>Evidence</th></tr></thead>

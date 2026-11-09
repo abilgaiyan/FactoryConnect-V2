@@ -54,7 +54,7 @@ public sealed partial class SqlSecurityAuthority
                 ORDER BY StartedAt DESC,InstanceId DESC,StartSequence DESC,EffectId DESC;
                 IF COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(p.StartRawValue))+DATALENGTH(p.EndRawValue)+512)
                     FROM @selected selected INNER LOOP JOIN activity.ClosedPeriod p WITH(HOLDLOCK,FORCESEEK) ON p.EffectId=selected.EffectId),0)
-                    +COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(o.ResultBytes)))
+                    +COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(o.ResultBytes))+CONVERT(bigint,DATALENGTH(o.RequestBytes)))
                     FROM (SELECT DISTINCT p.OperationId FROM @selected selected INNER LOOP JOIN activity.ClosedPeriod p WITH(HOLDLOCK,FORCESEEK) ON p.EffectId=selected.EffectId) ids
                     INNER LOOP JOIN activity.ProcessorOperation o WITH(HOLDLOCK,FORCESEEK) ON o.OperationId=ids.OperationId),0)>8388608
                     THROW 51091,'Activity publication page exceeds byte budget.',1;
@@ -77,6 +77,7 @@ public sealed partial class SqlSecurityAuthority
             Number(q,"@sequence",after is null?null:ulong.Parse(after.StartSequence,CultureInfo.InvariantCulture));
             var rows=new List<(PublishedActivityPeriod Row,ClosedActivityPeriod Period)>();
             var receipts=new Dictionary<Guid,ActivityDurableResult>();
+            var receiptPayloads=new Dictionary<Guid,byte[]>();
             await using(var r=await q.ExecuteReaderAsync(ct))
             {
                 while(await r.ReadAsync(ct))
@@ -100,15 +101,19 @@ public sealed partial class SqlSecurityAuthority
                 await r.NextResultAsync(ct);
                 while(await r.ReadAsync(ct))
                 {
-                    var receipt=JsonSerializer.Deserialize<ActivityDurableResult>((byte[])r[2])
+                    var resultPayload=(byte[])r[2];
+                    var receipt=JsonSerializer.Deserialize<ActivityDurableResult>(resultPayload)
                         ?? throw new InvalidDataException("Published operation result missing.");
                     if(receipt.Replayed || receipt.Checkpoint.Qualification!=identity ||
                         receipt.Checkpoint.AcceptedSource?.OperationId!=r.GetGuid(0) ||
                         receipt.Checkpoint.NextGeneration!=(ulong)r.GetInt64(1) || receipt.NewPeriods.Count>1000)
                         throw new InvalidDataException("Published operation ancestry mismatch.");
                     receipts.Add(r.GetGuid(0),receipt);
+                    receiptPayloads.Add(r.GetGuid(0),resultPayload);
                 }
             }
+            await VerifyActivityPublicationReceiptsAsync(c,t,
+                receiptPayloads.Select(x=>new PublicationReadInput(x.Key,identity,x.Value)).ToArray(),ct);
             foreach(var item in rows)
                 if(!receipts.TryGetValue(item.Row.PublicationOperationId,out var receipt) ||
                     receipt.NewPeriods.Count(x=>x==item.Period)!=1)
@@ -133,16 +138,15 @@ public sealed partial class SqlSecurityAuthority
         {
             return await Transaction(null,false,async(c,t)=> {
                 Activity.Current?.SetTag("security.activity.read",true);
-                await Lock(c,t,ConfigurationLockResources.Machine(installationId,machine),false,ct);
-                if(mapping.HasValue)await Lock(c,t,SqlActivityProcessorStore.ProcessorLockResource(machine,mapping.Value,stream),false,ct);
+                var machineLock=ConfigurationLockResources.Machine(installationId,machine);
+                if(mapping.HasValue)await LockInOrder(c,t,machineLock,SqlActivityProcessorStore.ProcessorLockResource(machine,mapping.Value,stream),false,ct);
+                else await Lock(c,t,machineLock,false,ct);
                 async Task Validate()
                 {
                     var state=await State(c,t,ct);var actor=await Session(c,t,token,state.Now,ct);
                     await Authorize(c,t,actor,"commissioning.read",AuthorizationScope.Machine(site,machine),state.Now,ct);
                 }
                 await Validate();
-                await using(var master=Command(c,t,"SELECT 1 FROM [master].Machine m JOIN [master].Site s ON s.SiteId=m.SiteId WHERE m.MachineId=@machine AND m.SiteId=@site AND m.IsRetired=0 AND s.IsRetired=0"))
-                { Add(master,("@site",site),("@machine",machine));if(await master.ExecuteScalarAsync(ct) is null)throw new SecurityDeniedException(); }
                 var result=await read(c,t);
                 await Validate(); // Expiry after row/processor waits cannot release data.
                 return result;
@@ -155,6 +159,10 @@ public sealed partial class SqlSecurityAuthority
         Guid site,Guid machine,string stream,Guid? mapping,CancellationToken ct)
     {
         await using var q=Command(c,t,"""
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM [master].Machine m JOIN [master].Site s ON s.SiteId=m.SiteId
+                WHERE m.MachineId=@machine AND m.SiteId=@site AND m.IsRetired=0 AND s.IsRetired=0
+            ) THEN 1 ELSE 0 END;
             DECLARE @selected TABLE(MappingId uniqueidentifier NOT NULL PRIMARY KEY);
             INSERT @selected SELECT TOP(101) MappingId FROM activity.ProcessorCheckpoint WITH(HOLDLOCK)
                 WHERE MachineId=@machine AND StreamKeyBytes=@stream AND (@mapping IS NULL OR MappingId=@mapping)
@@ -163,7 +171,7 @@ public sealed partial class SqlSecurityAuthority
             IF COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(p.CheckpointJson))) FROM @selected s
                 INNER LOOP JOIN activity.ProcessorCheckpoint p WITH(HOLDLOCK,FORCESEEK) ON p.MachineId=@machine AND p.StreamKeyBytes=@stream AND p.MappingId=s.MappingId),0)>8388608
                 THROW 51091,'Activity checkpoint bytes exceed bound.',1;
-            IF COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(p.CheckpointJson))+COALESCE(DATALENGTH(o.ResultBytes),0))
+            IF COALESCE((SELECT SUM(CONVERT(bigint,DATALENGTH(p.CheckpointJson))+COALESCE(CONVERT(bigint,DATALENGTH(o.ResultBytes)),0)+COALESCE(CONVERT(bigint,DATALENGTH(o.RequestBytes)),0))
                 FROM @selected s INNER LOOP JOIN activity.ProcessorCheckpoint p WITH(HOLDLOCK,FORCESEEK) ON p.MachineId=@machine AND p.StreamKeyBytes=@stream AND p.MappingId=s.MappingId
                 LEFT LOOP JOIN activity.ProcessorOperation o WITH(HOLDLOCK,FORCESEEK) ON o.OperationId=TRY_CONVERT(uniqueidentifier,JSON_VALUE(p.CheckpointJson,'$.AcceptedSource.OperationId'))),0)>8388608
                 THROW 51091,'Activity ancestry bytes exceed bound.',1;
@@ -176,11 +184,14 @@ public sealed partial class SqlSecurityAuthority
                     AND o.MachineId=p.MachineId AND o.StreamKeyBytes=p.StreamKeyBytes AND o.MappingId=p.MappingId
             ORDER BY p.MappingId;
             """);
-        Add(q,("@machine",machine),("@stream",ActivityUtf8.GetBytes(stream)),("@mapping",(object?)mapping??DBNull.Value));
+        Add(q,("@site",site),("@machine",machine),("@stream",ActivityUtf8.GetBytes(stream)),("@mapping",(object?)mapping??DBNull.Value));
         q.Parameters["@stream"].Size=512;
         q.Parameters["@mapping"].SqlDbType=SqlDbType.UniqueIdentifier;
         var result=new List<StoredActivity>();
+        var sourceOperations=new List<(Guid OperationId,ActivityQualificationIdentity Qualification,byte[] ResultBytes)>();
         await using var r=await q.ExecuteReaderAsync(ct);
+        if(!await r.ReadAsync(ct) || r.GetInt32(0)!=1)throw new SecurityDeniedException();
+        if(!await r.NextResultAsync(ct))throw new InvalidDataException("Missing activity checkpoint result.");
         while(await r.ReadAsync(ct))
         {
             var json=r.GetString(3);
@@ -197,6 +208,7 @@ public sealed partial class SqlSecurityAuthority
             if(receipt is null || receipt.Replayed || receipt.Checkpoint!=cp || source.OperationId!=r.GetGuid(5) ||
                 receipt.Checkpoint.NextGeneration!=(ulong)r.GetInt64(6))
                 throw new InvalidDataException("Activity checkpoint differs from its publication receipt.");
+            sourceOperations.Add((source.OperationId,cp.Qualification,(byte[])r[7]));
             if(cp.LastConsumedSample is null)
             {
                 if(source.LastObservation is not null || source.FrontierBatch is null || cp.OpenAnchor is not null || cp.OpenState is not null || receipt.NewPeriods.Count!=0)
@@ -206,6 +218,9 @@ public sealed partial class SqlSecurityAuthority
             result.Add(new(cp,new(cp.Qualification.MappingId,cp.Qualification.SourceAddress,Convert.ToHexString((byte[])r[1]),
                 cp.NextGeneration.ToString(CultureInfo.InvariantCulture),cp.LastConsumedSample.ObservedAt,source.PackageRevisionId,source.AcknowledgementId)));
         }
+        await r.DisposeAsync();
+        await VerifyActivityPublicationReceiptsAsync(c,t,
+            sourceOperations.Select(x=>new PublicationReadInput(x.OperationId,x.Qualification,x.ResultBytes)).ToArray(),ct);
         return result;
     }
     private static void Number(SqlCommand q,string name,ulong? value)
@@ -214,6 +229,7 @@ public sealed partial class SqlSecurityAuthority
     private static HistoryCursor? DecodeCursor(string? value,Guid machine,string stream,Guid mapping,string qualification)
     {
         if(value is null)return null;
+        if(value.Length>2048)throw new ArgumentException("Activity cursor exceeds bounded length.");
         try
         {
             var raw=value.Replace('-','+').Replace('_','/');raw=raw.PadRight((raw.Length+3)/4*4,'=');
