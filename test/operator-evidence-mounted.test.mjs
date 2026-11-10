@@ -75,3 +75,33 @@ test("authorized machine selection shows retained SQL-shaped values, then sessio
   assert.match(h.document.querySelector("[role=alert]").textContent, /Sign in/);
   assert.equal(calls.length, 3);
 });
+
+test("operator discovery accumulates signed pages and does not mislabel the fleet incomplete", async t => {
+  const previous = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previous; });
+  const secondId = "33333333-3333-3333-3333-333333333333";
+  const calls = [];
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url));
+    calls.push(parsed.searchParams.get("cursor"));
+    const second = parsed.searchParams.get("cursor") === "signed-page-2";
+    if (calls.length > 2) throw Error("Unexpected pagination request");
+    return new Response(JSON.stringify({
+      machines: [{ siteId, machineId: second ? secondId : machineId,
+        displayName: second ? "CNC Two" : "CNC One" }],
+      isComplete: second, continuationSupported: true, maximumReturned: 100,
+      nextCursor: second ? null : "signed-page-2",
+    }), { status: 200, headers: { "Content-Type": "application/json",
+      "X-Result-Complete": String(second) } });
+  };
+  const h = await mountInDom(React.createElement(OperatorEvidencePage,
+    { baseAddress, sessionBearer: "fixture-session" }), baseAddress);
+  t.after(() => h.dispose());
+  const selector = h.document.querySelector("select");
+  assert.ok(selector);
+  assert.equal(selector.options.length, 3);
+  assert.deepEqual(calls, [null, "signed-page-2"]);
+  assert.match(selector.textContent, /CNC One/);
+  assert.match(selector.textContent, /CNC Two/);
+  assert.doesNotMatch(h.document.body.textContent, /Machine list is incomplete/);
+});
