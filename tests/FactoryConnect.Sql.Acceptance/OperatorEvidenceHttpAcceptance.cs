@@ -132,7 +132,9 @@ internal static class OperatorEvidenceHttpAcceptance
                 && !MachineDiscoveryCursor.TryRead(signedCursor, cursorKey, Guid.NewGuid(), site, hash, out _)
                 && !MachineDiscoveryCursor.TryRead(signedCursor, cursorKey, installation, Guid.NewGuid(), hash, out _),
                 "signed cursor rejects cross-session, cross-installation and cross-site reuse");
-            var forgedCursor = signedCursor[..^1] + (signedCursor[^1] == 'A' ? 'B' : 'A');
+            var signatureStart = signedCursor.IndexOf('.') + 1;
+            var forgedCursor = signedCursor[..signatureStart] +
+                (signedCursor[signatureStart] == 'A' ? 'B' : 'A') + signedCursor[(signatureStart + 1)..];
             Check(!MachineDiscoveryCursor.TryRead(forgedCursor, cursorKey, installation, site, hash, out _)
                 && !MachineDiscoveryCursor.TryRead("forged", cursorKey, installation, site, hash, out _),
                 "signed cursor rejects modified and malformed tokens");
