@@ -52,6 +52,8 @@ try {
   expect(discovery.status).toBe(200);
   expect(Array.isArray(discovery.payload.machines)).toBe(true);
   expect(typeof discovery.payload.isComplete).toBe('boolean');
+  expect(discovery.payload.continuationSupported).toBe(false);
+  expect(discovery.payload.maximumReturned).toBe(100);
   expect(discovery.complete).toBe(String(discovery.payload.isComplete));
   expect(discovery.payload.isComplete).toBe(discovery.payload.machines.length < 100);
   for (const response of discovery.forged) {
