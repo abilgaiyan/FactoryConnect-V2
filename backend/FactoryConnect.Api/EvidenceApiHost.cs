@@ -38,6 +38,8 @@ if (trustedProxies.Length > 0)
     {
         options.ForwardedHeaders = forwarded.ForwardedHeaders;
         options.ForwardLimit = forwarded.ForwardLimit;
+        options.KnownProxies.Clear();
+        options.KnownNetworks.Clear();
         foreach (var proxyIp in forwarded.KnownProxies) options.KnownProxies.Add(proxyIp);
     });
 }
