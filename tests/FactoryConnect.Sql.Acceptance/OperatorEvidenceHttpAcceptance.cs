@@ -270,21 +270,24 @@ internal static class OperatorEvidenceHttpAcceptance
                 await connection.OpenAsync();
                 await using var command = connection.CreateCommand();
                 command.CommandText = """
-                    DECLARE @operation uniqueidentifier=NEWID();
-                    DECLARE @request varbinary(max)=0x464332303435;
-                    INSERT security.SecurityOperation
-                        (OperationId,ActorPrincipalId,RequestBytes,RequestHash,
-                         ScopeKind,SiteId,ResultBytes)
-                    SELECT @operation,s.PrincipalId,@request,
-                        HASHBYTES('SHA2_256',@request),'S',@site,0x01
-                    FROM security.SessionAuthority s WHERE s.TokenHash=@hash;
-                    INSERT security.GrantRevocation(GrantId,OperationId)
-                    SELECT g.GrantId,@operation
+                    DECLARE @revocations TABLE(GrantId uniqueidentifier,OperationId uniqueidentifier);
+                    INSERT @revocations(GrantId,OperationId)
+                    SELECT g.GrantId,NEWID()
                     FROM security.PermissionGrant g
                     JOIN security.SessionAuthority s ON s.PrincipalId=g.GranteeId
                     WHERE s.TokenHash=@hash AND g.Permission='commissioning.read'
                       AND g.ScopeKind='M' AND g.SiteId=@site AND g.MachineId<>@keep
                       AND NOT EXISTS(SELECT 1 FROM security.GrantRevocation r WHERE r.GrantId=g.GrantId);
+                    INSERT security.SecurityOperation
+                        (OperationId,ActorPrincipalId,RequestBytes,RequestHash,
+                         ScopeKind,SiteId,ResultBytes)
+                    SELECT r.OperationId,s.PrincipalId,CONVERT(varbinary(16),r.GrantId),
+                        HASHBYTES('SHA2_256',CONVERT(varbinary(16),r.GrantId)),
+                        'S',@site,0x01
+                    FROM @revocations r
+                    CROSS JOIN security.SessionAuthority s WHERE s.TokenHash=@hash;
+                    INSERT security.GrantRevocation(GrantId,OperationId)
+                    SELECT GrantId,OperationId FROM @revocations;
                     """;
                 command.Parameters.AddWithValue("@hash", hash);
                 command.Parameters.AddWithValue("@site", site);
