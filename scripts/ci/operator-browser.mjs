@@ -59,7 +59,7 @@ try {
   expect(discovery.payload.machines.length).toBeLessThanOrEqual(100);
   for (const response of discovery.forged) {
     expect(response.status).toBe(400);
-    expect(response.payload.error).toContain('continuation is not yet supported');
+    expect(response.payload.error).toMatch(/Invalid machine discovery cursor|Use the signed cursor parameter/);
   }
   await stage('revoke-session', { hash: createHash('sha256').update(Buffer.from(bearer, 'base64')).digest('hex') });
   const denied = await page.evaluate(async ({ machine, bearer }) => (await fetch(`/api/commissioning/v2/machines/${machine}/evidence`, { headers: { Authorization: 'Bearer ' + bearer } })).status,
