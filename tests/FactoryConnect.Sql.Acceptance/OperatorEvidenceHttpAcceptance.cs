@@ -57,6 +57,8 @@ internal static class OperatorEvidenceHttpAcceptance
                     ["Evidence:InstallationId"] = installation.ToString("D"),
                     ["Evidence:SiteId"] = site.ToString("D"),
                     ["Evidence:StreamKey"] = "mtconnect:uuid:fixture-device",
+                    ["Evidence:MachineDiscoveryCursorKey"] = Convert.ToBase64String(
+                        SHA256.HashData(Encoding.UTF8.GetBytes("disposable-operator-http-acceptance-cursor-key"))),
                 }));
             host.ConfigureTestServices(services =>
                 services.AddSingleton<IHumanIdentityVerifier>(new FixtureIdentityVerifier(identity)));
