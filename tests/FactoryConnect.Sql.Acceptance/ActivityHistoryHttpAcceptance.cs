@@ -228,11 +228,27 @@ internal static class ActivityHistoryHttpAcceptance
         try
         {
             await UpdateHash(corrupted);
-            using var response=await Get();
-            var payload=await response.Content.ReadAsByteArrayAsync();
-            if(response.StatusCode!=HttpStatusCode.ServiceUnavailable || payload.Length>=4096)
-                throw new InvalidOperationException("v4 HTTP tamper must return bounded 503");
-            Console.WriteLine("PASS: authenticated v4 witness hash tamper fails closed with bounded HTTP 503");
+            // A 503 alone could be any outage (lock timeout, SQL unavailable). Require the integrity-failure
+            // problem title so the test proves the verifier, not availability, rejected the tampered witness,
+            // on both series discovery and the 100-row history page.
+            async Task RequireIntegrityFailure(HttpResponseMessage response,string label)
+            {
+                var payload=await response.Content.ReadAsByteArrayAsync();
+                string? title=null;
+                if(payload.Length<4096)
+                {
+                    using var problem=JsonDocument.Parse(payload);
+                    title=problem.RootElement.TryGetProperty("title",out var value)?value.GetString():null;
+                }
+                if(response.StatusCode!=HttpStatusCode.ServiceUnavailable || payload.Length>=4096 ||
+                    title!="Activity history integrity verification failed")
+                    throw new InvalidOperationException("v4 HTTP tamper must return bounded integrity-failure 503: "+label);
+            }
+            using(var response=await Get())
+                await RequireIntegrityFailure(response,"series discovery");
+            using(var response=await GetPath($"/api/commissioning/v2/machines/{machine}/activity/{mapping}?take=100"))
+                await RequireIntegrityFailure(response,"history page");
+            Console.WriteLine("PASS: authenticated v4 witness hash tamper fails closed with bounded integrity-failure HTTP 503");
         }
         finally
         {
@@ -648,6 +664,29 @@ internal static class ActivityHistoryHttpAcceptance
                 }
                 using var recovered=await Get(page);
                 Check(recovered.StatusCode==HttpStatusCode.OK,"history read recovers after both lock timeouts");
+            }
+
+            // The machine/site retirement guard is evaluated inside the checkpoint read. A retired machine or
+            // site must be denied on discovery and on both page forms exactly like an unassigned machine, with
+            // no history in the body, and reads must resume once the retirement is reverted.
+            foreach(var (retire,restore,retiredLabel,retiredId) in new[]{
+                ("UPDATE [master].Machine SET IsRetired=1 WHERE MachineId=@id","UPDATE [master].Machine SET IsRetired=0 WHERE MachineId=@id","retired machine",machine),
+                ("UPDATE [master].Site SET IsRetired=1 WHERE SiteId=@id","UPDATE [master].Site SET IsRetired=0 WHERE SiteId=@id","retired site",site)})
+            {
+                await Exec(retire,("@id",retiredId));
+                try
+                {
+                    foreach(var retiredPath in new[]{list,page,page+"?take=1"})
+                    {
+                        using var retiredResponse=await Get(retiredPath);
+                        var retiredBody=await retiredResponse.Content.ReadAsStringAsync();
+                        Check(retiredResponse.StatusCode==HttpStatusCode.Unauthorized&&retiredBody.Length<4096&&!retiredBody.Contains("effectId"),
+                            retiredLabel+" is denied without disclosing history: "+retiredPath[retiredPath.IndexOf("/activity",StringComparison.Ordinal)..]);
+                    }
+                }
+                finally{await Exec(restore,("@id",retiredId));}
+                using var retiredRestored=await Get(page);
+                Check(retiredRestored.StatusCode==HttpStatusCode.OK,"history reads normally after the "+retiredLabel+" is restored");
             }
 
             await authority.RevokeGrantAsync(admin,Guid.NewGuid(),grant,await epoch(),"activity read grant revoked");
