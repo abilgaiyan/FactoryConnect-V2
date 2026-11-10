@@ -45,6 +45,16 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
             <option value="">Select history source</option>
             {view.data.series.map(x => <option key={x.mappingId} value={x.mappingId}>{x.sourceAddress} ({x.mappingId})</option>)}
           </select></>}
+        {selected && <div aria-label="Latest processed observation">
+          <h3>Latest processed observation</h3>
+          <dl>
+            <dt>Observed at</dt>
+            <dd><time dateTime={selected.lastObservedAt}>{new Date(selected.lastObservedAt).toLocaleString()}</time></dd>
+            <dt>Activity source</dt><dd>{selected.sourceAddress}</dd>
+            <dt>Processing generation</dt><dd>{selected.generation}</dd>
+          </dl>
+          <p>This timestamp is the last observation represented by the verified activity checkpoint. It does not establish current machine state, connection health, or live freshness.</p>
+        </div>}
         {selected && <ActivityPeriods key={`${machineId}:${selected.mappingId}:${view.bearer}`} machineId={machineId} mappingId={selected.mappingId}
           baseAddress={baseAddress} bearer={view.bearer} />}
       </>)}
