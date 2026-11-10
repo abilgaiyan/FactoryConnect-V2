@@ -140,7 +140,7 @@ internal static class OperatorLogin
             }
             catch (SecurityDeniedException) { return Results.Unauthorized(); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception) { return Results.Problem(statusCode: 503, title: "Session authority unavailable"); }
+            catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "operator-session-read", "Session authority unavailable"); }
             finally { CryptographicOperations.ZeroMemory(hash); }
         });
         app.MapPost("/api/security/v2/logout", async (HttpContext http, IConfiguration config, CancellationToken ct) =>
