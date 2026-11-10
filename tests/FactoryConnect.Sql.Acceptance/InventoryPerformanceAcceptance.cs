@@ -43,8 +43,8 @@ internal static class InventoryPerformanceAcceptance
             INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
                 SELECT NEWID(),@site,CONCAT(N'Authorized machine ',i),CONVERT(bit,0)
                 FROM n OPTION(MAXRECURSION 0);
-            INSERT security.PermissionGrant(GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
-                VALUES(NEWID(),@actor,@actor,'bootstrap','commissioning.read','S',1,0,
+            INSERT security.PermissionGrant(GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,ScopeSiteId,UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
+                VALUES(NEWID(),@actor,@actor,'bootstrap','commissioning.read','S',@site,1,0,
                     DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()));
             """,("@site",discoverySite),("@actor",actor));
         var discovery=new SqlSecurityAuthority(pooled,target.InstallationId);
