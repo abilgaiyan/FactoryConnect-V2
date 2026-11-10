@@ -119,6 +119,39 @@ internal static class OperatorEvidenceHttpAcceptance
                 Check(rejected.StatusCode == HttpStatusCode.BadRequest,
                     "authenticated machine discovery rejects unsigned " + parameter);
             }
+            // A cursor for a different session, site or installation must never
+            // be accepted, even when the machine seek key is otherwise valid.
+            var cursorKey = SHA256.HashData(
+                Encoding.UTF8.GetBytes("disposable-operator-http-acceptance-cursor-key"));
+            var signedCursor = MachineDiscoveryCursor.Issue(cursorKey, installation, site, hash, machine);
+            Check(MachineDiscoveryCursor.TryRead(signedCursor, cursorKey, installation, site, hash, out var signedAfter)
+                && signedAfter == machine,
+                "signed cursor roundtrip preserves the authenticated machine seek position");
+            var anotherHash = SHA256.HashData(Encoding.UTF8.GetBytes("other human session"));
+            Check(!MachineDiscoveryCursor.TryRead(signedCursor, cursorKey, installation, site, anotherHash, out _)
+                && !MachineDiscoveryCursor.TryRead(signedCursor, cursorKey, Guid.NewGuid(), site, hash, out _)
+                && !MachineDiscoveryCursor.TryRead(signedCursor, cursorKey, installation, Guid.NewGuid(), hash, out _),
+                "signed cursor rejects cross-session, cross-installation and cross-site reuse");
+            var forgedCursor = signedCursor[..^1] + (signedCursor[^1] == 'A' ? 'B' : 'A');
+            Check(!MachineDiscoveryCursor.TryRead(forgedCursor, cursorKey, installation, site, hash, out _)
+                && !MachineDiscoveryCursor.TryRead("forged", cursorKey, installation, site, hash, out _),
+                "signed cursor rejects modified and malformed tokens");
+            using (var signedHttp = await AuthorizedGet(
+                "/api/commissioning/v2/evidence-machines?cursor=" + Uri.EscapeDataString(signedCursor)))
+            {
+                Check(signedHttp.StatusCode == HttpStatusCode.OK,
+                    "signed cursor reaches authorized SQL keyset page");
+                using var signedJson = JsonDocument.Parse(await signedHttp.Content.ReadAsStringAsync());
+                Check(signedJson.RootElement.GetProperty("machines").GetArrayLength() == 0 &&
+                    signedJson.RootElement.GetProperty("isComplete").GetBoolean(),
+                    "signed continuation after last authorized machine returns complete empty page");
+            }
+            using (var wrongSession = await AuthorizedGet(
+                "/api/commissioning/v2/evidence-machines?cursor=" +
+                Uri.EscapeDataString(MachineDiscoveryCursor.Issue(cursorKey, installation, site, anotherHash, machine))))
+                Check(wrongSession.StatusCode == HttpStatusCode.BadRequest,
+                    "HTTP rejects signed cursor belonging to a different session");
+
             var authority = new SqlSecurityAuthority(sql, installation);
             var firstPage = await authority.ReadOperatorEvidenceMachinePageAsync(hash, site);
             Check(firstPage.Machines.Count == 1 && !firstPage.HasMore &&
