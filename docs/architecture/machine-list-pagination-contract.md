@@ -39,3 +39,23 @@ presented as the complete fleet.
 
 Implementation, schema changes and production deployment require separate
 qualification.
+
+## Implementation status (PR #48)
+
+The HTTP endpoint now supports opt-in HMAC-SHA256 signed seek cursors when
+`Evidence:MachineDiscoveryCursorKey` is configured as a persistent base64 secret
+containing at least 32 random bytes. Keep the key out of source control, share
+it across API replicas, and rotate it to invalidate previously issued cursors.
+
+A cursor binds installation ID, site ID, the SHA-256 session bearer hash, last
+returned machine ID and a five-minute expiration. Forged, expired, cross-session
+or cross-installation cursors are rejected before SQL page retrieval. SQL
+rechecks current session validity and permission ancestry for each page.
+`nextCursor` is returned only if SQL finds an additional authorized row.
+With no configured key, continuation remains disabled and incomplete first
+pages remain visibly incomplete.
+
+**Not yet qualified:** authenticated multi-page HTTP acceptance for 101/1,200
+machines, cursor expiry/cross-user tampering acceptance, permission-change
+behavior, dashboard accumulation and performance measurements. This is not
+production deployment approval.
