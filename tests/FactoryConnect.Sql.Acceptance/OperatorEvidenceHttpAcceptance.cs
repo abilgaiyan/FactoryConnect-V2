@@ -270,8 +270,16 @@ internal static class OperatorEvidenceHttpAcceptance
                 await connection.OpenAsync();
                 await using var command = connection.CreateCommand();
                 command.CommandText = """
+                    DECLARE @operation uniqueidentifier=NEWID();
+                    DECLARE @request varbinary(max)=0x464332303435;
+                    INSERT security.SecurityOperation
+                        (OperationId,ActorPrincipalId,RequestBytes,RequestHash,
+                         ScopeKind,SiteId,ResultBytes)
+                    SELECT @operation,s.PrincipalId,@request,
+                        HASHBYTES('SHA2_256',@request),'S',@site,0x01
+                    FROM security.SessionAuthority s WHERE s.TokenHash=@hash;
                     INSERT security.GrantRevocation(GrantId,OperationId)
-                    SELECT g.GrantId,NEWID()
+                    SELECT g.GrantId,@operation
                     FROM security.PermissionGrant g
                     JOIN security.SessionAuthority s ON s.PrincipalId=g.GranteeId
                     WHERE s.TokenHash=@hash AND g.Permission='commissioning.read'
