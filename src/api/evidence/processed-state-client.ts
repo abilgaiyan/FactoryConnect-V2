@@ -17,6 +17,7 @@ export interface ProcessedStateResult {
   currentConnectivity: null;
   freshness: "not-established";
   coverage: "not-established";
+  readAsOf: string;
   status: "no-processed-state" | "processed-state";
   states: ProcessedState[];
 }
@@ -41,7 +42,7 @@ export async function readProcessedState(base: string, machineId: string, bearer
   const body: unknown = await response.json();
   if (!record(body) || body.machineId !== machineId || !guid(body.siteId) || typeof body.streamKey !== "string"
     || body.evidenceKind !== "verified-processed-state" || body.currentConnectivity !== null
-    || body.freshness !== "not-established" || body.coverage !== "not-established"
+    || body.freshness !== "not-established" || body.coverage !== "not-established" || !utc(body.readAsOf)
     || !Array.isArray(body.states) || body.states.length > 100 || !body.states.every(validState)
     || new Set(body.states.map(x => x.mappingId)).size !== body.states.length
     || body.status !== (body.states.length ? "processed-state" : "no-processed-state"))
