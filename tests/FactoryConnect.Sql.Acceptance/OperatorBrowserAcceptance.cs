@@ -137,6 +137,7 @@ internal static class OperatorBrowserAcceptance
             using var child=Process.Start(info)!;
             var errors=child.StandardError.ReadToEndAsync(ct);
             var stages=0;
+            var originalSql = api.Configuration.GetConnectionString("Evidence")!;
             try
             {
                 while(await child.StandardOutput.ReadLineAsync(ct) is { } line)
@@ -156,13 +157,26 @@ internal static class OperatorBrowserAcceptance
                         var hash=Convert.FromHexString(message.RootElement.GetProperty("hash").GetString()!);
                         await authority.RevokeSessionAsync(adminToken,Guid.NewGuid(),hash,await epoch(),"browser acceptance session revocation",ct);
                     }
+                    else if(stage=="sql-outage-start")
+                    {
+                        // Unreachable SQL endpoint, not a mocked authority or skipped SQL command.
+                        api.Configuration["ConnectionStrings:Evidence"] =
+                            "Server=127.0.0.1,1;Database=FactoryConnectOutage;User Id=invalid;Password=invalid;Encrypt=True;TrustServerCertificate=True;Connect Timeout=1;ConnectRetryCount=0";
+                    }
+                    else if(stage=="sql-outage-end")
+                        api.Configuration["ConnectionStrings:Evidence"] = originalSql;
+                    else if(stage=="revoke-outage-session")
+                    {
+                        var hash=Convert.FromHexString(message.RootElement.GetProperty("hash").GetString()!);
+                        await authority.RevokeSessionAsync(adminToken,Guid.NewGuid(),hash,await epoch(),"outage logout bearer cleanup",ct);
+                    }
                     else if(stage=="revoke-grant")await authority.RevokeGrantAsync(adminToken,Guid.NewGuid(),grant,await epoch(),"browser acceptance grant revocation",ct);
                     else if(stage!="complete")throw new InvalidOperationException("Unexpected browser stage");
                     stages++;Console.WriteLine("PASS: real HTTPS browser "+stage);
                     await child.StandardInput.WriteLineAsync("continue");await child.StandardInput.FlushAsync(ct);
                 }
                 await child.WaitForExitAsync(ct);
-                if(child.ExitCode!=0||stages!=(activityMapping.HasValue?3:8))throw new InvalidOperationException("Browser acceptance failed: "+await errors);
+                if(child.ExitCode!=0||stages!=(activityMapping.HasValue?3:11))throw new InvalidOperationException("Browser acceptance failed: "+await errors);
                 return stages;
             }
             finally{if(!child.HasExited)child.Kill(true);}
