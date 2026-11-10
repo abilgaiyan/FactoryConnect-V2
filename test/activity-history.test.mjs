@@ -10,7 +10,7 @@ const {PublishedMachineActivity}=await vite.ssrLoadModule('/src/presentation/Pub
 const machine='11111111-1111-1111-1111-111111111111', mapping='22222222-2222-2222-2222-222222222222';
 const other='33333333-3333-3333-3333-333333333333', base='https://localhost/';
 const envelope={machineId:machine,siteId:other,streamKey:'mtconnect:fixture',evidenceKind:'historical-derived-activity',currentConnectivity:null,verification:'immutable-publication-receipts',continuity:'same-batch-only-not-physical-completeness'};
-const series={mappingId:mapping,sourceAddress:'execution',qualificationSha256:'A'.repeat(64),generation:'18446744073709551615',lastObservedAt:'2026-11-07T10:00:00Z',packageRevisionId:other,acknowledgementId:other};
+const series={mappingId:mapping,sourceAddress:'execution',qualificationSha256:'A'.repeat(64),generation:'18446744073709551615',lastObservedAt:'2026-11-07T10:00:00Z',lastProcessedState:'Running',packageRevisionId:other,acknowledgementId:other};
 const row={effectId:other,publicationOperationId:other,state:'Running',startedAt:'2026-11-07T09:00:00Z',endedAt:'2026-11-07T09:00:01Z',durationTicks:'10000000',instanceId:'18446744073709551615',startSequence:'18446744073709551614',endSequence:'18446744073709551615',startRawValue:'ACTIVE',endRawValue:'READY'};
 const page={...envelope,series,rows:[row],nextCursor:'older-cut'};
 test('activity protocol preserves UInt64 strings and rejects mismatched scope, overflow and live-state claims',async()=>{
@@ -34,6 +34,7 @@ test('mounted history pages bounded cuts, preserves provenance, and hides old ma
   assert.match(h.document.querySelector('tbody').textContent,/Running/);
   assert.match(h.document.querySelector('details').textContent,/18446744073709551615/);
   assert.match(h.document.body.textContent,/1 s/);
+  assert.match(h.document.body.textContent,/Last processed activity stateRunning/);
   await act(async()=>[...h.document.querySelectorAll('button')].find(x=>x.textContent==='Older activity periods').click());
   assert.match(h.document.querySelector('tbody').textContent,/Idle/);
   assert.ok(calls.at(-1).url.endsWith('?cursor=older-cut'));

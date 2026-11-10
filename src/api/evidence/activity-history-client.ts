@@ -6,6 +6,7 @@ export interface ActivitySeries {
   qualificationSha256: string;
   generation: string;
   lastObservedAt: string;
+  lastProcessedState: "Running" | "Idle" | "Stopped" | "Fault" | "Unknown" | null;
   packageRevisionId: string;
   acknowledgementId: string;
 }
@@ -53,6 +54,7 @@ function series(x: unknown): x is ActivitySeries {
   return record(x) && guid(x.mappingId) && typeof x.sourceAddress === "string" && x.sourceAddress.length > 0
     && typeof x.qualificationSha256 === "string" && /^[\da-f]{64}$/i.test(x.qualificationSha256)
     && uint(x.generation) && BigInt(x.generation) > 0n && utc(x.lastObservedAt)
+    && (x.lastProcessedState === null || ["Running", "Idle", "Stopped", "Fault", "Unknown"].includes(String(x.lastProcessedState)))
     && guid(x.packageRevisionId) && guid(x.acknowledgementId);
 }
 function period(x: unknown): x is ActivityPeriod {

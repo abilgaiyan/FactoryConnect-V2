@@ -52,8 +52,9 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
             <dd><time dateTime={selected.lastObservedAt}>{new Date(selected.lastObservedAt).toLocaleString()}</time></dd>
             <dt>Activity source</dt><dd>{selected.sourceAddress}</dd>
             <dt>Processing generation</dt><dd>{selected.generation}</dd>
+            <dt>Last processed activity state</dt><dd>{selected.lastProcessedState ?? "Not qualified"}</dd>
           </dl>
-          <p>This timestamp is the last observation represented by the verified activity checkpoint. It does not establish current machine state, connection health, or live freshness.</p>
+          <p>This timestamp and interpreted state come from the verified activity checkpoint. They are historical processing evidence, not a live machine-state, connection-health, or freshness claim.</p>
         </div>}
         {selected && <ActivityPeriods key={`${machineId}:${selected.mappingId}:${view.bearer}`} machineId={machineId} mappingId={selected.mappingId}
           baseAddress={baseAddress} bearer={view.bearer} />}
