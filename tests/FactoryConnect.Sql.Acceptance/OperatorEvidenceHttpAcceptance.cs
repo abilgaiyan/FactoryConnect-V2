@@ -156,6 +156,17 @@ internal static class OperatorEvidenceHttpAcceptance
             using (var revokedRoster = await AuthorizedGet("/api/commissioning/v2/evidence-machines"))
                 Check(revokedRoster.StatusCode == HttpStatusCode.Unauthorized,
                     "revoked human session loses machine discovery");
+            var revokedKeysetDenied = false;
+            try
+            {
+                await authority.ReadOperatorEvidenceMachinePageAsync(hash, site, machine);
+            }
+            catch (SecurityDeniedException)
+            {
+                revokedKeysetDenied = true;
+            }
+            Check(revokedKeysetDenied,
+                "keyset continuation rechecks SQL session authority after revocation");
 
             Activity[] measured;
             lock (transactions)
