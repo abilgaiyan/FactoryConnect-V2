@@ -160,7 +160,6 @@ internal static class OperatorLogin
                         .EndOwnSessionAsync(hash, ct);
                 }
                 catch (SecurityDeniedException) { }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     http.RequestServices.GetRequiredService<ILoggerFactory>()
