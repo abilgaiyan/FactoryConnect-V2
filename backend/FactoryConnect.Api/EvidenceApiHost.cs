@@ -168,7 +168,11 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
     {
         var machines = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
             .ReadOperatorEvidenceMachinesAsync(hash, siteId, ct);
-        return Results.Ok(new { machines });
+        // A full bounded page does not prove that discovery is exhaustive.
+        // Fail closed on completeness until cursor-based discovery is implemented.
+        var isComplete = machines.Count() < 100;
+        http.Response.Headers["X-Result-Complete"] = isComplete ? "true" : "false";
+        return Results.Ok(new { machines, isComplete });
     }
     catch (SecurityDeniedException) { return Results.Unauthorized(); }
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
