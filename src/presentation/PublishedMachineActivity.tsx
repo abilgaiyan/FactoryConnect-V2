@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { readActivityHistory, readActivitySeries, type ActivityHistoryPage, type ActivitySeriesList } from "../api/evidence/activity-history-client.ts";
+import { readProcessedState, type ProcessedStateResult } from "../api/evidence/processed-state-client.ts";
 import { EvidenceReadFailure } from "../api/evidence/retained-evidence-client.ts";
 
 type Failure = "denied" | "unavailable" | "failed";
@@ -20,11 +21,15 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
   machineId: string; baseAddress: string; sessionBearer: string | null;
 }) {
   const [state, setState] = useState<{ kind: "loading" | Failure } | { kind: "ready"; data: ActivitySeriesList; bearer: string }>({ kind: "loading" });
+  const [processed, setProcessed] = useState<{ kind: "loading" | Failure } | { kind: "ready"; data: ProcessedStateResult; bearer: string }>({ kind: "loading" });
   const [mapping, setMapping] = useState("");
   const [seriesRefresh, setSeriesRefresh] = useState(0);
   useEffect(() => {
-    const abort = new AbortController(); setState({ kind: "loading" }); setMapping("");
-    if (!sessionBearer) { setState({ kind: "denied" }); return () => abort.abort(); }
+    const abort = new AbortController(); setState({ kind: "loading" }); setProcessed({ kind: "loading" }); setMapping("");
+    if (!sessionBearer) { setState({ kind: "denied" }); setProcessed({ kind: "denied" }); return () => abort.abort(); }
+    void readProcessedState(baseAddress, machineId, sessionBearer, abort.signal)
+      .then(data => { if (!abort.signal.aborted) setProcessed({ kind: "ready", data, bearer: sessionBearer }); })
+      .catch(error => { if (!abort.signal.aborted) setProcessed({ kind: failure(error) }); });
     void readActivitySeries(baseAddress, machineId, sessionBearer, abort.signal).then(data => {
       if (!abort.signal.aborted) { setState({ kind: "ready", data, bearer: sessionBearer }); setMapping(data.series.length === 1 ? data.series[0]!.mappingId : ""); }
     }).catch(error => { if (!abort.signal.aborted) setState({ kind: failure(error) }); });
@@ -32,9 +37,24 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
   }, [machineId, baseAddress, sessionBearer, seriesRefresh]);
   const view = state.kind === "ready" && (state.data.machineId !== machineId || state.bearer !== sessionBearer)
     ? { kind: "loading" as const } : state;
+  const processedView = processed.kind === "ready" && (processed.data.machineId !== machineId || processed.bearer !== sessionBearer)
+    ? { kind: "loading" as const } : processed;
   const selected = view.kind === "ready" ? view.data.series.find(x => x.mappingId === mapping) : undefined;
   return <section aria-label="Published machine activity">
     <h2>Published activity history</h2>
+    <section aria-label="Verified processed machine state">
+      <h3>Verified processed machine state</h3>
+      <p>Historical checkpoint interpretation only. Live connectivity, freshness and processing coverage are not established.</p>
+      {processedView.kind === "loading" && <p role="status">Reading verified processed state…</p>}
+      {(processedView.kind === "denied" || processedView.kind === "unavailable" || processedView.kind === "failed") && <ErrorState kind={processedView.kind} />}
+      {processedView.kind === "ready" && (processedView.data.states.length === 0
+        ? <p>No verified processed state is published.</p>
+        : <ul>{processedView.data.states.map(x => <li key={x.mappingId}>
+          <strong>{x.sourceAddress}: {x.lastProcessedState ?? "Not qualified"}</strong>
+          {" — last observed "}<time dateTime={x.lastObservedAt}>{new Date(x.lastObservedAt).toLocaleString()}</time>
+          {" (generation "}{x.generation}{")"}
+        </li>)}</ul>)}
+    </section>
     <button type="button" disabled={view.kind === "loading" || !sessionBearer} onClick={() => setSeriesRefresh(x => x + 1)}>Refresh processed state and history</button>
     <p>Closed periods derived from accepted machine observations. This history does not establish live connectivity, physical observation completeness or OEE.</p>
     {view.kind === "loading" && <p role="status">Checking published activity…</p>}
