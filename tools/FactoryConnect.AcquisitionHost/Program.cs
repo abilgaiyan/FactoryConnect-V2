@@ -8,6 +8,14 @@ static void Report(object value)=>Console.WriteLine(JsonSerializer.Serialize(val
 using var stopping=new CancellationTokenSource();
 try
 {
+    if (args.Length == 4 && args[0] == "--health" && args[2] == "--max-age-seconds")
+    {
+        if (!int.TryParse(args[3], out var seconds) || seconds is < 1 or > 3600)
+            throw new ArgumentException("Health maximum age must be 1–3600 seconds.");
+        var result = AcquisitionHealthSnapshot.Inspect(args[1], TimeSpan.FromSeconds(seconds));
+        Report(result);
+        return result.GetType().GetProperty("operational")?.GetValue(result) is true ? 0 : 20;
+    }
     if(args.Length is <2 or >3||args[0]!="--config"||(args.Length==3&&args[2]!="--read"))throw new ArgumentException("Use --config path [--read].");
     var readOnly=args.Length==3;var options=HostOptions.Load(args[1],readOnly);
     Console.CancelKeyPress+=(_,e)=>{e.Cancel=true;stopping.Cancel();};
