@@ -36,6 +36,31 @@ try {
     return session.bearer;
   }
   const bearer = await accepted();
+  // The bounded machine list must disclose incomplete coverage conservatively.
+  // Authenticated continuation requests must fail explicitly, never replay page one.
+  const discovery = await page.evaluate(async bearer => {
+    const headers = { Authorization: 'Bearer ' + bearer };
+    const first = await fetch('/api/commissioning/v2/evidence-machines', { headers });
+    const payload = await first.json();
+    const forged = [];
+    for (const key of ['cursor', 'continuationToken']) {
+      const response = await fetch('/api/commissioning/v2/evidence-machines?' + key + '=forged', { headers });
+      forged.push({ status: response.status, payload: await response.json() });
+    }
+    return { status: first.status, payload, complete: first.headers.get('x-result-complete'), forged };
+  }, bearer);
+  expect(discovery.status).toBe(200);
+  expect(Array.isArray(discovery.payload.machines)).toBe(true);
+  expect(typeof discovery.payload.isComplete).toBe('boolean');
+  expect(discovery.payload.continuationSupported).toBe(false);
+  expect(discovery.payload.maximumReturned).toBe(100);
+  expect(discovery.complete).toBe(String(discovery.payload.isComplete));
+  if (discovery.payload.machines.length < 100) expect(discovery.payload.isComplete).toBe(true);
+  expect(discovery.payload.machines.length).toBeLessThanOrEqual(100);
+  for (const response of discovery.forged) {
+    expect(response.status).toBe(400);
+    expect(response.payload.error).toMatch(/Invalid machine discovery cursor|Use the signed cursor parameter/);
+  }
   await stage('revoke-session', { hash: createHash('sha256').update(Buffer.from(bearer, 'base64')).digest('hex') });
   const denied = await page.evaluate(async ({ machine, bearer }) => (await fetch(`/api/commissioning/v2/machines/${machine}/evidence`, { headers: { Authorization: 'Bearer ' + bearer } })).status,
     { machine: process.env.FC2_BROWSER_MACHINE, bearer });

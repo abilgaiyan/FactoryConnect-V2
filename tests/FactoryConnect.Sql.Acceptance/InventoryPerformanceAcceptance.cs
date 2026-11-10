@@ -34,6 +34,103 @@ internal static class InventoryPerformanceAcceptance
                 VALUES(NEWID(),@actor,@actor,'bootstrap','configuration.read','I',1,0,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()));
             UPDATE security.InstallationState SET IsSealed=0 WHERE Singleton=1;
             """,("@site",site),("@small",smallSite),("@actor",actor),("@token",token));
+        // Large-fleet machine discovery uses an independently authorized site.
+        // Exercise exact page boundaries and 1,200 distinct machine identities.
+        var discoverySite=Guid.NewGuid();
+        await Execute("""
+            INSERT [master].Site(SiteId,DisplayName) VALUES(@site,N'Paginated discovery fixture');
+            ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<1200)
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                SELECT NEWID(),@site,CONCAT(N'Authorized machine ',i),CONVERT(bit,0)
+                FROM n OPTION(MAXRECURSION 0);
+            INSERT security.PermissionGrant(GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,SiteId,UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
+                VALUES(NEWID(),@actor,@actor,'bootstrap','commissioning.read','S',@site,1,0,
+                    DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()));
+            """,("@site",discoverySite),("@actor",actor));
+        var discovery=new SqlSecurityAuthority(pooled,target.InstallationId);
+        var discovered=new HashSet<Guid>();
+        Guid? afterMachine=null;
+        var pageSizes=new List<int>();
+        var discoveryWatch=Stopwatch.StartNew();
+        while (true)
+        {
+            var (machines,hasMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(token,discoverySite,afterMachine);
+            pageSizes.Add(machines.Count);
+            Check(machines.Count<=100&&machines.All(m=>m.SiteId==discoverySite)&&
+                machines.All(m=>discovered.Add(m.MachineId)),
+                "large-fleet discovery returns distinct authorized machines in bounded pages");
+            if (!hasMore)
+            {
+                Check(machines.Count>0||discovered.Count==0,
+                    "terminal discovery page preserves the final authorized machines");
+                break;
+            }
+            Check(machines.Count==100,"nonterminal machine page is full");
+            afterMachine=machines[^1].MachineId;
+        }
+        discoveryWatch.Stop();
+        Check(discovered.Count==1200&&pageSizes.Count==12&&pageSizes.All(size=>size==100),
+            "1,200 authorized machines require exactly 12 complete keyset pages");
+        Console.WriteLine($"MEASURE: authorized discovery machines=1200 pages={pageSizes.Count} elapsedMs={discoveryWatch.Elapsed.TotalMilliseconds:F2}");
+        // Sparse access must not expose unauthorized machines or scan the fleet
+        // into an unbounded response. Only one of 1,200 machines is eligible.
+        var sparseSite=Guid.NewGuid();
+        var sparseMachine=Guid.NewGuid();
+        await Execute("""
+            INSERT [master].Site(SiteId,DisplayName) VALUES(@site,N'Sparse discovery fixture');
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                VALUES(@machine,@site,N'Only authorized machine',0);
+            ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<1199)
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                SELECT NEWID(),@site,CONCAT(N'Unauthorized machine ',i),0
+                FROM n OPTION(MAXRECURSION 0);
+            INSERT security.PermissionGrant
+                (GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,
+                 SiteId,MachineId,UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
+                VALUES(NEWID(),@actor,@actor,'bootstrap','commissioning.read','M',
+                    @site,@machine,1,0,DATEADD(minute,-1,SYSUTCDATETIME()),
+                    DATEADD(hour,1,SYSUTCDATETIME()));
+            """,("@site",sparseSite),("@machine",sparseMachine),("@actor",actor));
+        var sparseWatch=Stopwatch.StartNew();
+        var (sparseMachines,sparseHasMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(token,sparseSite);
+        sparseWatch.Stop();
+        Check(sparseMachines.Count==1 && sparseMachines[0].MachineId==sparseMachine &&
+            sparseMachines[0].SiteId==sparseSite && !sparseHasMore,
+            "sparse discovery reveals only the one granted machine among 1,200");
+        Console.WriteLine($"MEASURE: sparse discovery authorized=1 fleet=1200 pages=1 elapsedMs={sparseWatch.Elapsed.TotalMilliseconds:F2}");
+        // Exactly 100 must be complete; 101 must advertise one further page.
+        // These fixtures exercise the SQL lookahead, not just client metadata.
+        var exactlyHundredSite=Guid.NewGuid();
+        var hundredOneSite=Guid.NewGuid();
+        await Execute("""
+            INSERT [master].Site(SiteId,DisplayName)
+                VALUES(@hundred,N'100-machine discovery boundary'),(@hundredOne,N'101-machine discovery boundary');
+            ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<101)
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                SELECT NEWID(),@hundred,CONCAT(N'Boundary 100-',i),0
+                FROM n WHERE i<=100 OPTION(MAXRECURSION 101);
+            ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<101)
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                SELECT NEWID(),@hundredOne,CONCAT(N'Boundary 101-',i),0
+                FROM n OPTION(MAXRECURSION 101);
+            INSERT security.PermissionGrant
+                (GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,SiteId,
+                 UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
+                SELECT NEWID(),@actor,@actor,'bootstrap','commissioning.read','S',SiteId,
+                    1,0,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME())
+                FROM (VALUES(@hundred),(@hundredOne)) AS boundaries(SiteId);
+            """,("@hundred",exactlyHundredSite),("@hundredOne",hundredOneSite),("@actor",actor));
+        var (exactlyHundred,hasHundredMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(token,exactlyHundredSite);
+        Check(exactlyHundred.Count==100&&!hasHundredMore,
+            "exactly 100 authorized machines are a complete first page");
+        var (hundredOneFirst,hasHundredOneMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(token,hundredOneSite);
+        Check(hundredOneFirst.Count==100&&hasHundredOneMore,
+            "101 authorized machines expose a nonterminal first page");
+        var (hundredOneLast,hasHundredOneLastMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(
+            token,hundredOneSite,hundredOneFirst[^1].MachineId);
+        Check(hundredOneLast.Count==1&&!hasHundredOneLastMore&&
+            !hundredOneFirst.Any(m=>m.MachineId==hundredOneLast[0].MachineId),
+            "101st authorized machine is returned once on a complete second page");
         var traces=new ConcurrentQueue<Trace>();
         using var listener=new ActivityListener
         {

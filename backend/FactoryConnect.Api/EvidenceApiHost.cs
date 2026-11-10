@@ -166,9 +166,29 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
     CryptographicOperations.ZeroMemory(bearer);
     try
     {
-        var machines = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
-            .ReadOperatorEvidenceMachinesAsync(hash, siteId, ct);
-        return Results.Ok(new { machines });
+        // Continuation is opt-in and requires a dedicated persistent signing key.
+        // Every page independently rechecks current SQL session and grant ancestry.
+        if (http.Request.Query.ContainsKey("continuationToken"))
+            return Results.BadRequest(new { error = "Use the signed cursor parameter" });
+        var key = MachineDiscoveryCursor.ReadKey(config["Evidence:MachineDiscoveryCursorKey"]);
+        Guid? after = null;
+        if (http.Request.Query.ContainsKey("cursor"))
+        {
+            if (key is null || http.Request.Query["cursor"].Count != 1 ||
+                !MachineDiscoveryCursor.TryRead(http.Request.Query["cursor"][0],
+                    key, installationId, siteId, hash, out var seek))
+                return Results.BadRequest(new { error = "Invalid machine discovery cursor" });
+            after = seek;
+        }
+        var (machines, hasMore) = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+            .ReadOperatorEvidenceMachinePageAsync(hash, siteId, after, ct);
+        var isComplete = !hasMore;
+        http.Response.Headers["X-Result-Complete"] = isComplete ? "true" : "false";
+        var nextCursor = hasMore && key is not null && machines.Count > 0
+            ? MachineDiscoveryCursor.Issue(key, installationId, siteId, hash, machines[^1].MachineId)
+            : null;
+        return Results.Ok(new { machines, isComplete, continuationSupported = key is not null,
+            maximumReturned = 100, nextCursor });
     }
     catch (SecurityDeniedException) { return Results.Unauthorized(); }
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
