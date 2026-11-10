@@ -11,7 +11,7 @@ using Microsoft.Data.SqlClient;
 namespace FactoryConnect.Sql.Security;
 
 public sealed record PublishedActivitySeries(Guid MappingId,string SourceAddress,string QualificationSha256,
-    string Generation,DateTimeOffset LastObservedAt,Guid PackageRevisionId,Guid AcknowledgementId);
+    string Generation,DateTimeOffset LastObservedAt,Guid PackageRevisionId,Guid AcknowledgementId, string? LastProcessedState);
 public sealed record PublishedActivityPeriod(Guid EffectId,Guid PublicationOperationId,string State,
     DateTimeOffset StartedAt,DateTimeOffset EndedAt,string DurationTicks,string InstanceId,
     string StartSequence,string EndSequence,string StartRawValue,string EndRawValue);
@@ -216,7 +216,8 @@ public sealed partial class SqlSecurityAuthority
                 continue;
             }
             result.Add(new(cp,new(cp.Qualification.MappingId,cp.Qualification.SourceAddress,Convert.ToHexString((byte[])r[1]),
-                cp.NextGeneration.ToString(CultureInfo.InvariantCulture),cp.LastConsumedSample.ObservedAt,source.PackageRevisionId,source.AcknowledgementId)));
+                cp.NextGeneration.ToString(CultureInfo.InvariantCulture),cp.LastConsumedSample.ObservedAt,source.PackageRevisionId,source.AcknowledgementId,
+                cp.OpenState?.ToString())));
         }
         await r.DisposeAsync();
         await VerifyActivityPublicationReceiptsAsync(c,t,
