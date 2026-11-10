@@ -72,6 +72,32 @@ internal static class InventoryPerformanceAcceptance
         Check(discovered.Count==1200&&pageSizes.Count==12&&pageSizes.All(size=>size==100),
             "1,200 authorized machines require exactly 12 complete keyset pages");
         Console.WriteLine($"MEASURE: authorized discovery machines=1200 pages={pageSizes.Count} elapsedMs={discoveryWatch.Elapsed.TotalMilliseconds:F2}");
+        // Sparse access must not expose unauthorized machines or scan the fleet
+        // into an unbounded response. Only one of 1,200 machines is eligible.
+        var sparseSite=Guid.NewGuid();
+        var sparseMachine=Guid.NewGuid();
+        await Execute("""
+            INSERT [master].Site(SiteId,DisplayName) VALUES(@site,N'Sparse discovery fixture');
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                VALUES(@machine,@site,N'Only authorized machine',0);
+            ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<1199)
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                SELECT NEWID(),@site,CONCAT(N'Unauthorized machine ',i),0
+                FROM n OPTION(MAXRECURSION 0);
+            INSERT security.PermissionGrant
+                (GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,
+                 SiteId,MachineId,UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
+                VALUES(NEWID(),@actor,@actor,'bootstrap','commissioning.read','M',
+                    @site,@machine,1,0,DATEADD(minute,-1,SYSUTCDATETIME()),
+                    DATEADD(hour,1,SYSUTCDATETIME()));
+            """,("@site",sparseSite),("@machine",sparseMachine),("@actor",actor));
+        var sparseWatch=Stopwatch.StartNew();
+        var (sparseMachines,sparseHasMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(token,sparseSite);
+        sparseWatch.Stop();
+        Check(sparseMachines.Count==1 && sparseMachines[0].MachineId==sparseMachine &&
+            sparseMachines[0].SiteId==sparseSite && !sparseHasMore,
+            "sparse discovery reveals only the one granted machine among 1,200");
+        Console.WriteLine($"MEASURE: sparse discovery authorized=1 fleet=1200 pages=1 elapsedMs={sparseWatch.Elapsed.TotalMilliseconds:F2}");
         // Exactly 100 must be complete; 101 must advertise one further page.
         // These fixtures exercise the SQL lookahead, not just client metadata.
         var exactlyHundredSite=Guid.NewGuid();
