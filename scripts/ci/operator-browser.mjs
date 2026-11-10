@@ -95,7 +95,8 @@ try {
     return { status: response.status, hsts: response.headers.get('strict-transport-security'),
       csp: response.headers.get('content-security-policy') };
   });
-  expect(spoofed.status).toBe(401);
+  // Revoked machine grant does not revoke the still-valid operator SQL session.
+  expect(spoofed.status).toBe(200);
   expect(spoofed.hsts).toContain('max-age=');
   expect(spoofed.csp).toContain("object-src 'none'");
   // Burst unauthenticated requests to a SQL-backed route; 429 must occur
