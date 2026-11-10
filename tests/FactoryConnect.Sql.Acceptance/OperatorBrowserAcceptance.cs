@@ -218,6 +218,38 @@ internal static class OperatorBrowserAcceptance
                 if (await SendAs("203.0.113.11") == HttpStatusCode.TooManyRequests)
                     throw new InvalidOperationException("Independent trusted client inherited another client's quota.");
             }
+            // Unsupported continuation must fail explicitly even before authentication;
+            // it must never masquerade as a successful first-page replay.
+            await using (var cursorHost = EvidenceApiHost.Build([], builder =>
+            {
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string,string?>
+                {
+                    ["ConnectionStrings:Evidence"] = sql,
+                    ["Evidence:InstallationId"] = installation.ToString(),
+                    ["Evidence:SiteId"] = site.ToString()
+                });
+                builder.WebHost.ConfigureKestrel(o => o.Listen(IPAddress.Loopback, 0,
+                    listener => listener.UseHttps(certificate)));
+            }))
+            {
+                await cursorHost.StartAsync(ct);
+                using var handler = new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                };
+                using var client = new HttpClient(handler);
+                foreach (var parameter in new[] { "cursor", "continuationToken" })
+                {
+                    using var response = await client.GetAsync(
+                        cursorHost.Urls.Single() + "/api/commissioning/v2/evidence-machines?"
+                        + parameter + "=forged", ct);
+                    // Authentication remains the first gate: unauthenticated
+                    // callers must not learn whether cursor syntax is supported.
+                    if (response.StatusCode != HttpStatusCode.Unauthorized)
+                        throw new InvalidOperationException(
+                            "Unauthenticated machine cursor did not preserve authorization gate.");
+                }
+            }
             var diagnostics = new ConcurrentQueue<string>();
             await using var api=EvidenceApiHost.Build([],builder=>
             {
