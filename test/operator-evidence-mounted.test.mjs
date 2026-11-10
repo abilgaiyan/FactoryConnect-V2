@@ -48,7 +48,7 @@ test("authorized machine selection shows retained SQL-shaped values, then sessio
     if (String(url).endsWith(`/machines/${machineId}/processed-state`))
       return Response.json({ machineId, siteId, streamKey: "mtconnect:uuid:fixture",
         evidenceKind: "verified-processed-state", currentConnectivity: null,
-        freshness: "not-established", coverage: "not-established", status: "no-processed-state", states: [] });
+        freshness: "not-established", coverage: "not-established", readAsOf: "2026-11-10T19:00:00Z", status: "no-processed-state", states: [] });
     if (String(url).endsWith(`/machines/${machineId}/activity`))
       return Response.json({ machineId, siteId, streamKey: "mtconnect:uuid:fixture", evidenceKind: "historical-derived-activity",
         currentConnectivity: null, verification: "immutable-publication-receipts", continuity: "same-batch-only-not-physical-completeness",

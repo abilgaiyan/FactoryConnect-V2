@@ -15,7 +15,7 @@ internal static class ActivityHistoryApi
                 var series=await authority.ReadActivitySeriesAsync(token,site,machineId,stream,ct);
                 return Results.Ok(new { machineId,siteId=site,streamKey=stream,
                     evidenceKind="verified-processed-state",currentConnectivity=(string?)null,
-                    freshness="not-established",coverage="not-established",
+                    freshness="not-established",coverage="not-established",readAsOf=DateTimeOffset.UtcNow,
                     status=series.Count==0?"no-processed-state":"processed-state",
                     states=series.Select(x=>new { x.MappingId,x.SourceAddress,x.LastProcessedState,
                         x.LastObservedAt,x.Generation,x.PackageRevisionId,x.AcknowledgementId }).ToArray() });
