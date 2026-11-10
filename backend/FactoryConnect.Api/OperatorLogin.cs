@@ -120,7 +120,7 @@ internal static class OperatorLogin
         app.MapGet("/api/security/v2/login", (HttpContext http, IConfiguration config) =>
             !http.Request.IsHttps ? Results.StatusCode(403)
             : string.IsNullOrWhiteSpace(config["Identity:Authority"]) ? Results.StatusCode(503)
-            : Results.Challenge(new AuthenticationProperties { RedirectUri = "/operator-evidence" }, [Oidc]));
+            : Results.Challenge(new AuthenticationProperties { RedirectUri = "/operator-evidence" }, [Oidc])).RequireRateLimiting("security-boundary");
         app.MapGet("/api/security/v2/session", async (HttpContext http, IConfiguration config, CancellationToken ct) =>
         {
             http.Response.Headers.CacheControl = "no-store";
@@ -142,7 +142,7 @@ internal static class OperatorLogin
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "operator-session-read", "Session authority unavailable"); }
             finally { CryptographicOperations.ZeroMemory(hash); }
-        });
+        }).RequireRateLimiting("security-boundary");
         app.MapPost("/api/security/v2/logout", async (HttpContext http, IConfiguration config, CancellationToken ct) =>
         {
             http.Response.Headers.CacheControl = "no-store";
@@ -182,6 +182,6 @@ internal static class OperatorLogin
             return revocationFailed
                 ? Results.Problem(statusCode: 503, title: "Session revocation unavailable")
                 : Results.NoContent();
-        });
+        }).RequireRateLimiting("security-boundary");
     }
 }
