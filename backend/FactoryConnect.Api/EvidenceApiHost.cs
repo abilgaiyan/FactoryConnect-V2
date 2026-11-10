@@ -166,6 +166,10 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
     CryptographicOperations.ZeroMemory(bearer);
     try
     {
+        // Until signed, authority-bound continuation is implemented, reject
+        // cursors explicitly instead of silently replaying the first page.
+        if (http.Request.Query.ContainsKey("cursor") || http.Request.Query.ContainsKey("continuationToken"))
+            return Results.BadRequest(new { error = "Machine discovery continuation is not yet supported" });
         var machines = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
             .ReadOperatorEvidenceMachinesAsync(hash, siteId, ct);
         // A full bounded page does not prove that discovery is exhaustive.
