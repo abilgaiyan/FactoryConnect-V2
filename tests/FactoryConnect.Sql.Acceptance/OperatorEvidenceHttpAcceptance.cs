@@ -185,6 +185,59 @@ internal static class OperatorEvidenceHttpAcceptance
             using (var other = await AuthorizedGet($"/api/commissioning/v2/machines/{otherMachine:D}/evidence"))
                 Check(other.StatusCode == HttpStatusCode.Unauthorized, "HTTP evidence rejects another machine");
 
+            // Qualify actual authenticated HTTP continuation across 101 machine-scoped
+            // grants. The existing unauthorized machine remains excluded.
+            await using (var connection = new Microsoft.Data.SqlClient.SqlConnection(sql))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DECLARE @added TABLE(MachineId uniqueidentifier NOT NULL);
+                    ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<100)
+                    INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                        OUTPUT inserted.MachineId INTO @added(MachineId)
+                        SELECT NEWID(),@site,CONCAT(N'HTTP pagination ',i),0 FROM n OPTION(MAXRECURSION 100);
+                    INSERT security.PermissionGrant
+                        (GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,SiteId,MachineId,
+                         UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
+                        SELECT NEWID(),s.PrincipalId,s.PrincipalId,'bootstrap','commissioning.read',
+                            'M',@site,a.MachineId,1,0,
+                            DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME())
+                        FROM @added a CROSS JOIN security.SessionAuthority s WHERE s.TokenHash=@hash;
+                    """;
+                command.Parameters.AddWithValue("@site", site);
+                command.Parameters.AddWithValue("@hash", hash);
+                await command.ExecuteNonQueryAsync();
+            }
+            var httpMachines = new HashSet<Guid>();
+            string? nextHttpCursor = null;
+            for (var pageIndex = 0; pageIndex < 2; pageIndex++)
+            {
+                var path = "/api/commissioning/v2/evidence-machines" +
+                    (nextHttpCursor is null ? "" : "?cursor=" + Uri.EscapeDataString(nextHttpCursor));
+                using var httpPage = await AuthorizedGet(path);
+                Check(httpPage.StatusCode == HttpStatusCode.OK,
+                    "authenticated HTTP discovery returns authorized fleet page " + pageIndex);
+                using var document = JsonDocument.Parse(await httpPage.Content.ReadAsStringAsync());
+                var root = document.RootElement;
+                var rows = root.GetProperty("machines");
+                var expectedCount = pageIndex == 0 ? 100 : 1;
+                Check(rows.GetArrayLength() == expectedCount &&
+                    root.GetProperty("isComplete").GetBoolean() == (pageIndex == 1) &&
+                    httpPage.Headers.TryGetValues("X-Result-Complete", out var complete) &&
+                    complete.Single() == (pageIndex == 1 ? "true" : "false"),
+                    "authenticated HTTP page count and completeness match the 101-machine boundary");
+                foreach (var row in rows.EnumerateArray())
+                    Check(httpMachines.Add(row.GetProperty("machineId").GetGuid()) &&
+                        row.GetProperty("machineId").GetGuid() != otherMachine,
+                        "HTTP continuation does not duplicate or expose unauthorized machines");
+                nextHttpCursor = root.GetProperty("nextCursor").GetString();
+                Check((nextHttpCursor is null) == (pageIndex == 1),
+                    "signed HTTP continuation exists only while authorized pages remain");
+            }
+            Check(httpMachines.Count == 101 && httpMachines.Contains(machine),
+                "authenticated signed HTTP pagination covers all 101 authorized machine identities");
+
             await new SqlSecurityAuthority(sql, installation).RevokeSessionAsync(
                 administratorSessionHash, Guid.NewGuid(), hash, await currentEpoch(),
                 "revoke disposable HTTP acceptance session");
