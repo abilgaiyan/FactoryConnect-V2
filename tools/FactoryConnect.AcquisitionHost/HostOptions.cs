@@ -5,7 +5,7 @@ namespace FactoryConnect.AcquisitionHost;
 
 internal sealed record HostOptions(int Version,Guid InstallationId,Guid SiteId,Guid MachineId,string StreamKey,string AgentBaseUri,string? BootstrapFromSequence,
     string SqlConnectionString,string TrustAnchorPath,string AllowedCrlUri,string ServerCertificatePath,string ServerKeyPath,string RuntimeCertificatePath,string RuntimeKeyPath,
-    int PollIntervalMilliseconds=250,int BatchCount=100,int OperationTimeoutSeconds=15)
+    int PollIntervalMilliseconds=250,int BatchCount=100,int OperationTimeoutSeconds=15,string? HealthSnapshotPath=null)
 {
     internal static HostOptions Load(string path,bool readOnly)
     {
@@ -22,6 +22,7 @@ internal sealed record HostOptions(int Version,Guid InstallationId,Guid SiteId,G
         }
         var directory=Path.GetDirectoryName(Path.GetFullPath(path))!;
         string Resolve(string value)=>Path.GetFullPath(value,directory);
-        return readOnly?options:options with{TrustAnchorPath=Resolve(options.TrustAnchorPath),ServerCertificatePath=Resolve(options.ServerCertificatePath),ServerKeyPath=Resolve(options.ServerKeyPath),RuntimeCertificatePath=Resolve(options.RuntimeCertificatePath),RuntimeKeyPath=Resolve(options.RuntimeKeyPath)};
+        if(options.HealthSnapshotPath is { Length: > 0 } healthPath && (healthPath.Length > 1024 || Path.GetFileName(healthPath).Length == 0))throw new InvalidDataException("Invalid acquisition health snapshot path.");
+        return readOnly?options:options with{HealthSnapshotPath=string.IsNullOrWhiteSpace(options.HealthSnapshotPath)?null:Resolve(options.HealthSnapshotPath),TrustAnchorPath=Resolve(options.TrustAnchorPath),ServerCertificatePath=Resolve(options.ServerCertificatePath),ServerKeyPath=Resolve(options.ServerKeyPath),RuntimeCertificatePath=Resolve(options.RuntimeCertificatePath),RuntimeKeyPath=Resolve(options.RuntimeKeyPath)};
     }
 }
