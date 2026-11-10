@@ -48,6 +48,7 @@ internal static class MachineDiscoveryCursor
             if (parsed is null || parsed.Installation != installation || parsed.Site != site ||
                 parsed.After == Guid.Empty || parsed.Expires <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() ||
                 parsed.Expires > DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds() ||
+                parsed.Session is null || parsed.Session.Length != 64 ||
                 !CryptographicOperations.FixedTimeEquals(
                     Encoding.ASCII.GetBytes(parsed.Session), Encoding.ASCII.GetBytes(Convert.ToHexString(sessionHash))))
                 return false;
