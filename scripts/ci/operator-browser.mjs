@@ -89,6 +89,29 @@ try {
   await page.reload();
   await expect(page.locator('select')).toHaveCount(0);
   await expect(page.getByText('No machines currently authorized for commissioning evidence.')).toBeVisible();
+  // Spoofed X-Forwarded-Proto must not influence HTTPS security decisions.
+  const spoofed = await page.evaluate(async () => {
+    const response = await fetch('/api/security/v2/session', { headers: { 'X-Forwarded-Proto': 'http' } });
+    return { status: response.status, hsts: response.headers.get('strict-transport-security'),
+      csp: response.headers.get('content-security-policy') };
+  });
+  // Revoked machine grant does not revoke the still-valid operator SQL session.
+  expect(spoofed.status).toBe(200);
+  expect(spoofed.hsts).toContain('max-age=');
+  expect(spoofed.csp).toContain("object-src 'none'");
+  // Burst unauthenticated requests to a SQL-backed route; 429 must occur
+  // before any authority execution, regardless of forged forwarded IPs.
+  const burst = await page.evaluate(async () => {
+    const codes = [];
+    for (let i = 0; i < 135; i++) {
+      const response = await fetch('/api/commissioning/v2/evidence-machines', {
+        headers: { 'X-Forwarded-For': `203.0.113.${i % 250}` }
+      });
+      codes.push(response.status);
+    }
+    return codes;
+  });
+  expect(burst).toContain(429);
   await writeFile('artifacts/ingestion/operator-browser.json', JSON.stringify({ controlledFixture: true, https: true, browser: 'Chromium', oidcCodePkce: true, invalidAudienceNonceExpirySignatureIssuerDenied: true, literalValuePreserved: true, sessionRevocationDenied: true, logoutRevokesSqlSession: true, outageLogoutClearsLocalCookieWithoutSqlRevocation: true, grantRevocationDenied: true }));
   await stage('complete');
 } finally { await browser.close(); input.close(); }

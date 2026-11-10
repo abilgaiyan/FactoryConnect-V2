@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 using FactoryConnect.Sql.Security;
 using FactoryConnect.Api;
 
@@ -13,10 +15,44 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = ar
     ApplicationName = typeof(EvidenceApiHost).Assembly.FullName, WebRootPath = webRoot });
 configure?.Invoke(builder);
 builder.Services.AddOperatorLogin(builder.Configuration);
+// Apply per-client limits before authentication and SQL authority operations.
+// Forwarded headers are deliberately not enabled without an explicit trusted proxy contract.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("security-boundary", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+});
 var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    // Security headers apply to success, denial, static assets and failures.
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers.XContentTypeOptions = "nosniff";
+        context.Response.Headers["Referrer-Policy"] = "no-referrer";
+        context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'";
+        if (context.Request.IsHttps)
+            context.Response.Headers.StrictTransportSecurity = "max-age=31536000";
+        return Task.CompletedTask;
+    });
+    await next(context);
+});
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapOperatorLogin();
+// Apply the policy to the full security API surface, including fallback endpoints.
+// Endpoint-specific limits can be tightened independently after traffic qualification.
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -76,7 +112,7 @@ app.MapPost("/api/security/v2/human-sessions", async (
     catch (SecurityDeniedException) { return Results.Unauthorized(); }
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
     catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "human-session-issuance", "Session authority unavailable"); }
-});
+}).RequireRateLimiting("security-boundary");
 
 // Machine selection is derived from current SQL authorization, never browser-supplied role claims.
 // A principal with no eligible machines receives an empty list, not an unrestricted inventory.
@@ -108,7 +144,7 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
     catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "machine-discovery", "Evidence authority unavailable"); }
     finally { CryptographicOperations.ZeroMemory(hash); }
-});
+}).RequireRateLimiting("security-boundary");
 
 // This route is deliberately opt-in. It uses an existing, independently issued human
 // session and SQL's current commissioning.read authorization; it never issues sessions.
@@ -158,7 +194,7 @@ app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/evidence", async (
         return AuthorityDiagnostics.Unavailable(http, ex, "retained-evidence-read", "Evidence authority unavailable");
     }
     finally { CryptographicOperations.ZeroMemory(sessionHash); }
-});
+}).RequireRateLimiting("security-boundary");
 
 app.MapActivityHistory();
 
