@@ -149,6 +149,7 @@ internal static class OperatorLogin
             if (!http.Request.IsHttps || http.Request.Headers.Origin != $"https://{http.Request.Host}") return Results.StatusCode(403);
             var ticket = await http.AuthenticateAsync(Cookie);
             var bearer = ticket.Principal?.FindFirst(TokenClaim)?.Value;
+            var revocationFailed = false;
             if (bearer is not null)
             {
                 var secret = Convert.FromBase64String(bearer); var hash = SHA256.HashData(secret);
@@ -159,10 +160,20 @@ internal static class OperatorLogin
                         .EndOwnSessionAsync(hash, ct);
                 }
                 catch (SecurityDeniedException) { }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    http.RequestServices.GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("FactoryConnect.Api.OperatorLogin")
+                        .LogError(ex, "Operator session revocation failed; local cookie will still be cleared. TraceId={TraceId}", http.TraceIdentifier);
+                    revocationFailed = true;
+                }
                 finally { CryptographicOperations.ZeroMemory(hash); }
             }
             await http.SignOutAsync(Cookie);
-            return Results.NoContent();
+            return revocationFailed
+                ? Results.Problem(statusCode: 503, title: "Session revocation unavailable")
+                : Results.NoContent();
         });
     }
 }
