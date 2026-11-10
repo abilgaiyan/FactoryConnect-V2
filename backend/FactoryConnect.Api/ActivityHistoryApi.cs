@@ -8,6 +8,18 @@ internal static class ActivityHistoryApi
 {
     internal static void MapActivityHistory(this WebApplication app)
     {
+        // Explicit processed-state read model: verified checkpoint, never inferred live telemetry.
+        app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/processed-state",async(
+            Guid machineId,HttpContext http,IConfiguration config,ILoggerFactory loggerFactory,CancellationToken ct)=>
+            await Read(http,config,loggerFactory.CreateLogger("FactoryConnect.ProcessedState.Integrity"),async(authority,token,site,stream)=> {
+                var series=await authority.ReadActivitySeriesAsync(token,site,machineId,stream,ct);
+                return Results.Ok(new { machineId,siteId=site,streamKey=stream,
+                    evidenceKind="verified-processed-state",currentConnectivity=(string?)null,
+                    freshness="not-established",coverage="not-established",
+                    status=series.Count==0?"no-processed-state":"processed-state",
+                    states=series.Select(x=>new { x.MappingId,x.SourceAddress,x.LastProcessedState,
+                        x.LastObservedAt,x.Generation,x.PackageRevisionId,x.AcknowledgementId }).ToArray() });
+            })).RequireRateLimiting("security-boundary");
         app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/activity",async(
             Guid machineId,HttpContext http,IConfiguration config,ILoggerFactory loggerFactory,CancellationToken ct)=>
             await Read(http,config,loggerFactory.CreateLogger("FactoryConnect.ActivityHistory.Integrity"),async(authority,token,site,stream)=> {
