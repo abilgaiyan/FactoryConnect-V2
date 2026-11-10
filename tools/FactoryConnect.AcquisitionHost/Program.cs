@@ -22,7 +22,13 @@ try
         return 0;
     }
     if(Console.IsInputRedirected)_=Task.Run(StopOnInput);
-    return await new AcquisitionWorker(options,Report).Run(stopping.Token);
+    var snapshot = options.HealthSnapshotPath is null ? null : new AcquisitionHealthSnapshot(options.HealthSnapshotPath);
+    void ReportWithSnapshot(object value)
+    {
+        Report(value);
+        snapshot?.Write(value);
+    }
+    return await new AcquisitionWorker(options,ReportWithSnapshot).Run(stopping.Token);
     async Task StopOnInput(){try{while(!stopping.IsCancellationRequested){var line=await Console.In.ReadLineAsync(stopping.Token);if(line is null)return;if(line=="stop"){stopping.Cancel();return;}}}catch(OperationCanceledException){}}
 }
 catch(OperationCanceledException)when(stopping.IsCancellationRequested){Report(new{status="stopped"});return 0;}
