@@ -105,7 +105,8 @@ internal static class OperatorEvidenceHttpAcceptance
                     machines[0].GetProperty("machineId").GetGuid() == machine,
                     "HTTP roster discloses only explicitly authorized machine");
                 Check(rosterJson.RootElement.GetProperty("isComplete").GetBoolean() &&
-                    !rosterJson.RootElement.GetProperty("continuationSupported").GetBoolean() &&
+                    rosterJson.RootElement.GetProperty("continuationSupported").GetBoolean() &&
+                    rosterJson.RootElement.GetProperty("nextCursor").ValueKind == JsonValueKind.Null &&
                     rosterJson.RootElement.GetProperty("maximumReturned").GetInt32() == 100 &&
                     roster.Headers.TryGetValues("X-Result-Complete", out var completeHeader) &&
                     completeHeader.Single() == "true",
