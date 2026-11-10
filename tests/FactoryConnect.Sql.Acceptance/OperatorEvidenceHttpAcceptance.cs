@@ -262,6 +262,38 @@ internal static class OperatorEvidenceHttpAcceptance
             Check(httpMachines.Count == 101 && httpMachines.Contains(machine),
                 "authenticated signed HTTP pagination covers all 101 authorized machine identities");
 
+            // A previously issued continuation cannot preserve permissions that
+            // were revoked between pages. SQL must re-evaluate grant ancestry.
+            var revokeCursor = MachineDiscoveryCursor.Issue(cursorKey, installation, site, hash, machine);
+            await using (var connection = new Microsoft.Data.SqlClient.SqlConnection(sql))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    INSERT security.GrantRevocation(GrantId,RevokedAt)
+                    SELECT g.GrantId,SYSUTCDATETIME()
+                    FROM security.PermissionGrant g
+                    JOIN security.SessionAuthority s ON s.PrincipalId=g.GranteeId
+                    WHERE s.TokenHash=@hash AND g.Permission='commissioning.read'
+                      AND g.ScopeKind='M' AND g.SiteId=@site AND g.MachineId<>@keep
+                      AND NOT EXISTS(SELECT 1 FROM security.GrantRevocation r WHERE r.GrantId=g.GrantId);
+                    """;
+                command.Parameters.AddWithValue("@hash", hash);
+                command.Parameters.AddWithValue("@site", site);
+                command.Parameters.AddWithValue("@keep", machine);
+                await command.ExecuteNonQueryAsync();
+            }
+            using (var changedPage = await AuthorizedGet(
+                "/api/commissioning/v2/evidence-machines?cursor=" + Uri.EscapeDataString(revokeCursor)))
+            {
+                Check(changedPage.StatusCode == HttpStatusCode.OK,
+                    "valid signed cursor rechecks changed grants against current SQL authority");
+                using var changedJson = JsonDocument.Parse(await changedPage.Content.ReadAsStringAsync());
+                Check(changedJson.RootElement.GetProperty("machines").GetArrayLength() == 0 &&
+                    changedJson.RootElement.GetProperty("isComplete").GetBoolean() &&
+                    changedJson.RootElement.GetProperty("nextCursor").ValueKind == JsonValueKind.Null,
+                    "revoked machine grants cannot leak through an existing continuation");
+            }
             await new SqlSecurityAuthority(sql, installation).RevokeSessionAsync(
                 administratorSessionHash, Guid.NewGuid(), hash, await currentEpoch(),
                 "revoke disposable HTTP acceptance session");
