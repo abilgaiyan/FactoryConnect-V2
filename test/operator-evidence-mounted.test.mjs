@@ -34,7 +34,9 @@ test("authorized machine selection shows retained SQL-shaped values, then sessio
   globalThis.fetch = async (url, options) => {
     calls.push({ url: String(url), authorization: options.headers.Authorization });
     if (String(url).endsWith("/evidence-machines"))
-      return Response.json({ machines: [{ siteId, machineId, displayName: "CNC One" }] });
+      return new Response(JSON.stringify({ machines: [{ siteId, machineId, displayName: "CNC One" }],
+        isComplete: false, continuationSupported: false, maximumReturned: 100 }),
+        { status: 200, headers: { "Content-Type": "application/json", "X-Result-Complete": "false" } });
     if (String(url).endsWith(`/machines/${machineId}/evidence`))
       return Response.json({ machineId, siteId, streamKey: "mtconnect:uuid:fixture",
         evidenceKind: "historical-retained-evidence", currentConnectivity: null,
@@ -56,6 +58,7 @@ test("authorized machine selection shows retained SQL-shaped values, then sessio
   assert.ok(selector);
   assert.equal(selector.options.length, 2);
   assert.match(selector.textContent, /CNC One/);
+  assert.match(h.document.body.textContent, /Machine list is incomplete/);
   assert.equal(calls.length, 1);
   await act(async () => {
     selector.value = machineId;
