@@ -114,6 +114,37 @@ internal static class OperatorBrowserAcceptance
             var parent=(Guid)(await parentCommand.ExecuteScalarAsync(ct))!;
             var grant=Guid.NewGuid();
             await authority.GrantPermissionAsync(adminToken,new(Guid.NewGuid(),grant,principal,parent,"commissioning.read",AuthorizationScope.Machine(site,machine),true,false,DateTimeOffset.UtcNow.AddSeconds(-1),DateTimeOffset.UtcNow.AddMinutes(10),await epoch(),"isolated browser grant"));
+            // Verify forwarding behavior over a real TLS socket before browser acceptance.
+            // A trusted loopback proxy can assert HTTP, while an untrusted peer cannot.
+            foreach (var trustLoopback in new[] { true, false })
+            {
+                await using var proxyHost = EvidenceApiHost.Build([], builder =>
+                {
+                    builder.Configuration.AddInMemoryCollection(new Dictionary<string,string?>
+                    {
+                        ["Security:TrustedProxyIps:0"] = trustLoopback ? "127.0.0.1" : "192.0.2.1",
+                        ["ConnectionStrings:Evidence"] = sql,
+                        ["Evidence:InstallationId"] = installation.ToString()
+                    });
+                    builder.WebHost.ConfigureKestrel(o => o.Listen(IPAddress.Loopback, 0,
+                        listener => listener.UseHttps(certificate)));
+                });
+                await proxyHost.StartAsync(ct);
+                using var handler = new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                };
+                using var client = new HttpClient(handler);
+                using var requestMessage = new HttpRequestMessage(HttpMethod.Post,
+                    proxyHost.Urls.Single() + "/api/security/v2/human-sessions");
+                requestMessage.Headers.TryAddWithoutValidation("X-Forwarded-Proto", "http");
+                requestMessage.Content = new StringContent("");
+                using var response = await client.SendAsync(requestMessage, ct);
+                var expected = trustLoopback ? HttpStatusCode.Forbidden : HttpStatusCode.ServiceUnavailable;
+                if (response.StatusCode != expected)
+                    throw new InvalidOperationException("Trusted proxy HTTPS spoofing gate failed: "
+                        + trustLoopback + " expected " + expected + " actual " + response.StatusCode);
+            }
             var diagnostics = new ConcurrentQueue<string>();
             await using var api=EvidenceApiHost.Build([],builder=>
             {
