@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
+using System.Net;
 using FactoryConnect.Sql.Security;
 using FactoryConnect.Api;
 
@@ -15,6 +17,32 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = ar
     ApplicationName = typeof(EvidenceApiHost).Assembly.FullName, WebRootPath = webRoot });
 configure?.Invoke(builder);
 builder.Services.AddOperatorLogin(builder.Configuration);
+// Forwarding is opt-in and accepts only explicitly enumerated proxy IP addresses.
+// An unset configuration keeps direct HTTPS behavior unchanged.
+var trustedProxies = builder.Configuration.GetSection("Security:TrustedProxyIps").Get<string[]>() ?? [];
+if (trustedProxies.Length > 0)
+{
+    var forwarded = new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+        ForwardLimit = 1
+    };
+    foreach (var configuredIp in trustedProxies)
+    {
+        if (!IPAddress.TryParse(configuredIp, out var proxyIp)
+            || IPAddress.Any.Equals(proxyIp) || IPAddress.IPv6Any.Equals(proxyIp))
+            throw new InvalidOperationException("Security:TrustedProxyIps requires explicit non-wildcard IP addresses.");
+        forwarded.KnownProxies.Add(proxyIp);
+    }
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = forwarded.ForwardedHeaders;
+        options.ForwardLimit = forwarded.ForwardLimit;
+        options.KnownProxies.Clear();
+        options.KnownIPNetworks.Clear();
+        foreach (var proxyIp in forwarded.KnownProxies) options.KnownProxies.Add(proxyIp);
+    });
+}
 // Apply per-client limits before authentication and SQL authority operations.
 // Forwarded headers are deliberately not enabled without an explicit trusted proxy contract.
 builder.Services.AddRateLimiter(options =>
@@ -32,6 +60,8 @@ builder.Services.AddRateLimiter(options =>
             }));
 });
 var app = builder.Build();
+// Must precede HTTPS gating, security headers, authentication and rate limiting.
+if (trustedProxies.Length > 0) app.UseForwardedHeaders();
 app.Use(async (context, next) =>
 {
     // Security headers apply to success, denial, static assets and failures.
