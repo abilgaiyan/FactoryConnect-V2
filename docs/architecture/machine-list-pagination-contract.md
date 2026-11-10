@@ -1,6 +1,6 @@
 # FC2-045 — Machine discovery above 100: pagination contract
 
-Status: design proposal; no API behavior change.
+Status: implemented on PR #48; qualification in progress. No production deployment approval.
 
 ## Problem
 
@@ -15,9 +15,9 @@ presented as the complete fleet.
   whenever more authorized machines remain.
 - Do not expose unauthorized machine identifiers, counts, or ordering through
   pagination metadata or timing-dependent page skips.
-- Bind continuation tokens to the authenticated principal, installation,
-  effective permission/grant revision, filters and deterministic ordering.
-  Expire or reject tokens after authority revocation or scope changes.
+- Bind continuation tokens to the authenticated session, installation,
+  site filter and deterministic ordering. Revalidate SQL session and grant
+  ancestry on every page so revocation and changed scope cannot expose stale authorization.
 - Enforce maximum page size on the server. A client-supplied cursor is never
   SQL text, an arbitrary offset into unfiltered rows, or a grant bypass.
 - Avoid count queries over the entire unauthorized machine population.
@@ -37,8 +37,7 @@ presented as the complete fleet.
 5. SQL roundtrips and latency remain bounded under sparse access.
 6. Browser shows incomplete result state until all pages have been fetched.
 
-Implementation, schema changes and production deployment require separate
-qualification.
+Implementation and disposable-SQL qualification are on PR #48. Production deployment requires separate authorization.
 
 ## Implementation status (PR #48)
 
@@ -55,7 +54,19 @@ rechecks current session validity and permission ancestry for each page.
 With no configured key, continuation remains disabled and incomplete first
 pages remain visibly incomplete.
 
-**Not yet qualified:** authenticated multi-page HTTP acceptance for 101/1,200
-machines, cursor expiry/cross-user tampering acceptance, permission-change
-behavior, dashboard accumulation and performance measurements. This is not
-production deployment approval.
+**CI-qualified:** SQL keyset discovery for 1, 100, 101 and 1,200 authorized
+machines; 1,200 machines traverse exactly twelve 100-machine pages. Authenticated
+TestServer HTTP traverses 101 machine-scoped grants over two signed pages,
+including terminal completeness and no unauthorized IDs. Signed-cursor tamper,
+cross-session/site/installation, session-revocation and malformed-token tests
+pass. Dashboard mounted tests cover two-page accumulation and incomplete
+first-page messaging. Latest green SQL run measured 94.93 ms total for twelve
+1,200-machine discovery pages in disposable CI SQL (not a production SLA).
+
+**Remaining qualification:** explicit expired-token test; grant-scope change
+between pages; sparse 1-of-1,200 HTTP disclosure and latency acceptance;
+1,200-machine HTTP end-to-end measurement and browser behavior under permission
+changes. A valid signed cursor does not freeze authorization: each page
+revalidates current SQL permissions, so permission changes may change the
+visible result set. This is not snapshot isolation across pages and must not
+be represented as one. Production deployment remains unapproved.
