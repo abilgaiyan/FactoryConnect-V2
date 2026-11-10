@@ -270,8 +270,8 @@ internal static class OperatorEvidenceHttpAcceptance
                 await connection.OpenAsync();
                 await using var command = connection.CreateCommand();
                 command.CommandText = """
-                    INSERT security.GrantRevocation(GrantId,RevokedAt)
-                    SELECT g.GrantId,SYSUTCDATETIME()
+                    INSERT security.GrantRevocation(GrantId,OperationId)
+                    SELECT g.GrantId,NEWID()
                     FROM security.PermissionGrant g
                     JOIN security.SessionAuthority s ON s.PrincipalId=g.GranteeId
                     WHERE s.TokenHash=@hash AND g.Permission='commissioning.read'
