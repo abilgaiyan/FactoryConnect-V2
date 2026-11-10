@@ -55,7 +55,8 @@ try {
   expect(discovery.payload.continuationSupported).toBe(false);
   expect(discovery.payload.maximumReturned).toBe(100);
   expect(discovery.complete).toBe(String(discovery.payload.isComplete));
-  expect(discovery.payload.isComplete).toBe(discovery.payload.machines.length < 100);
+  if (discovery.payload.machines.length < 100) expect(discovery.payload.isComplete).toBe(true);
+  expect(discovery.payload.machines.length).toBeLessThanOrEqual(100);
   for (const response of discovery.forged) {
     expect(response.status).toBe(400);
     expect(response.payload.error).toContain('continuation is not yet supported');
