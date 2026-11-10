@@ -1,6 +1,6 @@
 # FC2-040 — Activity publication read compatibility
 
-Status: draft implementation; CI SUCCESS at fdf495d (run #42669023369: backend, dashboard, SQL acceptance). NOT merge-qualified. No production enablement.
+Status: merged to main as b67935a (PR #41). Read-side verification of version-4 publication receipts is implemented and covered by disposable-SQL acceptance. No production enablement; corruption fixtures are disposable-SQL only.
 
 ## Implemented scope and explicit deferrals
 
@@ -39,20 +39,15 @@ FC2-035 (merged PR #35) already supplies authenticated HTTPS history APIs, bound
 
 ## Local/production boundary
 
-CI uses disposable SQL. The user's `FactoryConnect_V2_Dev` on `DESKTOP-1PJK2OB\\FCINVENTORY` is reserved for separately authorized local smoke tests after checking schema identity and version. Do not auto-migrate it, use V1/Gajra databases, or deploy to production.
+CI uses disposable SQL. A developer-local database may be used for separately authorized smoke tests after checking schema identity and version. Do not auto-migrate it, use V1 or unrelated databases, or deploy to production.
 
-## Merge qualification register — 2026-11-09
+## Qualification register (final at merge, 2026-11-10)
 
-- **PASS:** SQL lock-order acceptance after resource-and-session attribution; SQL Server exposes `xp_userlock` during waits. Three stable snapshots, timeout/release checks and fail-closed behavior remain in acceptance.
-- **PASS:** CI run [#42647985475](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42647985475) at `615d895`: backend, dashboard and SQL acceptance.\n- **PASS (genuine 100-witness fixture):** the normal publisher retained exactly 100 source witnesses for one operation; the SQL reader verified that operation and rejected a transaction-local deletion of one witness. The 101 quiet batches in this acceptance are drained across two bounded publication cuts. This does not prove a legitimate 101-witness single operation.
-- **PASS (small fixture only):** authenticated series discovery 15 and history page 17 SQL roundtrips, cap 17 each.
-- **PASS (defensive SQL guard):** CI run [#42654842983](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42654842983) at `94e0e84` passed the 102-witness corruption fixture. It transaction-locally rebinds two retained witness records to a genuine 100-witness receipt, requires SQL error 51091, and rolls back. This is not legitimate publisher provenance.\n- **PASS (normal worker discovery limit):** CI run [#42669023369](https://github.com/abilgaiyan/FactoryConnect-V2/actions/runs/42669023369) at `fdf495d` verifies a 101-row discovery request is rejected with `ArgumentException` by the explicit bounded worker scope. The normal 100-row cut produced a genuine 100-witness receipt, verified by the reader. A hypothetical 101-witness receipt is not claimed as a legitimate writer output. The independent 102-witness corruption pre-read test (SQL 51091) also passed. Receipt-selection count tests remain distinct.
-- **OPEN:** genuine version-4 published history operation with corrupted retained witness must produce fail-closed authenticated HTTP response. Transaction-local SQL tamper tests do not substitute.
-- **OPEN:** authenticated 100-distinct-operation history page and series discovery, with measured command starts, roundtrips, bytes and budget, each <=17 roundtrips.
-- **OPEN:** final full-diff review, fresh SQL installation confirmation and acceptance register refresh at final head.
+Results below describe what the acceptance suite asserts. Exact measured values are emitted as `MEASURE:` lines in the SQL acceptance job log of the PR's final run; they are not duplicated here so this register cannot drift from CI.
 
-No merge or deployment is authorized by this CI result alone.
-
-## Demo decision boundary (2026-11-09)
-
-The current green CI qualifies the implemented compatibility behavior and bounded small-fixture checks, **not** the three outstanding merge gates. For a management demonstration, prefer a local disposable SQL environment with seeded non-production machine data, an authenticated operator session, and the existing dashboard; clearly label simulated or seeded data. Do not present this PR as production-ready, assert live Gajra connectivity, or apply migrations to the reserved developer database without separate verification and authorization. PR #41 remains draft until its outstanding qualification is resolved; a demo does not waive the 101-witness writer-bound question, authenticated v4 HTTP corruption test, or 100-distinct-operation benchmark.
+- **Lock order and contention:** the machine and processor applocks are taken in one ordered command with the original per-lock 10 s timeout and 51020 failure. Acceptance observes SQL lock state by exact resource and session (three stable snapshots), the timeout mapping to the authority-outage response, release after failure and recovery. SQL Server exposes `xp_userlock` during waits, so attribution is by blocked resource, not outer command text.
+- **Witness bounds:** the normal publisher retained exactly 100 source witnesses for one operation; the reader verifies that publication and rejects deletion of one witness. A 102-witness corruption fixture (transaction-local rebind, rolled back) is rejected by the SQL pre-read guard with error 51091; it is not legitimate publisher output. A 101-row worker discovery request is rejected by the bounded worker scope. A single operation with 101 witnesses is not claimed as writer output.
+- **Authenticated version-4 HTTP tamper:** after genuine version-4 publication, flipping one retained witness hash makes both series discovery and the 100-row page return a bounded HTTP 503 whose problem title is "Activity history integrity verification failed"; the exact hash is restored and reads recover.
+- **Gate 5 (100 distinct operations):** acceptance requires at least 100 committed publication operations for the mapping, then measures authenticated series discovery and a `take=100` history page, recording SQL command starts and server roundtrips. Each must be at most 17 roundtrips; the small-fixture measurements were 15 (discovery) and 17 (page). The page has no headroom: any added SQL command in authorization, the wrapper or the reader fails this gate by design.
+- **Retired machine or site:** the retirement guard runs inside the checkpoint read. Acceptance retires the machine, then the site, and requires discovery and both page forms to be denied (HTTP 401) without history in the body, and to resume once restored.
+- **Known limits:** the 8 MiB SQL pre-read budget does not bound all in-memory verifier work. The `same-batch-only-not-physical-completeness` literal is a compatibility label; per-publication verification and continuity metadata are deferred (see above).
