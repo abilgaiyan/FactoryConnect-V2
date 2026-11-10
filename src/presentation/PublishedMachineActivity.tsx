@@ -21,6 +21,7 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
 }) {
   const [state, setState] = useState<{ kind: "loading" | Failure } | { kind: "ready"; data: ActivitySeriesList; bearer: string }>({ kind: "loading" });
   const [mapping, setMapping] = useState("");
+  const [seriesRefresh, setSeriesRefresh] = useState(0);
   useEffect(() => {
     const abort = new AbortController(); setState({ kind: "loading" }); setMapping("");
     if (!sessionBearer) { setState({ kind: "denied" }); return () => abort.abort(); }
@@ -28,12 +29,13 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
       if (!abort.signal.aborted) { setState({ kind: "ready", data, bearer: sessionBearer }); setMapping(data.series.length === 1 ? data.series[0]!.mappingId : ""); }
     }).catch(error => { if (!abort.signal.aborted) setState({ kind: failure(error) }); });
     return () => abort.abort();
-  }, [machineId, baseAddress, sessionBearer]);
+  }, [machineId, baseAddress, sessionBearer, seriesRefresh]);
   const view = state.kind === "ready" && (state.data.machineId !== machineId || state.bearer !== sessionBearer)
     ? { kind: "loading" as const } : state;
   const selected = view.kind === "ready" ? view.data.series.find(x => x.mappingId === mapping) : undefined;
   return <section aria-label="Published machine activity">
     <h2>Published activity history</h2>
+    <button type="button" disabled={view.kind === "loading" || !sessionBearer} onClick={() => setSeriesRefresh(x => x + 1)}>Refresh processed state and history</button>
     <p>Closed periods derived from accepted machine observations. This history does not establish live connectivity, physical observation completeness or OEE.</p>
     {view.kind === "loading" && <p role="status">Checking published activity…</p>}
     {(view.kind === "denied" || view.kind === "unavailable" || view.kind === "failed") && <ErrorState kind={view.kind} />}
