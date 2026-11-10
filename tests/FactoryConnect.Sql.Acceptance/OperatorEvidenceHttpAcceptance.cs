@@ -194,6 +194,10 @@ internal static class OperatorEvidenceHttpAcceptance
             using (var revokedRoster = await AuthorizedGet("/api/commissioning/v2/evidence-machines"))
                 Check(revokedRoster.StatusCode == HttpStatusCode.Unauthorized,
                     "revoked human session loses machine discovery");
+            using (var revokedSigned = await AuthorizedGet(
+                "/api/commissioning/v2/evidence-machines?cursor=" + Uri.EscapeDataString(signedCursor)))
+                Check(revokedSigned.StatusCode == HttpStatusCode.Unauthorized,
+                    "revoked operator cannot resume an otherwise valid signed HTTP cursor");
             var revokedKeysetDenied = false;
             try
             {
