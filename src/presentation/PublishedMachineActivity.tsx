@@ -22,6 +22,7 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
 }) {
   const [state, setState] = useState<{ kind: "loading" | Failure } | { kind: "ready"; data: ActivitySeriesList; bearer: string }>({ kind: "loading" });
   const [processed, setProcessed] = useState<{ kind: "loading" | Failure } | { kind: "ready"; data: ProcessedStateResult; bearer: string }>({ kind: "loading" });
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [mapping, setMapping] = useState("");
   const [seriesRefresh, setSeriesRefresh] = useState(0);
   useEffect(() => {
@@ -35,6 +36,26 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
     }).catch(error => { if (!abort.signal.aborted) setState({ kind: failure(error) }); });
     return () => abort.abort();
   }, [machineId, baseAddress, sessionBearer, seriesRefresh]);
+  useEffect(() => {
+    if (!autoRefresh || !sessionBearer) return;
+    let active = true;
+    let pending = false;
+    const abort = new AbortController();
+    const timer = setInterval(() => {
+      if (pending || document.visibilityState === "hidden") return;
+      pending = true;
+      void readProcessedState(baseAddress, machineId, sessionBearer, abort.signal)
+        .then(data => { if (active) setProcessed({ kind: "ready", data, bearer: sessionBearer }); })
+        .catch(error => {
+          if (!active) return;
+          const kind = failure(error);
+          setProcessed({ kind });
+          if (kind === "denied") setAutoRefresh(false);
+        })
+        .finally(() => { pending = false; });
+    }, 30000);
+    return () => { active = false; abort.abort(); clearInterval(timer); };
+  }, [autoRefresh, machineId, baseAddress, sessionBearer]);
   const view = state.kind === "ready" && (state.data.machineId !== machineId || state.bearer !== sessionBearer)
     ? { kind: "loading" as const } : state;
   const processedView = processed.kind === "ready" && (processed.data.machineId !== machineId || processed.bearer !== sessionBearer)
@@ -44,6 +65,8 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
     <h2>Published activity history</h2>
     <section aria-label="Verified processed machine state">
       <h3>Verified processed machine state</h3>
+      <label><input type="checkbox" checked={autoRefresh} disabled={!sessionBearer}
+        onChange={event => setAutoRefresh(event.currentTarget.checked)} /> Refresh processed state every 30 seconds while this page is visible</label>
       <p>Historical checkpoint interpretation only. Live connectivity, freshness and processing coverage are not established.</p>
       {processedView.kind === "loading" && <p role="status">Reading verified processed state…</p>}
       {(processedView.kind === "denied" || processedView.kind === "unavailable" || processedView.kind === "failed") && <ErrorState kind={processedView.kind} />}
