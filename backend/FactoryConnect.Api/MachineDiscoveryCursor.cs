@@ -6,11 +6,11 @@ namespace FactoryConnect.Api;
 
 /// <summary>Short-lived, installation/site/session-bound machine seek cursor.
 /// The signing key is independently configured; a missing key disables continuation.</summary>
-internal static class MachineDiscoveryCursor
+public static class MachineDiscoveryCursor
 {
     private sealed record Payload(Guid Installation, Guid Site, string Session, Guid After, long Expires);
 
-    internal static byte[]? ReadKey(string? configured)
+    public static byte[]? ReadKey(string? configured)
     {
         if (string.IsNullOrWhiteSpace(configured)) return null;
         byte[] key;
@@ -20,7 +20,7 @@ internal static class MachineDiscoveryCursor
         return key;
     }
 
-    internal static string Issue(byte[] key, Guid installation, Guid site, byte[] sessionHash, Guid after)
+    public static string Issue(byte[] key, Guid installation, Guid site, byte[] sessionHash, Guid after)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(new Payload(installation, site,
             Convert.ToHexString(sessionHash), after, DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds()));
@@ -29,7 +29,7 @@ internal static class MachineDiscoveryCursor
             + "." + Convert.ToBase64String(mac).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
-    internal static bool TryRead(string? cursor, byte[] key, Guid installation, Guid site,
+    public static bool TryRead(string? cursor, byte[] key, Guid installation, Guid site,
         byte[] sessionHash, out Guid after)
     {
         after = default;
