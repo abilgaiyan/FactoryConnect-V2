@@ -132,6 +132,30 @@ internal static class OperatorEvidenceHttpAcceptance
                 && !MachineDiscoveryCursor.TryRead(signedCursor, cursorKey, Guid.NewGuid(), site, hash, out _)
                 && !MachineDiscoveryCursor.TryRead(signedCursor, cursorKey, installation, Guid.NewGuid(), hash, out _),
                 "signed cursor rejects cross-session, cross-installation and cross-site reuse");
+            // A correctly signed but expired cursor must fail without SQL access.
+            var expiredCursor = MachineDiscoveryCursor.Issue(cursorKey, installation, site, hash, machine);
+            var segments = expiredCursor.Split('.');
+            var expiredPayload = JsonDocument.Parse(Convert.FromBase64String(
+                segments[0].Replace('-', '+').Replace('_', '/').PadRight((segments[0].Length + 3) / 4 * 4, '=')));
+            var expiredBody = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                Installation = expiredPayload.RootElement.GetProperty("Installation").GetGuid(),
+                Site = expiredPayload.RootElement.GetProperty("Site").GetGuid(),
+                Session = expiredPayload.RootElement.GetProperty("Session").GetString(),
+                After = expiredPayload.RootElement.GetProperty("After").GetGuid(),
+                Expires = DateTimeOffset.UtcNow.AddSeconds(-1).ToUnixTimeSeconds(),
+            });
+            static string UrlBase64(byte[] bytes) => Convert.ToBase64String(bytes)
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            expiredCursor = UrlBase64(expiredBody) + "." +
+                UrlBase64(HMACSHA256.HashData(cursorKey, expiredBody));
+            Check(!MachineDiscoveryCursor.TryRead(expiredCursor, cursorKey, installation, site, hash, out _),
+                "correctly signed expired machine cursor is rejected");
+            using (var expiredHttp = await AuthorizedGet(
+                "/api/commissioning/v2/evidence-machines?cursor=" + Uri.EscapeDataString(expiredCursor)))
+                Check(expiredHttp.StatusCode == HttpStatusCode.BadRequest,
+                    "authenticated HTTP discovery rejects expired signed cursor");
+
             var signatureStart = signedCursor.IndexOf('.') + 1;
             var forgedCursor = signedCursor[..signatureStart] +
                 (signedCursor[signatureStart] == 'A' ? 'B' : 'A') + signedCursor[(signatureStart + 1)..];
