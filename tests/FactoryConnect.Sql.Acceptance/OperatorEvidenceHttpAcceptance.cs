@@ -114,7 +114,7 @@ internal static class OperatorEvidenceHttpAcceptance
                 using var rejected = await AuthorizedGet(
                     "/api/commissioning/v2/evidence-machines?" + parameter + "=forged");
                 Check(rejected.StatusCode == HttpStatusCode.BadRequest,
-                    "authenticated machine discovery rejects unsupported " + parameter);
+                    "authenticated machine discovery rejects unsigned " + parameter);
             }
             var authority = new SqlSecurityAuthority(sql, installation);
             var firstPage = await authority.ReadOperatorEvidenceMachinePageAsync(hash, site);
