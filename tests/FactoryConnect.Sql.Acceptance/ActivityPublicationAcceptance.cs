@@ -326,10 +326,14 @@ internal static class ActivityPublicationAcceptance
                         ALTER TABLE activity.PublicationSourceWitness NOCHECK CONSTRAINT FK_PublicationWitness_Owner;
                         DISABLE TRIGGER activity.TR_PublicationSourceWitnessImmutable ON activity.PublicationSourceWitness;
                         ;WITH extra AS (
-                            SELECT TOP(2) OperationId
-                            FROM activity.PublicationSourceWitness
-                            WHERE MachineId=@machine AND OperationId<>@op
-                            ORDER BY OperationId,BatchId
+                            SELECT TOP(2) w.OperationId
+                            FROM activity.PublicationSourceWitness w
+                            WHERE w.MachineId=@machine AND w.OperationId<>@op
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM activity.PublicationSourceWitness currentWitness
+                                  WHERE currentWitness.OperationId=@op AND currentWitness.BatchId=w.BatchId)
+                            GROUP BY w.OperationId
+                            ORDER BY w.OperationId
                         )
                         SELECT COUNT_BIG(*) FROM extra;
                         """,overflowConnection,overflowTx))
@@ -341,10 +345,13 @@ internal static class ActivityPublicationAcceptance
                     }
                     await using(var rebind=new SqlCommand("""
                         ;WITH extra AS (
-                            SELECT TOP(2) OperationId,BatchId
-                            FROM activity.PublicationSourceWitness
-                            WHERE MachineId=@machine AND OperationId<>@op
-                            ORDER BY OperationId,BatchId
+                            SELECT TOP(2) w.OperationId,w.BatchId
+                            FROM activity.PublicationSourceWitness w
+                            WHERE w.MachineId=@machine AND w.OperationId<>@op
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM activity.PublicationSourceWitness currentWitness
+                                  WHERE currentWitness.OperationId=@op AND currentWitness.BatchId=w.BatchId)
+                            ORDER BY w.OperationId,w.BatchId
                         )
                         UPDATE w SET OperationId=@op
                         FROM activity.PublicationSourceWitness w
