@@ -53,6 +53,15 @@ try {
   // expire its encrypted local cookie and must not claim durable revocation.
   const outageBearer = await accepted();
   await stage('sql-outage-start');
+  const outageDiagnostic = await page.evaluate(async ({ machine, bearer }) => {
+    const response = await fetch(`/api/commissioning/v2/machines/${machine}/evidence`, {
+      headers: { Authorization: 'Bearer ' + bearer }
+    });
+    return { status: response.status, body: await response.json() };
+  }, { machine: process.env.FC2_BROWSER_MACHINE, bearer: outageBearer });
+  expect(outageDiagnostic.status).toBe(503);
+  expect(outageDiagnostic.body.traceId).toBeTruthy();
+  await stage('verify-authority-diagnostic', { traceId: outageDiagnostic.body.traceId });
   const outageLogout = await page.evaluate(async () => (await fetch('/api/security/v2/logout', { method: 'POST' })).status);
   expect(outageLogout).toBe(503);
   expect(await page.evaluate(async () => (await fetch('/api/security/v2/session')).status)).toBe(401);
