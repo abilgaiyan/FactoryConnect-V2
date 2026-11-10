@@ -145,6 +145,43 @@ internal static class OperatorBrowserAcceptance
                     throw new InvalidOperationException("Trusted proxy HTTPS spoofing gate failed: "
                         + trustLoopback + " expected " + expected + " actual " + response.StatusCode);
             }
+            // Forged forwarded client addresses must not create fresh limiter buckets
+            // when the socket peer is not on the explicit trusted proxy allowlist.
+            await using (var limitedHost = EvidenceApiHost.Build([], builder =>
+            {
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string,string?>
+                {
+                    ["Security:TrustedProxyIps:0"] = "192.0.2.1",
+                    ["ConnectionStrings:Evidence"] = sql,
+                    ["Evidence:InstallationId"] = installation.ToString()
+                });
+                builder.WebHost.ConfigureKestrel(o => o.Listen(IPAddress.Loopback, 0,
+                    listener => listener.UseHttps(certificate)));
+            }))
+            {
+                await limitedHost.StartAsync(ct);
+                using var handler = new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                };
+                using var client = new HttpClient(handler);
+                var limited = false;
+                for (var i = 0; i < 135; i++)
+                {
+                    using var requestMessage = new HttpRequestMessage(HttpMethod.Get,
+                        limitedHost.Urls.Single() + "/api/commissioning/v2/evidence-machines");
+                    requestMessage.Headers.TryAddWithoutValidation("X-Forwarded-For",
+                        "203.0.113." + (i % 250).ToString(CultureInfo.InvariantCulture));
+                    using var response = await client.SendAsync(requestMessage, ct);
+                    if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                    {
+                        limited = true;
+                        break;
+                    }
+                }
+                if (!limited)
+                    throw new InvalidOperationException("Untrusted forwarded IP bypassed rate limiting.");
+            }
             var diagnostics = new ConcurrentQueue<string>();
             await using var api=EvidenceApiHost.Build([],builder=>
             {
