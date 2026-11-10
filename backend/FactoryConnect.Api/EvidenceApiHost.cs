@@ -75,7 +75,7 @@ app.MapPost("/api/security/v2/human-sessions", async (
     }
     catch (SecurityDeniedException) { return Results.Unauthorized(); }
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-    catch (Exception) { return Results.Problem(statusCode: 503, title: "Session authority unavailable"); }
+    catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "human-session-issuance", "Session authority unavailable"); }
 });
 
 // Machine selection is derived from current SQL authorization, never browser-supplied role claims.
@@ -106,7 +106,7 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
     }
     catch (SecurityDeniedException) { return Results.Unauthorized(); }
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-    catch (Exception) { return Results.Problem(statusCode: 503, title: "Evidence authority unavailable"); }
+    catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "machine-discovery", "Evidence authority unavailable"); }
     finally { CryptographicOperations.ZeroMemory(hash); }
 });
 
@@ -153,9 +153,9 @@ app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/evidence", async (
     }
     catch (SecurityDeniedException) { return Results.Unauthorized(); }
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-    catch (Exception)
+    catch (Exception ex)
     {
-        return Results.Problem(statusCode: 503, title: "Evidence authority unavailable");
+        return AuthorityDiagnostics.Unavailable(http, ex, "retained-evidence-read", "Evidence authority unavailable");
     }
     finally { CryptographicOperations.ZeroMemory(sessionHash); }
 });
