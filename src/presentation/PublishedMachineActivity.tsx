@@ -53,6 +53,7 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
           <strong>{x.sourceAddress}: {x.lastProcessedState ?? "Not qualified"}</strong>
           {" — last observed "}<time dateTime={x.lastObservedAt}>{new Date(x.lastObservedAt).toLocaleString()}</time>
           {" (generation "}{x.generation}{")"}
+          {" — observation age at read: "}{Math.max(0, Math.floor((Date.parse(processedView.data.readAsOf) - Date.parse(x.lastObservedAt)) / 1000)).toLocaleString()}{" seconds"}
         </li>)}</ul>)}
     </section>
     <button type="button" disabled={view.kind === "loading" || !sessionBearer} onClick={() => setSeriesRefresh(x => x + 1)}>Refresh processed state and history</button>
