@@ -170,11 +170,11 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
         // cursors explicitly instead of silently replaying the first page.
         if (http.Request.Query.ContainsKey("cursor") || http.Request.Query.ContainsKey("continuationToken"))
             return Results.BadRequest(new { error = "Machine discovery continuation is not yet supported" });
-        var machines = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
-            .ReadOperatorEvidenceMachinesAsync(hash, siteId, ct);
-        // A full bounded page does not prove that discovery is exhaustive.
-        // Fail closed on completeness until cursor-based discovery is implemented.
-        var isComplete = machines.Count() < 100;
+        var (machines, hasMore) = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+            .ReadOperatorEvidenceMachinePageAsync(hash, siteId, ct: ct);
+        // The extra SQL row establishes actual completeness even for exactly 100.
+        // Continuation remains disabled until authority-bound cursor validation lands.
+        var isComplete = !hasMore;
         http.Response.Headers["X-Result-Complete"] = isComplete ? "true" : "false";
         return Results.Ok(new { machines, isComplete, continuationSupported = false, maximumReturned = 100 });
     }
