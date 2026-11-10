@@ -63,8 +63,9 @@ export async function readAllOperatorEvidenceMachines(
   let cursor: string | undefined;
   for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
     const page = await readOperatorEvidenceMachinePage(baseAddress, bearer, signal, fetchImplementation, cursor);
+    if (signal?.aborted) throw new OperatorMachineReadFailure(499);
     for (const machine of page.machines) {
-      if (ids.has(machine.machineId)) throw new OperatorMachineReadFailure(502);
+      if (ids.has(machine.machineId) || machines.length >= 10000) throw new OperatorMachineReadFailure(502);
       ids.add(machine.machineId);
       machines.push(machine);
     }
