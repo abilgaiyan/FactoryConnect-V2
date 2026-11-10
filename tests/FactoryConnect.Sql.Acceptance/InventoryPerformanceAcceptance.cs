@@ -34,6 +34,44 @@ internal static class InventoryPerformanceAcceptance
                 VALUES(NEWID(),@actor,@actor,'bootstrap','configuration.read','I',1,0,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()));
             UPDATE security.InstallationState SET IsSealed=0 WHERE Singleton=1;
             """,("@site",site),("@small",smallSite),("@actor",actor),("@token",token));
+        // Large-fleet machine discovery uses an independently authorized site.
+        // Exercise exact page boundaries and 1,200 distinct machine identities.
+        var discoverySite=Guid.NewGuid();
+        await Execute("""
+            INSERT [master].Site(SiteId,DisplayName) VALUES(@site,N'Paginated discovery fixture');
+            ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<1200)
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                SELECT NEWID(),@site,CONCAT(N'Authorized machine ',i),CONVERT(bit,0)
+                FROM n OPTION(MAXRECURSION 0);
+            INSERT security.PermissionGrant(GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
+                VALUES(NEWID(),@actor,@actor,'bootstrap','commissioning.read','S',1,0,
+                    DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME()));
+            """,("@site",discoverySite),("@actor",actor));
+        var discovery=new SqlSecurityAuthority(pooled,target.InstallationId);
+        var discovered=new HashSet<Guid>();
+        Guid? afterMachine=null;
+        var pageSizes=new List<int>();
+        var discoveryWatch=Stopwatch.StartNew();
+        while (true)
+        {
+            var (machines,hasMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(token,discoverySite,afterMachine);
+            pageSizes.Add(machines.Count);
+            Check(machines.Count<=100&&machines.All(m=>m.SiteId==discoverySite)&&
+                machines.All(m=>discovered.Add(m.MachineId)),
+                "large-fleet discovery returns distinct authorized machines in bounded pages");
+            if (!hasMore)
+            {
+                Check(machines.Count>0||discovered.Count==0,
+                    "terminal discovery page preserves the final authorized machines");
+                break;
+            }
+            Check(machines.Count==100,"nonterminal machine page is full");
+            afterMachine=machines[^1].MachineId;
+        }
+        discoveryWatch.Stop();
+        Check(discovered.Count==1200&&pageSizes.Count==12&&pageSizes.All(size=>size==100),
+            "1,200 authorized machines require exactly 12 complete keyset pages");
+        Console.WriteLine($"MEASURE: authorized discovery machines=1200 pages={pageSizes.Count} elapsedMs={discoveryWatch.Elapsed.TotalMilliseconds:F2}");
         var traces=new ConcurrentQueue<Trace>();
         using var listener=new ActivityListener
         {
