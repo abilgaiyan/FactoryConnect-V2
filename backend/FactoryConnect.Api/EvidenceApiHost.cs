@@ -176,7 +176,7 @@ app.MapGet("/api/commissioning/v2/evidence-machines", async (
         // Fail closed on completeness until cursor-based discovery is implemented.
         var isComplete = machines.Count() < 100;
         http.Response.Headers["X-Result-Complete"] = isComplete ? "true" : "false";
-        return Results.Ok(new { machines, isComplete });
+        return Results.Ok(new { machines, isComplete, continuationSupported = false, maximumReturned = 100 });
     }
     catch (SecurityDeniedException) { return Results.Unauthorized(); }
     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
