@@ -17,6 +17,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 
 // Test-only identity provider. No identity fixture is registered in the shipped API.
@@ -113,9 +114,11 @@ internal static class OperatorBrowserAcceptance
             var parent=(Guid)(await parentCommand.ExecuteScalarAsync(ct))!;
             var grant=Guid.NewGuid();
             await authority.GrantPermissionAsync(adminToken,new(Guid.NewGuid(),grant,principal,parent,"commissioning.read",AuthorizationScope.Machine(site,machine),true,false,DateTimeOffset.UtcNow.AddSeconds(-1),DateTimeOffset.UtcNow.AddMinutes(10),await epoch(),"isolated browser grant"));
+            var diagnostics = new ConcurrentQueue<string>();
             await using var api=EvidenceApiHost.Build([],builder=>
             {
                 builder.Logging.ClearProviders();
+                builder.Logging.AddProvider(new AuthorityLogCapture(diagnostics));
                 // Resolve the pinned test issuer's discovery document over the fixture's
                 // actual TLS listener; token issuer validation remains exact and enabled.
                 builder.Services.PostConfigure<OpenIdConnectOptions>("operator-oidc", options =>
@@ -163,6 +166,18 @@ internal static class OperatorBrowserAcceptance
                         api.Configuration["ConnectionStrings:Evidence"] =
                             "Server=127.0.0.1,1;Database=FactoryConnectOutage;User Id=invalid;Password=invalid;Encrypt=True;TrustServerCertificate=True;Connect Timeout=1;ConnectRetryCount=0";
                     }
+                    else if(stage=="verify-authority-diagnostic")
+                    {
+                        var traceId=message.RootElement.GetProperty("traceId").GetString()!;
+                        if (!diagnostics.Any(line => line.Contains(traceId, StringComparison.Ordinal)
+                            && line.Contains("retained-evidence-read", StringComparison.Ordinal)
+                            && line.Contains("sql-error", StringComparison.Ordinal)))
+                            throw new InvalidOperationException("HTTP 503 traceId not correlated with safe authority diagnostic");
+                        if (diagnostics.Any(line => line.Contains(originalSql, StringComparison.Ordinal)
+                            || line.Contains(password, StringComparison.Ordinal)
+                            || line.Contains(clientSecret, StringComparison.Ordinal)))
+                            throw new InvalidOperationException("Authority diagnostic leaked a secret");
+                    }
                     else if(stage=="sql-outage-end")
                         api.Configuration["ConnectionStrings:Evidence"] = originalSql;
                     else if(stage=="revoke-outage-session")
@@ -176,11 +191,32 @@ internal static class OperatorBrowserAcceptance
                     await child.StandardInput.WriteLineAsync("continue");await child.StandardInput.FlushAsync(ct);
                 }
                 await child.WaitForExitAsync(ct);
-                if(child.ExitCode!=0||stages!=(activityMapping.HasValue?3:11))throw new InvalidOperationException("Browser acceptance failed: "+await errors);
+                if(child.ExitCode!=0||stages!=(activityMapping.HasValue?3:12))throw new InvalidOperationException("Browser acceptance failed: "+await errors);
                 return stages;
             }
             finally{if(!child.HasExited)child.Kill(true);}
         }
         finally{trust.Remove(root);}
+    }
+    private sealed class AuthorityLogCapture(ConcurrentQueue<string> entries) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => new CaptureLogger(entries, categoryName);
+        public void Dispose() { }
+        private sealed class CaptureLogger(ConcurrentQueue<string> entries, string category) : ILogger
+        {
+            public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+            public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (level >= LogLevel.Error && category == "FactoryConnect.Api.Authority")
+                    entries.Enqueue(formatter(state, exception));
+            }
+        }
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
     }
 }
