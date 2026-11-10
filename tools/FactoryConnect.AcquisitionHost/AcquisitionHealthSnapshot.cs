@@ -8,7 +8,7 @@ namespace FactoryConnect.AcquisitionHost;
 /// </summary>
 internal sealed class AcquisitionHealthSnapshot(string destination)
 {
-    internal async Task WriteAsync(object report, CancellationToken cancellationToken = default)
+    internal void Write(object report)
     {
         var path = Path.GetFullPath(destination);
         var directory = Path.GetDirectoryName(path)!;
@@ -17,7 +17,7 @@ internal sealed class AcquisitionHealthSnapshot(string destination)
         try
         {
             var json = JsonSerializer.SerializeToUtf8Bytes(report);
-            await File.WriteAllBytesAsync(temporary, json, cancellationToken);
+            File.WriteAllBytes(temporary, json);
             File.Move(temporary, path, overwrite: true);
         }
         finally
