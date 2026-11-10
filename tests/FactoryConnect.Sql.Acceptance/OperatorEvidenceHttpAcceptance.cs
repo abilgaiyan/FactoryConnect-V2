@@ -102,7 +102,28 @@ internal static class OperatorEvidenceHttpAcceptance
                 Check(machines.GetArrayLength() == 1 &&
                     machines[0].GetProperty("machineId").GetGuid() == machine,
                     "HTTP roster discloses only explicitly authorized machine");
+                Check(rosterJson.RootElement.GetProperty("isComplete").GetBoolean() &&
+                    !rosterJson.RootElement.GetProperty("continuationSupported").GetBoolean() &&
+                    rosterJson.RootElement.GetProperty("maximumReturned").GetInt32() == 100 &&
+                    roster.Headers.TryGetValues("X-Result-Complete", out var completeHeader) &&
+                    completeHeader.Single() == "true",
+                    "one-machine authorized roster proves complete and advertises bounded continuation capability");
             }
+            foreach (var parameter in new[] { "cursor", "continuationToken" })
+            {
+                using var rejected = await AuthorizedGet(
+                    "/api/commissioning/v2/evidence-machines?" + parameter + "=forged");
+                Check(rejected.StatusCode == HttpStatusCode.BadRequest,
+                    "authenticated machine discovery rejects unsupported " + parameter);
+            }
+            var authority = new SqlSecurityAuthority(sql, installation);
+            var firstPage = await authority.ReadOperatorEvidenceMachinePageAsync(hash, site);
+            Check(firstPage.Machines.Count == 1 && !firstPage.HasMore &&
+                firstPage.Machines[0].MachineId == machine,
+                "authorized keyset page returns the single permitted machine");
+            var afterPage = await authority.ReadOperatorEvidenceMachinePageAsync(hash, site, machine);
+            Check(afterPage.Machines.Count == 0 && !afterPage.HasMore,
+                "authorized keyset seek past the sole permitted machine is empty");
 
             var evidencePath = $"/api/commissioning/v2/machines/{machine:D}/evidence";
             var evidenceWatch = Stopwatch.StartNew();
