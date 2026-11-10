@@ -149,20 +149,39 @@ internal static class OperatorLogin
             if (!http.Request.IsHttps || http.Request.Headers.Origin != $"https://{http.Request.Host}") return Results.StatusCode(403);
             var ticket = await http.AuthenticateAsync(Cookie);
             var bearer = ticket.Principal?.FindFirst(TokenClaim)?.Value;
-            if (bearer is not null)
+            var revocationFailed = false;
+            try
             {
-                var secret = Convert.FromBase64String(bearer); var hash = SHA256.HashData(secret);
-                CryptographicOperations.ZeroMemory(secret);
-                try
+                if (bearer is not null)
                 {
-                    await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, Guid.Parse(config["Evidence:InstallationId"]!))
-                        .EndOwnSessionAsync(hash, ct);
+                    byte[]? hash = null;
+                    try
+                    {
+                        var secret = Convert.FromBase64String(bearer);
+                        try { hash = SHA256.HashData(secret); }
+                        finally { CryptographicOperations.ZeroMemory(secret); }
+                        await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, Guid.Parse(config["Evidence:InstallationId"]!))
+                            .EndOwnSessionAsync(hash, ct);
+                    }
+                    catch (SecurityDeniedException) { }
+                    catch (Exception ex)
+                    {
+                        http.RequestServices.GetRequiredService<ILoggerFactory>()
+                            .CreateLogger("FactoryConnect.Api.OperatorLogin")
+                            .LogError(ex, "Operator session revocation failed; local cookie will still be cleared. TraceId={TraceId}", http.TraceIdentifier);
+                        revocationFailed = true;
+                    }
+                    finally { if (hash is not null) CryptographicOperations.ZeroMemory(hash); }
                 }
-                catch (SecurityDeniedException) { }
-                finally { CryptographicOperations.ZeroMemory(hash); }
             }
-            await http.SignOutAsync(Cookie);
-            return Results.NoContent();
+            finally
+            {
+                // Local cookie removal must not depend on SQL revocation, token decoding or request cancellation.
+                await http.SignOutAsync(Cookie);
+            }
+            return revocationFailed
+                ? Results.Problem(statusCode: 503, title: "Session revocation unavailable")
+                : Results.NoContent();
         });
     }
 }

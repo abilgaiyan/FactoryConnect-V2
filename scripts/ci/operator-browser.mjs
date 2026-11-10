@@ -49,6 +49,27 @@ try {
   expect(await page.evaluate(async () => (await fetch('/api/security/v2/session')).status)).toBe(401);
   expect(await page.evaluate(async ({ machine, bearer }) => (await fetch(`/api/commissioning/v2/machines/${machine}/evidence`, { headers: { Authorization: 'Bearer ' + bearer } })).status,
     { machine: process.env.FC2_BROWSER_MACHINE, bearer: loggedOut })).toBe(401);
+  // Force a real SQL connection failure after OIDC sign-in. The API must still
+  // expire its encrypted local cookie and must not claim durable revocation.
+  const outageBearer = await accepted();
+  await stage('sql-outage-start');
+  const outageLogout = await page.evaluate(async () => (await fetch('/api/security/v2/logout', { method: 'POST' })).status);
+  expect(outageLogout).toBe(503);
+  expect(await page.evaluate(async () => (await fetch('/api/security/v2/session')).status)).toBe(401);
+  await stage('sql-outage-end');
+  expect(await page.evaluate(async () => (await fetch('/api/security/v2/session')).status)).toBe(401);
+  // The bearer may still be valid on the SQL server: local logout is not revocation.
+  const stillValid = await page.evaluate(async ({ machine, bearer }) =>
+    (await fetch(`/api/commissioning/v2/machines/${machine}/evidence`, {
+      headers: { Authorization: 'Bearer ' + bearer }
+    })).status, { machine: process.env.FC2_BROWSER_MACHINE, bearer: outageBearer });
+  expect(stillValid).toBe(200);
+  await stage('revoke-outage-session', { hash: createHash('sha256').update(Buffer.from(outageBearer, 'base64')).digest('hex') });
+  const outageRevoked = await page.evaluate(async ({ machine, bearer }) =>
+    (await fetch(`/api/commissioning/v2/machines/${machine}/evidence`, {
+      headers: { Authorization: 'Bearer ' + bearer }
+    })).status, { machine: process.env.FC2_BROWSER_MACHINE, bearer: outageBearer });
+  expect(outageRevoked).toBe(401);
   const second = await accepted();
   await mkdir('artifacts/ingestion', { recursive: true });
   await page.screenshot({ path: 'artifacts/ingestion/operator-evidence.png', fullPage: true });
@@ -59,6 +80,6 @@ try {
   await page.reload();
   await expect(page.locator('select')).toHaveCount(0);
   await expect(page.getByText('No machines currently authorized for commissioning evidence.')).toBeVisible();
-  await writeFile('artifacts/ingestion/operator-browser.json', JSON.stringify({ controlledFixture: true, https: true, browser: 'Chromium', oidcCodePkce: true, invalidAudienceNonceExpirySignatureIssuerDenied: true, literalValuePreserved: true, sessionRevocationDenied: true, logoutRevokesSqlSession: true, grantRevocationDenied: true }));
+  await writeFile('artifacts/ingestion/operator-browser.json', JSON.stringify({ controlledFixture: true, https: true, browser: 'Chromium', oidcCodePkce: true, invalidAudienceNonceExpirySignatureIssuerDenied: true, literalValuePreserved: true, sessionRevocationDenied: true, logoutRevokesSqlSession: true, outageLogoutClearsLocalCookieWithoutSqlRevocation: true, grantRevocationDenied: true }));
   await stage('complete');
 } finally { await browser.close(); input.close(); }
