@@ -182,6 +182,42 @@ internal static class OperatorBrowserAcceptance
                 if (!limited)
                     throw new InvalidOperationException("Untrusted forwarded IP bypassed rate limiting.");
             }
+            // A verified single-hop proxy must partition by the forwarded client IP,
+            // rather than rate-limiting all clients together under the proxy socket IP.
+            await using (var trustedHost = EvidenceApiHost.Build([], builder =>
+            {
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string,string?>
+                {
+                    ["Security:TrustedProxyIps:0"] = "127.0.0.1",
+                    ["ConnectionStrings:Evidence"] = sql,
+                    ["Evidence:InstallationId"] = installation.ToString()
+                });
+                builder.WebHost.ConfigureKestrel(o => o.Listen(IPAddress.Loopback, 0,
+                    listener => listener.UseHttps(certificate)));
+            }))
+            {
+                await trustedHost.StartAsync(ct);
+                using var handler = new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                };
+                using var client = new HttpClient(handler);
+                async Task<HttpStatusCode> SendAs(string forwardedIp)
+                {
+                    using var requestMessage = new HttpRequestMessage(HttpMethod.Get,
+                        trustedHost.Urls.Single() + "/api/commissioning/v2/evidence-machines");
+                    requestMessage.Headers.TryAddWithoutValidation("X-Forwarded-For", forwardedIp);
+                    using var response = await client.SendAsync(requestMessage, ct);
+                    return response.StatusCode;
+                }
+                for (var i = 0; i < 120; i++)
+                    if (await SendAs("203.0.113.10") == HttpStatusCode.TooManyRequests)
+                        throw new InvalidOperationException("Trusted client was rate limited before its quota.");
+                if (await SendAs("203.0.113.10") != HttpStatusCode.TooManyRequests)
+                    throw new InvalidOperationException("Trusted forwarded client IP did not exhaust its own quota.");
+                if (await SendAs("203.0.113.11") == HttpStatusCode.TooManyRequests)
+                    throw new InvalidOperationException("Independent trusted client inherited another client's quota.");
+            }
             var diagnostics = new ConcurrentQueue<string>();
             await using var api=EvidenceApiHost.Build([],builder=>
             {
