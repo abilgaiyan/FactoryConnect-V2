@@ -72,6 +72,39 @@ internal static class InventoryPerformanceAcceptance
         Check(discovered.Count==1200&&pageSizes.Count==12&&pageSizes.All(size=>size==100),
             "1,200 authorized machines require exactly 12 complete keyset pages");
         Console.WriteLine($"MEASURE: authorized discovery machines=1200 pages={pageSizes.Count} elapsedMs={discoveryWatch.Elapsed.TotalMilliseconds:F2}");
+        // Exactly 100 must be complete; 101 must advertise one further page.
+        // These fixtures exercise the SQL lookahead, not just client metadata.
+        var exactlyHundredSite=Guid.NewGuid();
+        var hundredOneSite=Guid.NewGuid();
+        await Execute("""
+            INSERT [master].Site(SiteId,DisplayName)
+                VALUES(@hundred,N'100-machine discovery boundary'),(@hundredOne,N'101-machine discovery boundary');
+            ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<101)
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                SELECT NEWID(),@hundred,CONCAT(N'Boundary 100-',i),0
+                FROM n WHERE i<=100 OPTION(MAXRECURSION 101);
+            ;WITH n AS (SELECT 1 AS i UNION ALL SELECT i+1 FROM n WHERE i<101)
+            INSERT [master].Machine(MachineId,SiteId,DisplayName,IsRetired)
+                SELECT NEWID(),@hundredOne,CONCAT(N'Boundary 101-',i),0
+                FROM n OPTION(MAXRECURSION 101);
+            INSERT security.PermissionGrant
+                (GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,SiteId,
+                 UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
+                SELECT NEWID(),@actor,@actor,'bootstrap','commissioning.read','S',SiteId,
+                    1,0,DATEADD(minute,-1,SYSUTCDATETIME()),DATEADD(hour,1,SYSUTCDATETIME())
+                FROM (VALUES(@hundred),(@hundredOne)) AS boundaries(SiteId);
+            """,("@hundred",exactlyHundredSite),("@hundredOne",hundredOneSite),("@actor",actor));
+        var (exactlyHundred,hasHundredMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(token,exactlyHundredSite);
+        Check(exactlyHundred.Count==100&&!hasHundredMore,
+            "exactly 100 authorized machines are a complete first page");
+        var (hundredOneFirst,hasHundredOneMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(token,hundredOneSite);
+        Check(hundredOneFirst.Count==100&&hasHundredOneMore,
+            "101 authorized machines expose a nonterminal first page");
+        var (hundredOneLast,hasHundredOneLastMore)=await discovery.ReadOperatorEvidenceMachinePageAsync(
+            token,hundredOneSite,hundredOneFirst[^1].MachineId);
+        Check(hundredOneLast.Count==1&&!hasHundredOneLastMore&&
+            !hundredOneFirst.Any(m=>m.MachineId==hundredOneLast[0].MachineId),
+            "101st authorized machine is returned once on a complete second page");
         var traces=new ConcurrentQueue<Trace>();
         using var listener=new ActivityListener
         {
