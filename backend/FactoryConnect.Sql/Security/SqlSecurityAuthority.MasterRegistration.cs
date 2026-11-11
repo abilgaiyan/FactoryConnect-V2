@@ -26,6 +26,27 @@ public sealed partial class SqlSecurityAuthority
             }, ct);
     }
 
+
+    public sealed record AdministrationMachine(Guid MachineId, Guid SiteId, string DisplayName, bool IsRetired);
+    public Task<IReadOnlyList<AdministrationMachine>> ReadAdministrationMachinesAsync(
+        byte[] sessionHash, CancellationToken ct = default)
+    {
+        if (sessionHash is null || sessionHash.Length != 32) throw new SecurityDeniedException();
+        return ReadAsync(sessionHash, "configuration.master.manage", AuthorizationScope.Installation,
+            async (connection, transaction, token) =>
+            {
+                await using var command = new Microsoft.Data.SqlClient.SqlCommand(
+                    "SELECT MachineId, SiteId, DisplayName, IsRetired FROM master.Machine ORDER BY DisplayName, MachineId",
+                    connection, transaction);
+                await using var reader = await command.ExecuteReaderAsync(token);
+                var machines = new List<AdministrationMachine>();
+                while (await reader.ReadAsync(token))
+                    machines.Add(new AdministrationMachine(reader.GetGuid(0), reader.GetGuid(1),
+                        reader.GetString(2), reader.GetBoolean(3)));
+                return (IReadOnlyList<AdministrationMachine>)machines;
+            }, ct);
+    }
+
     // Registration is a master-data change, not an acquisition or machine activation.
     // The installation-level grant is deliberately separate from evidence-reading rights.
     public Task<Guid> RegisterMasterRecordAsync(byte[] sessionHash, Guid operationId,
