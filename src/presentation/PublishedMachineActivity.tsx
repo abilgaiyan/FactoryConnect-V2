@@ -159,7 +159,8 @@ function AcquisitionHealthPanel({ machineId, baseAddress, bearer }: {
   const [refresh, setRefresh] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [state, setState] = useState<{ kind: "loading" | Failure } |
-    { kind: "ready"; data: AcquisitionHealthResult }>({ kind: "loading" });
+    { kind: "ready"; data: AcquisitionHealthResult; scope: string }>({ kind: "loading" });
+  const scope = `${machineId}:${baseAddress}:${bearer ?? ""}`;
   useEffect(() => {
     if (!enabled || !bearer) return;
     const abort = new AbortController();
@@ -169,7 +170,7 @@ function AcquisitionHealthPanel({ machineId, baseAddress, bearer }: {
       pending = true;
       setState({ kind: "loading" });
       void readAcquisitionHealth(baseAddress, machineId, bearer, abort.signal)
-        .then(data => { if (!abort.signal.aborted) setState({ kind: "ready", data }); })
+        .then(data => { if (!abort.signal.aborted) setState({ kind: "ready", data, scope }); })
         .catch(error => {
           if (abort.signal.aborted) return;
           const kind = failure(error);
@@ -181,10 +182,9 @@ function AcquisitionHealthPanel({ machineId, baseAddress, bearer }: {
     read();
     const timer = autoRefresh ? setInterval(read, 30000) : undefined;
     return () => { abort.abort(); if (timer !== undefined) clearInterval(timer); };
-  }, [enabled, refresh, autoRefresh, machineId, baseAddress, bearer]);
-  const [scopeMachine, scopeBase, scopeBearer] = [machineId, baseAddress, bearer];
+  }, [enabled, refresh, autoRefresh, machineId, baseAddress, bearer, scope]);
   const healthView = state.kind === "ready" && (
-    state.data.machineId !== scopeMachine || !scopeBearer || !enabled)
+    state.scope !== scope || state.data.machineId !== machineId || !bearer || !enabled)
     ? { kind: "loading" as const } : state;
   return <section aria-label="Acquisition host health">
     <h3>Acquisition host health</h3>
