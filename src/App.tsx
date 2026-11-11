@@ -104,7 +104,7 @@ export function App({ runtime }: AppProps) {
         </div>
         <div className="operator-session-control">{validEvidenceSession
           ? <button type="button" onClick={() => { void endEvidenceSession(); }}>End evidence session</button>
-          : <a href="/api/security/v2/login">Sign in to view machine evidence</a>}</div>
+          : <a href="/api/security/v2/login">Sign in to FactoryConnect</a>}</div>
         <nav aria-label="Dashboard">
           {SupervisorWorkspace && <ApplicationLink href="/supervisor-preview" navigate={navigate} current={route.kind === "supervisorPreview"}>Supervisor desk preview</ApplicationLink>}
           <ApplicationLink href="/operator-evidence" navigate={navigate} current={route.kind === "operatorEvidence"}>Operator evidence</ApplicationLink>{" "}
