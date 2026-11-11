@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { readActivityHistory, readActivitySeries, type ActivityHistoryPage, type ActivitySeriesList } from "../api/evidence/activity-history-client.ts";
 import { readProcessedState, type ProcessedStateResult } from "../api/evidence/processed-state-client.ts";
+import { readAcquisitionHealth, type AcquisitionHealthResult } from "../api/evidence/acquisition-health-client.ts";
 import { EvidenceReadFailure } from "../api/evidence/retained-evidence-client.ts";
 
 type Failure = "denied" | "unavailable" | "failed";
@@ -63,6 +64,7 @@ export function PublishedMachineActivity({ machineId, baseAddress, sessionBearer
   const selected = view.kind === "ready" ? view.data.series.find(x => x.mappingId === mapping) : undefined;
   return <section aria-label="Published machine activity">
     <h2>Published activity history</h2>
+    <AcquisitionHealthPanel machineId={machineId} baseAddress={baseAddress} bearer={sessionBearer} />
     <section aria-label="Verified processed machine state">
       <h3>Verified processed machine state</h3>
       <label><input type="checkbox" checked={autoRefresh} disabled={!sessionBearer}
@@ -148,4 +150,42 @@ function ActivityPeriods({ machineId, mappingId, baseAddress, bearer }: {
       {view.data.nextCursor && <button type="button" onClick={() => setCursor(view.data.nextCursor)}>Older activity periods</button>}
     </>}
   </div>;
+}
+
+function AcquisitionHealthPanel({ machineId, baseAddress, bearer }: {
+  machineId: string; baseAddress: string; bearer: string | null;
+}) {
+  const [enabled, setEnabled] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const [state, setState] = useState<{ kind: "loading" | Failure } |
+    { kind: "ready"; data: AcquisitionHealthResult }>({ kind: "loading" });
+  useEffect(() => {
+    if (!enabled || !bearer) return;
+    const abort = new AbortController();
+    setState({ kind: "loading" });
+    void readAcquisitionHealth(baseAddress, machineId, bearer, abort.signal)
+      .then(data => { if (!abort.signal.aborted) setState({ kind: "ready", data }); })
+      .catch(error => { if (!abort.signal.aborted) setState({ kind: failure(error) }); });
+    return () => abort.abort();
+  }, [enabled, refresh, machineId, baseAddress, bearer]);
+  return <section aria-label="Acquisition host health">
+    <h3>Acquisition host health</h3>
+    <p>Local acquisition-host telemetry only. Does not establish live CNC connectivity or machine activity.</p>
+    <button type="button" disabled={!bearer} onClick={() => { setEnabled(true); setRefresh(x => x + 1); }}>
+      {enabled ? "Refresh acquisition health" : "Check acquisition health"}
+    </button>
+    {enabled && state.kind === "loading" && <p role="status">Reading acquisition health…</p>}
+    {enabled && state.kind === "unavailable" && <p role="status">Acquisition health is not configured or currently unavailable.</p>}
+    {enabled && state.kind === "denied" && <p role="alert">Acquisition health access is not authorized.</p>}
+    {enabled && state.kind === "failed" && <p role="alert">Unable to read acquisition health.</p>}
+    {enabled && state.kind === "ready" && <dl>
+      <dt>Host status</dt><dd>{state.data.health.status} ({state.data.health.operational ? "recent operational event" : "not operational or not established"})</dd>
+      {state.data.health.ageSeconds !== undefined && <><dt>Snapshot age</dt><dd>{state.data.health.ageSeconds} seconds</dd></>}
+      {state.data.health.snapshot?.lastSourceResponseAt && <><dt>Last MTConnect source response</dt>
+        <dd><time dateTime={state.data.health.snapshot.lastSourceResponseAt}>{new Date(state.data.health.snapshot.lastSourceResponseAt).toLocaleString()}</time></dd></>}
+      {state.data.health.snapshot?.lastDurableCommitAt && <><dt>Last durable SQL admission</dt>
+        <dd><time dateTime={state.data.health.snapshot.lastDurableCommitAt}>{new Date(state.data.health.snapshot.lastDurableCommitAt).toLocaleString()}</time></dd></>}
+      {state.data.health.reason && <><dt>Reason</dt><dd>{state.data.health.reason}</dd></>}
+    </dl>}
+  </section>;
 }
