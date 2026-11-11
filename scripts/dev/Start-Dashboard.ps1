@@ -14,9 +14,6 @@ try {
         $env:VITE_ENABLE_FIXTURES = 'true'
         Remove-Item Env:FC2_DEV_API_URL -ErrorAction SilentlyContinue
     } else {
-        if (-not [Uri]::TryCreate($ApiUrl, [UriKind]::Absolute, [ref]([Uri]$null))) {
-            throw 'Invalid API URL'
-        }
         $uri = [Uri]$ApiUrl
         if ($uri.Scheme -ne 'https' -or $uri.Host -notin @('localhost','127.0.0.1','::1') -or
             $uri.UserInfo -or $uri.AbsolutePath -ne '/' -or $uri.Query -or $uri.Fragment) {
