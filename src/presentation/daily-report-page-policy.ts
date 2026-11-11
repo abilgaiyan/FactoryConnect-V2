@@ -29,8 +29,9 @@ export function filterDailyReportModel(
   model: DailyReportModel,
   productionLineId: string,
   machineId: string,
+  shiftId = "",
 ): DailyReportModel {
-  if (productionLineId === "" && machineId === "") {
+  if (productionLineId === "" && machineId === "" && shiftId === "") {
     return model;
   }
 
@@ -40,7 +41,12 @@ export function filterDailyReportModel(
       ...group,
       machines: group.machines.filter(machine =>
         (productionLineId === "" || machine.productionLineId === productionLineId) &&
-        (machineId === "" || machine.machineId === machineId)),
+        (machineId === "" || machine.machineId === machineId) &&
+        (shiftId === "" || machine.shifts.some(shift => shift.shift.shiftId === shiftId)))
+        .map(machine => shiftId === "" ? machine : {
+          ...machine,
+          shifts: machine.shifts.filter(shift => shift.shift.shiftId === shiftId),
+        }),
     })).filter(group => group.machines.length > 0),
   };
 }
