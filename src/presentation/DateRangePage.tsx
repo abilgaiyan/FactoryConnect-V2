@@ -68,6 +68,7 @@ export function DateRangePage({ runtime }: {
     <label>Production line <select value={line} onChange={e => { invalidate(); setLine(e.target.value); }}><option value="">All lines</option>{lines.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
     <fieldset><legend>Machines</legend>{eligibleMachines.map(id => <label key={id}><input type="checkbox" checked={machines.includes(id)} onChange={e => { invalidate(); setMachines(old => e.target.checked ? [...old, id] : old.filter(x => x !== id)); }}/>{id}</label>)}</fieldset>
     <button type="submit" disabled={noSources || selectedSources.length === 0}>Load range</button></form>
+    <button type="button" disabled={state.kind !== "success" || rows.length === 0} onClick={() => window.print()}>Print loaded report</button>
     {!noSources && selectedSources.length === 0 && <p role="status">No machines are selected for the chosen site and line.</p>}
     {state.kind === 'success' && rows.length === 0 && <p role="status">No reporting results were returned for this selection. Metrics are unavailable, not zero.</p>}
     {state.kind === 'loading' && <p role="status">Loading all selected reporting pages…</p>}{state.kind === 'failure' && <p role="alert">Request failed: {state.error}. Presence or absence has not been established for this selection.</p>}
