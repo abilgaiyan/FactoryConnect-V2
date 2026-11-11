@@ -5,10 +5,10 @@ namespace FactoryConnect.Sql.MasterData;
 
 /// <summary>
 /// SQL-backed site, line and machine inventory. Registration must be called only
-/// after the HTTP boundary has independently authorized an administrator.
+/// after an audited, transaction-bound SQL authorization command has verified the actor.
 /// No runtime configuration, acquisition or activation is performed here.
 /// </summary>
-public sealed class MachineAdministrationStore(string connectionString)
+internal sealed class MachineAdministrationStore(string connectionString)
 {
     public sealed record Site(Guid SiteId, string DisplayName, bool IsRetired);
     public sealed record ProductionLine(Guid ProductionLineId, Guid SiteId, string DisplayName, bool IsRetired);
@@ -55,7 +55,7 @@ public sealed class MachineAdministrationStore(string connectionString)
         return rows;
     }
 
-    public Task<Guid> RegisterSiteAsync(string name, CancellationToken ct = default)
+    // Internal-only until the write-authority integration can prove permission,\n    // operation identity and audit in the same SQL transaction.\n    public Task<Guid> RegisterSiteAsync(string name, CancellationToken ct = default)
         => RegisterAsync("Site", "SiteId", null, name, ct);
 
     public Task<Guid> RegisterLineAsync(Guid siteId, string name, CancellationToken ct = default)
