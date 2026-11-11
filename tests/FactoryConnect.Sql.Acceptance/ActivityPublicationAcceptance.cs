@@ -344,14 +344,19 @@ internal static class ActivityPublicationAcceptance
                         Check(available==2,"two distinct retained witnesses available for defensive overflow fixture");
                     }
                     await using(var rebind=new SqlCommand("""
-                        ;WITH extra AS (
-                            SELECT TOP(2) w.OperationId,w.BatchId
+                        ;WITH candidates AS (
+                            SELECT w.OperationId,w.BatchId,
+                                   ROW_NUMBER() OVER (PARTITION BY w.BatchId ORDER BY w.OperationId) AS batchRank
                             FROM activity.PublicationSourceWitness w
                             WHERE w.MachineId=@machine AND w.OperationId<>@op
                               AND NOT EXISTS (
                                   SELECT 1 FROM activity.PublicationSourceWitness currentWitness
                                   WHERE currentWitness.OperationId=@op AND currentWitness.BatchId=w.BatchId)
-                            ORDER BY w.OperationId,w.BatchId
+                        ), extra AS (
+                            SELECT TOP(2) OperationId,BatchId
+                            FROM candidates
+                            WHERE batchRank=1
+                            ORDER BY OperationId,BatchId
                         )
                         UPDATE w SET OperationId=@op
                         FROM activity.PublicationSourceWitness w
