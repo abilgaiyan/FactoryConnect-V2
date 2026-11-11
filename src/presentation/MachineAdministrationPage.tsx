@@ -49,7 +49,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     <button type="button" disabled={!sessionBearer || current.kind === "loading"}
       onClick={() => setRevision(value => value + 1)}>Refresh authorized machines</button>
     {current.kind === "loading" && <p role="status">Checking authorized machines…</p>}
-    {current.kind === "signIn" && <p role="alert">Sign in to view authorized machines.</p>}
+    {current.kind === "signIn" && <p role="alert">Sign in to view authorized machines. <a href="/api/security/v2/login">Sign in to FactoryConnect</a></p>}
     {current.kind === "unavailable" && <p role="alert">Machine discovery is unavailable. No cached inventory is shown.</p>}
     {current.kind === "ready" && <>
       {!current.complete && <p role="alert">The authorized machine list is incomplete. Counts below are partial.</p>}
@@ -66,7 +66,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
           </tr>)}</tbody>
         </table>
       </div>
-      {matches.length === 0 && <p>No authorized machines match the current search.</p>}
+      {matches.length === 0 && <p>{current.machines.length === 0 ? "No machines are available to this account. This does not mean the factory has no registered machines." : "No authorized machines match the current search."}</p>}
     </>}
   </section>;
 }
