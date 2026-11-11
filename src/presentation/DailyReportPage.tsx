@@ -37,13 +37,18 @@ export function DailyReportPage({
   const visibleModel = visibleDailyReportModel(state);
   const [selectedLine, setSelectedLine] = useState("");
   const [selectedMachine, setSelectedMachine] = useState("");
+  const [selectedShift, setSelectedShift] = useState("");
   const lines = [...new Set(visibleModel?.groups.flatMap(group =>
     group.machines.map(machine => machine.productionLineId)) ?? [])].sort();
   const line = lines.includes(selectedLine) ? selectedLine : "";
   const machines = visibleModel?.groups.flatMap(group => group.machines)
     .filter(item => line === "" || item.productionLineId === line) ?? [];
   const machine = machines.some(item => item.machineId === selectedMachine) ? selectedMachine : "";
-  const filteredModel = visibleModel === null ? null : filterDailyReportModel(visibleModel, line, machine);
+  const shifts = [...new Set(machines
+    .filter(item => machine === "" || item.machineId === machine)
+    .flatMap(item => item.shifts.map(shift => shift.shift.shiftId)))].sort();
+  const shift = shifts.includes(selectedShift) ? selectedShift : "";
+  const filteredModel = visibleModel === null ? null : filterDailyReportModel(visibleModel, line, machine, shift);
 
   return (
     <div className="daily-report-page">
@@ -68,18 +73,25 @@ export function DailyReportPage({
         <div className="daily-report-filters" aria-label="Daily report filters">
           <label>
             Production line
-            <select value={line} onChange={event => { setSelectedLine(event.target.value); setSelectedMachine(""); }}>
+            <select value={line} onChange={event => { setSelectedLine(event.target.value); setSelectedMachine(""); setSelectedShift(""); }}>
               <option value="">All lines</option>
               {lines.map(value => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
           <label>
             Machine
-            <select value={machine} onChange={event => setSelectedMachine(event.target.value)}>
+            <select value={machine} onChange={event => { setSelectedMachine(event.target.value); setSelectedShift(""); }}>
               <option value="">All machines</option>
               {machines.map(item => (
                 <option key={item.processorId + ":" + item.machineId} value={item.machineId}>{item.displayName}</option>
               ))}
+            </select>
+          </label>
+          <label>
+            Shift
+            <select value={shift} onChange={event => setSelectedShift(event.target.value)}>
+              <option value="">All shifts</option>
+              {shifts.map(value => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
         </div>
@@ -89,7 +101,7 @@ export function DailyReportPage({
 
       {filteredModel === null
         ? null
-        : <DailyReportDocument model={filteredModel} productionDay={productionDay} />}
+        : <DailyReportDocument model={filteredModel} productionDay={productionDay} shiftFiltered={shift !== ""} />}
     </div>
   );
 }
@@ -120,9 +132,11 @@ function DailyReportLifecycleMessage({ state }: { readonly state: DailyReportLif
 function DailyReportDocument({
   model,
   productionDay,
+  shiftFiltered,
 }: {
   readonly model: DailyReportModel;
   readonly productionDay: string;
+  readonly shiftFiltered: boolean;
 }) {
   return (
     <article className="daily-report-document" aria-labelledby="daily-report-document-title">
@@ -142,7 +156,7 @@ function DailyReportDocument({
             >
               {model.groups.length > 1 && <h3>{group.groupName ?? "Ungrouped"}</h3>}
               {group.machines.map(machine => (
-                <DailyReportMachineSection key={`${machine.processorId}:${machine.machineId}`} machine={machine} />
+                <DailyReportMachineSection key={`${machine.processorId}:${machine.machineId}`} machine={machine} shiftFiltered={shiftFiltered} />
               ))}
             </section>
           ))}
@@ -150,14 +164,14 @@ function DailyReportDocument({
   );
 }
 
-function DailyReportMachineSection({ machine }: { readonly machine: DailyReportMachine }) {
+function DailyReportMachineSection({ machine, shiftFiltered }: { readonly machine: DailyReportMachine; readonly shiftFiltered: boolean }) {
   return (
     <section className="daily-report-machine" aria-labelledby={`daily-report-machine-${machine.processorId}-${machine.machineId}`}>
       <h4 id={`daily-report-machine-${machine.processorId}-${machine.machineId}`}>{machine.displayName}</h4>
       <p>Production line: {machine.productionLineId}</p>
 
-      <h5>Production day</h5>
-      <MetricTable cells={machine.productionDayCells} caption={`${machine.displayName} production-day metrics`} />
+      {!shiftFiltered && <><h5>Production day</h5>
+      <MetricTable cells={machine.productionDayCells} caption={`${machine.displayName} production-day metrics`} /></>}
 
       <h5>Shifts</h5>
       {machine.shifts.length === 0
