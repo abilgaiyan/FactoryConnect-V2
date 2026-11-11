@@ -55,18 +55,19 @@ internal sealed class MachineAdministrationStore(string connectionString)
         return rows;
     }
 
-    // Internal-only until the write-authority integration can prove permission,
-    // operation identity and audit in the same SQL transaction.
-    public Task<Guid> RegisterSiteAsync(string name, CancellationToken ct = default)
-        => RegisterAsync("Site", "SiteId", null, name, ct);
+    // The caller must supply the SQL transaction that performed authorization.
+    // No independent connection or commit is permitted for administrative writes.
+    internal Task<Guid> RegisterSiteAsync(SqlConnection connection, SqlTransaction transaction, string name, CancellationToken ct = default)
+        => RegisterAsync(connection, transaction, "Site", "SiteId", null, name, ct);
 
-    public Task<Guid> RegisterLineAsync(Guid siteId, string name, CancellationToken ct = default)
-        => RegisterAsync("ProductionLine", "ProductionLineId", siteId, name, ct);
+    internal Task<Guid> RegisterLineAsync(SqlConnection connection, SqlTransaction transaction, Guid siteId, string name, CancellationToken ct = default)
+        => RegisterAsync(connection, transaction, "ProductionLine", "ProductionLineId", siteId, name, ct);
 
-    public Task<Guid> RegisterMachineAsync(Guid siteId, string name, CancellationToken ct = default)
-        => RegisterAsync("Machine", "MachineId", siteId, name, ct);
+    internal Task<Guid> RegisterMachineAsync(SqlConnection connection, SqlTransaction transaction, Guid siteId, string name, CancellationToken ct = default)
+        => RegisterAsync(connection, transaction, "Machine", "MachineId", siteId, name, ct);
 
-    private async Task<Guid> RegisterAsync(string table, string idColumn, Guid? siteId, string name, CancellationToken ct)
+    private static async Task<Guid> RegisterAsync(SqlConnection connection, SqlTransaction transaction,
+        string table, string idColumn, Guid? siteId, string name, CancellationToken ct)
     {
         // Identifiers are selected exclusively from the fixed methods above.
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 200)
@@ -74,11 +75,8 @@ internal sealed class MachineAdministrationStore(string connectionString)
         if (siteId == Guid.Empty) throw new ArgumentException("Site ID is required.", nameof(siteId));
         name = name.Trim();
         var id = Guid.NewGuid();
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(ct);
-        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable, ct);
-        // Serializable range locking prevents two concurrent registrations of the same
-        // normalized display name within a site (or globally for sites).
+        // The security authority owns transaction isolation and commit. UPDLOCK/HOLDLOCK
+        // serializes duplicate-name checks until that transaction completes.
         var predicate = siteId.HasValue ? "SiteId=@site AND " : "";
         await using (var check = new SqlCommand(
             $"SELECT COUNT_BIG(*) FROM master.{table} WITH (UPDLOCK, HOLDLOCK) WHERE {predicate}UPPER(LTRIM(RTRIM(DisplayName)))=UPPER(@name)",
@@ -107,7 +105,6 @@ internal sealed class MachineAdministrationStore(string connectionString)
             if (siteId.HasValue) insert.Parameters.Add("@site", SqlDbType.UniqueIdentifier).Value = siteId.Value;
             await insert.ExecuteNonQueryAsync(ct);
         }
-        await transaction.CommitAsync(ct);
         return id;
     }
 }
