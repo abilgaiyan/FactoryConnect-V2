@@ -10,13 +10,13 @@ export function OperatorEvidencePage({
     { kind: "loading" | "denied" | "failed" } |
     { kind: "ready"; bearer: string; machines: readonly OperatorEvidenceMachine[]; isComplete: boolean }
   >({ kind: "loading" });
-  const [selectedMachine, setSelectedMachine] = useState("");
+  const [selectedMachine, setSelectedMachine] = useState(() => new URLSearchParams(window.location.search).get("machineId") ?? "");
   const [machineSearch, setMachineSearch] = useState("");
   const [accessRefresh, setAccessRefresh] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: "loading" });
-    setSelectedMachine("");
+    setSelectedMachine(new URLSearchParams(window.location.search).get("machineId") ?? "");
     setMachineSearch("");
     if (!sessionBearer) {
       setState({ kind: "denied" });
