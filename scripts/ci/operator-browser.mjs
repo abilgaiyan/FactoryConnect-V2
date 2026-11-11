@@ -17,7 +17,7 @@ try {
   const url = process.env.FC2_BROWSER_URL;
   async function login() {
     await page.goto(url + '/operator-evidence');
-    await page.getByRole('link', { name: 'Sign in to view machine evidence' }).click();
+    await page.getByRole('link', { name: 'Sign in to FactoryConnect' }).click();
     await page.getByLabel('Password').fill(process.env.FC2_BROWSER_PASSWORD);
     await page.getByRole('button', { name: 'Provider sign in' }).click();
   }
