@@ -8,6 +8,29 @@ internal static class ActivityHistoryApi
 {
     internal static void MapActivityHistory(this WebApplication app)
     {
+        // Optional local acquisition-host health. A fixed configured machine binding
+        // prevents callers from selecting arbitrary filesystem paths or machine snapshots.
+        app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/acquisition-health", async (
+            Guid machineId, HttpContext http, IConfiguration config, ILoggerFactory loggerFactory, CancellationToken ct) =>
+        {
+            return await Read(http, config, loggerFactory.CreateLogger("FactoryConnect.AcquisitionHealth"),
+                async (authority, token, site, stream) =>
+                {
+                    // Check current SQL session and machine grant ancestry before accessing local host telemetry.
+                    _ = await authority.ReadActivitySeriesAsync(token, site, machineId, stream, ct);
+                    if (!Guid.TryParse(config["AcquisitionHealth:MachineId"], out var configuredMachine) ||
+                        configuredMachine != machineId ||
+                        string.IsNullOrWhiteSpace(config["AcquisitionHealth:SnapshotPath"]) ||
+                        !int.TryParse(config["AcquisitionHealth:MaxAgeSeconds"], out var maxAge) ||
+                        maxAge is < 1 or > 3600)
+                        return Results.Problem(statusCode: 503, title: "Acquisition health is not configured for this machine");
+                    return Results.Ok(new {
+                        machineId, siteId = site, evidenceKind = "local-acquisition-host-telemetry",
+                        currentConnectivity = (string?)null, liveMachineState = (string?)null,
+                        health = AcquisitionHealthApi.Read(config["AcquisitionHealth:SnapshotPath"]!, maxAge)
+                    });
+                });
+        }).RequireRateLimiting("security-boundary");
         // Explicit processed-state read model: verified checkpoint, never inferred live telemetry.
         app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/processed-state",async(
             Guid machineId,HttpContext http,IConfiguration config,ILoggerFactory loggerFactory,CancellationToken ct)=>
