@@ -55,7 +55,9 @@ internal sealed class MachineAdministrationStore(string connectionString)
         return rows;
     }
 
-    // Internal-only until the write-authority integration can prove permission,\n    // operation identity and audit in the same SQL transaction.\n    public Task<Guid> RegisterSiteAsync(string name, CancellationToken ct = default)
+    // Internal-only until the write-authority integration can prove permission,
+    // operation identity and audit in the same SQL transaction.
+    public Task<Guid> RegisterSiteAsync(string name, CancellationToken ct = default)
         => RegisterAsync("Site", "SiteId", null, name, ct);
 
     public Task<Guid> RegisterLineAsync(Guid siteId, string name, CancellationToken ct = default)
