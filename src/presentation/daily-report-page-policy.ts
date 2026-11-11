@@ -20,3 +20,27 @@ export function visibleDailyReportModel(state: DailyReportLifecycleState): Daily
       return null;
   }
 }
+
+/**
+ * View-only filtering. Never recompute metrics or convert unavailable evidence to zero.
+ * Empty groups are omitted; the original authoritative model remains unchanged.
+ */
+export function filterDailyReportModel(
+  model: DailyReportModel,
+  productionLineId: string,
+  machineId: string,
+): DailyReportModel {
+  if (productionLineId === "" && machineId === "") {
+    return model;
+  }
+
+  return {
+    ...model,
+    groups: model.groups.map(group => ({
+      ...group,
+      machines: group.machines.filter(machine =>
+        (productionLineId === "" || machine.productionLineId === productionLineId) &&
+        (machineId === "" || machine.machineId === machineId)),
+    })).filter(group => group.machines.length > 0),
+  };
+}
