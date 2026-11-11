@@ -10,7 +10,7 @@ From the repository root, in PowerShell (Python 3 required):
 python .\scripts\dev\mtconnect_simulator.py --port 5055 --observations 120
 ```
 
-The agent listens only on `127.0.0.1:5055`. Its exact device-scoped base URI is `http://127.0.0.1:5055/device/`; UUID is `fc2-local-sim-0001`; stream key is `mtconnect:uuid:fc2-local-sim-0001`; source instance is `2026111101`; initial retained sequence is `1`. It exposes an immutable bounded 120-observation window by default. The values are synthetic `READY`, `ACTIVE`, `STOPPED` and are not production evidence. Restarting the process with a new wall-clock anchor is **not** a safe continuation of previously admitted raw observations; use only for source/parser smoke checks until fixed provenance is implemented.
+The agent listens only on `127.0.0.1:5055`. Its exact device-scoped base URI is `http://127.0.0.1:5055/device/`; UUID is `fc2-local-sim-0001`; stream key is `mtconnect:uuid:fc2-local-sim-0001`; source instance is `2026111101`; initial retained sequence is `1`. It exposes an immutable bounded 120-observation window by default. The values are synthetic `READY`, `ACTIVE`, `STOPPED` and are not production evidence. Observation timestamps are anchored at 2026-11-11T00:00:00Z and remain byte-stable across process restarts for the same sequence. This is a fixed synthetic source, not a live production clock; changing its fixture identity or observations after SQL admission requires a new explicit source-generation commissioning/recovery process.
 
 ## Verify
 
