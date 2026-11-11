@@ -58,10 +58,11 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         onChange={event => setSearch(event.currentTarget.value)} />
       <p role="status">{matches.length} matching machines from {current.machines.length} returned.</p>
       <div className="commissioning-table-scroll" role="region" aria-label="Authorized machine directory" tabIndex={0}>
-        <table><thead><tr><th>Machine name</th><th>Machine ID</th><th>Site ID</th></tr></thead>
+        <table><thead><tr><th>Machine name</th><th>Machine ID</th><th>Site ID</th><th>Evidence</th></tr></thead>
           <tbody>{matches.map(machine => <tr key={machine.machineId}>
             <td>{machine.displayName}</td><td><code>{machine.machineId}</code></td>
             <td><code>{machine.siteId}</code></td>
+            <td><a href={`/operator-evidence?machineId=${encodeURIComponent(machine.machineId)}`}>View evidence</a></td>
           </tr>)}</tbody>
         </table>
       </div>
