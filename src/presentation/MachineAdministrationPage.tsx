@@ -14,6 +14,23 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"site" | "line" | "machine">("site");
   const [siteId, setSiteId] = useState("");
+  const [sites, setSites] = useState<readonly { siteId: string; displayName: string; isRetired: boolean }[]>([]);
+  const [sitesError, setSitesError] = useState("");
+  useEffect(() => {
+    if (!sessionBearer) { setSites([]); return; }
+    const controller = new AbortController();
+    void fetch(new URL("/api/admin/v2/sites", baseAddress), {
+      headers: { Authorization: "Bearer " + sessionBearer }, signal: controller.signal
+    }).then(async response => {
+      if (!response.ok) throw new Error("Site inventory unavailable.");
+      const data: { sites: { siteId: string; displayName: string; isRetired: boolean }[] } = await response.json();
+      if (!controller.signal.aborted) { setSites(data.sites); setSitesError(""); }
+    }).catch(() => {
+      if (!controller.signal.aborted) { setSites([]); setSitesError("Site selection unavailable for this account."); }
+    });
+    return () => controller.abort();
+  }, [baseAddress, sessionBearer, revision]);
+
   const [name, setName] = useState("");
   const [registrationMessage, setRegistrationMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -33,6 +50,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       const result: { recordId: string } = await response.json();
       setRegistrationMessage("Registered " + kind + ": " + result.recordId + ". Acquisition remains inactive.");
       setName("");
+      setRevision(value => value + 1);
     } catch (error) {
       setRegistrationMessage(error instanceof Error ? error.message : "Registration failed.");
     } finally { setSaving(false); }
@@ -83,8 +101,13 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       </select>
       {kind !== "site" && <>
         <label htmlFor="admin-site-id">Existing site ID</label>
-        <input id="admin-site-id" required value={siteId}
-          onChange={event => setSiteId(event.currentTarget.value)} placeholder="Site GUID" />
+        <select id="admin-site-id" required value={siteId}
+          onChange={event => setSiteId(event.currentTarget.value)}>
+          <option value="">Select an active site</option>
+          {sites.filter(site => !site.isRetired).map(site =>
+            <option key={site.siteId} value={site.siteId}>{site.displayName}</option>)}
+        </select>
+        {sitesError && <p role="alert">{sitesError}</p>}
       </>}
       <label htmlFor="admin-display-name">Display name</label>
       <input id="admin-display-name" required maxLength={200} value={name}
