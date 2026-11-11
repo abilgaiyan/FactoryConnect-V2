@@ -59,6 +59,7 @@ test("Daily Report production modules keep the exact approved dependency directi
   assert.deepEqual(
     await sourceImports("src/presentation/DailyReportPage.tsx"),
     [
+      "react",
       "./date-formatting.ts",
       "../application/daily-report-lifecycle.ts",
       "./daily-report-model.ts",
