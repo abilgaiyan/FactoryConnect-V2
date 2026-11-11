@@ -12,6 +12,7 @@ export function OperatorEvidencePage({
   >({ kind: "loading" });
   const [selectedMachine, setSelectedMachine] = useState("");
   const [machineSearch, setMachineSearch] = useState("");
+  const [accessRefresh, setAccessRefresh] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: "loading" });
@@ -25,7 +26,7 @@ export function OperatorEvidencePage({
       .then(page => { if (!controller.signal.aborted) setState({ kind: "ready", machines: page.machines, isComplete: page.isComplete, bearer: sessionBearer }); })
       .catch(() => { if (!controller.signal.aborted) setState({ kind: "failed" }); });
     return () => controller.abort();
-  }, [baseAddress, sessionBearer]);
+  }, [baseAddress, sessionBearer, accessRefresh]);
   const visible = state.kind === "ready" && state.bearer !== sessionBearer
     ? { kind: sessionBearer ? "loading" as const : "denied" as const } : state;
   const machine = visible.kind === "ready"
@@ -36,6 +37,7 @@ export function OperatorEvidencePage({
   return <section aria-label="Operator evidence">
     <h1>Operator machine evidence</h1>
     <p>Only machines currently authorized for this human session are selectable. Historical evidence is not live machine health.</p>
+    <button type="button" disabled={!sessionBearer || visible.kind === "loading"} onClick={() => setAccessRefresh(value => value + 1)}>Refresh authorized machines</button>
     {visible.kind === "loading" && <p role="status">Checking current machine permissions…</p>}
     {visible.kind === "denied" && <p role="alert">Sign in with a trusted identity to view accepted observations.</p>}
     {visible.kind === "failed" && <p role="alert">Authorized machine selection is unavailable.</p>}
