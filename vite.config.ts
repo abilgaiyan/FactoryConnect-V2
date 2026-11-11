@@ -40,12 +40,30 @@ function mockApiPlugin(): Plugin {
   };
 }
 
+// Fixture mode is explicit. Real-backend mode never installs mock API middleware.
+const fixturesEnabled = process.env.VITE_ENABLE_FIXTURES === "true";
+const backendTarget = process.env.FC2_DEV_API_URL || "https://localhost:5081";
+if (!fixturesEnabled) {
+  const target = new URL(backendTarget);
+  if (target.protocol !== "https:" || target.username || target.password ||
+      target.search || target.hash || target.pathname !== "/" ||
+      !["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)) {
+    throw new Error("FC2_DEV_API_URL must be a loopback HTTPS origin without credentials or path");
+  }
+}
+const backendProxy = fixturesEnabled ? undefined : {
+  "/dashboard/config": { target: backendTarget, changeOrigin: true },
+  "/api": { target: backendTarget, changeOrigin: true },
+  "/health": { target: backendTarget, changeOrigin: true },
+};
+
 export default defineConfig({
-  plugins: [react(), ...(process.env.VITE_ENABLE_FIXTURES === "true" ? [mockApiPlugin()] : [])],
+  plugins: [react(), ...(fixturesEnabled ? [mockApiPlugin()] : [])],
   server: {
     port: 3000,
     host: "0.0.0.0",
     strictPort: true,
+    proxy: backendProxy,
   },
   preview: {
     port: 3000,
