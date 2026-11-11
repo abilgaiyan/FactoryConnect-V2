@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { readAllOperatorEvidenceMachines, type OperatorEvidenceMachine } from "../api/evidence/operator-evidence-machines-client.ts";
 
 /**
- * First machine-administration surface: authenticated, read-only discovery.
- * This is an evidence-authorized subset, not a complete administrative inventory.
- * Registration controls will be enabled only after audited SQL write authority exists.
+ * Administrative inventory and registration require a current authorized session.
+ * Evidence discovery is independently permission-scoped and may be incomplete.
  */
 export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   readonly sessionBearer: string | null;
@@ -31,6 +30,23 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     return () => controller.abort();
   }, [baseAddress, sessionBearer, revision]);
 
+
+  const [inventory, setInventory] = useState<readonly { machineId: string; siteId: string; displayName: string; isRetired: boolean }[] | null>(null);
+  const [inventoryError, setInventoryError] = useState("");
+  useEffect(() => {
+    if (!sessionBearer) { setInventory(null); return; }
+    const controller = new AbortController();
+    void fetch(new URL("/api/admin/v2/machines", baseAddress), {
+      headers: { Authorization: "Bearer " + sessionBearer }, signal: controller.signal
+    }).then(async response => {
+      if (!response.ok) throw new Error("Administrator machine inventory unavailable.");
+      const data: { machines: { machineId: string; siteId: string; displayName: string; isRetired: boolean }[] } = await response.json();
+      if (!controller.signal.aborted) { setInventory(data.machines); setInventoryError(""); }
+    }).catch(() => {
+      if (!controller.signal.aborted) { setInventory(null); setInventoryError("Full machine inventory requires administrator access."); }
+    });
+    return () => controller.abort();
+  }, [baseAddress, sessionBearer, revision]);
   const [name, setName] = useState("");
   const [registrationMessage, setRegistrationMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -116,6 +132,18 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {registrationMessage && <p role="status">{registrationMessage}</p>}
     </form>}
 
+
+    <h2>Registered machine inventory</h2>
+    <p>This administrator inventory includes registered machines whether or not they have published evidence.</p>
+    {inventoryError && <p role="status">{inventoryError}</p>}
+    {inventory && <div className="commissioning-table-scroll" role="region" aria-label="Registered machine inventory" tabIndex={0}>
+      <table><thead><tr><th>Machine</th><th>Machine ID</th><th>Site</th><th>Status</th></tr></thead>
+      <tbody>{inventory.map(machine => <tr key={machine.machineId}>
+        <td>{machine.displayName}</td><td><code>{machine.machineId}</code></td>
+        <td><code>{machine.siteId}</code></td><td>{machine.isRetired ? "Retired" : "Registered"}</td>
+      </tr>)}</tbody></table>
+      {inventory.length === 0 && <p>No machines registered yet.</p>}
+    </div>}
     <button type="button" disabled={!sessionBearer || current.kind === "loading"}
       onClick={() => setRevision(value => value + 1)}>Refresh authorized machines</button>
     {current.kind === "loading" && <p role="status">Checking authorized machines…</p>}
