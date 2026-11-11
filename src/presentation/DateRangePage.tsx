@@ -3,6 +3,31 @@ import { formatReportDate } from "./date-formatting.ts";
 import { useEffect, useRef, useState } from 'react';
 import type { DashboardApplicationRuntime } from '../application/application-runtime.ts';
 import { loadRange, trendSegments, reportingIdentity, plottedValue, rangeMetrics, maximumRangeDays, maximumSourceDays, type RangeRow } from '../application/date-range-reporting.ts';
+// Escape spreadsheet formulas and CSV control characters in all externally sourced fields.
+function csvCell(value: string | number | null | undefined): string {
+    const text = value == null ? '' : String(value);
+    const safe = /^[\\s]*[=+@-]/.test(text) ? "'" + text : text;
+    return '"' + safe.replace(/"/g, '""') + '"';
+}
+function exportLoadedRange(rows: RangeRow[], from: string, through: string): void {
+    const headers = ['Day', 'Machine', 'Machine ID', 'Site', 'Production line', 'Processor', 'Metric', 'Definition', 'Status', 'Value', 'Unit', 'Reason', 'Missing operand', 'Revision stream', 'Revision position'];
+    const records = rows.flatMap(row => row.items.length ? row.items.map(item => [
+        row.day, row.source.displayName, row.source.machineId, row.source.siteId, row.source.productionLineId,
+        row.source.processorId, item.metricKey, item.definitionVersion, item.status,
+        item.status === 'calculated' ? item.value : null, item.unit, item.reasonCode, item.reasonOperandName,
+        item.sourceRevision.streamKey, item.sourceRevision.position,
+    ]) : [[row.day, row.source.displayName, row.source.machineId, row.source.siteId,
+        row.source.productionLineId, row.source.processorId, '', '', 'no-reporting-result', null, '', '', '', '', '']]);
+    const csv = [headers, ...records].map(record => record.map(csvCell).join(',')).join('\\r\\n') + '\\r\\n';
+    const url = URL.createObjectURL(new Blob(['\\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `factoryconnect-range-${from}-to-${through}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 export function DateRangePage({ runtime }: {
     runtime: DashboardApplicationRuntime;
 }) {
@@ -69,6 +94,7 @@ export function DateRangePage({ runtime }: {
     <fieldset><legend>Machines</legend>{eligibleMachines.map(id => <label key={id}><input type="checkbox" checked={machines.includes(id)} onChange={e => { invalidate(); setMachines(old => e.target.checked ? [...old, id] : old.filter(x => x !== id)); }}/>{id}</label>)}</fieldset>
     <button type="submit" disabled={noSources || selectedSources.length === 0}>Load range</button></form>
     <button type="button" disabled={state.kind !== "success" || rows.length === 0} onClick={() => window.print()}>Print loaded report</button>
+    <button type="button" disabled={state.kind !== "success" || rows.length === 0} onClick={() => exportLoadedRange(rows, from, through)}>Export loaded CSV</button>
     {!noSources && selectedSources.length === 0 && <p role="status">No machines are selected for the chosen site and line.</p>}
     {state.kind === 'success' && rows.length === 0 && <p role="status">No reporting results were returned for this selection. Metrics are unavailable, not zero.</p>}
     {state.kind === 'loading' && <p role="status">Loading all selected reporting pages…</p>}{state.kind === 'failure' && <p role="alert">Request failed: {state.error}. Presence or absence has not been established for this selection.</p>}
