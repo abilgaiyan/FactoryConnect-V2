@@ -157,35 +157,55 @@ function AcquisitionHealthPanel({ machineId, baseAddress, bearer }: {
 }) {
   const [enabled, setEnabled] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [state, setState] = useState<{ kind: "loading" | Failure } |
-    { kind: "ready"; data: AcquisitionHealthResult }>({ kind: "loading" });
+    { kind: "ready"; data: AcquisitionHealthResult; scope: string }>({ kind: "loading" });
+  const scope = `${machineId}:${baseAddress}:${bearer ?? ""}`;
   useEffect(() => {
     if (!enabled || !bearer) return;
     const abort = new AbortController();
-    setState({ kind: "loading" });
-    void readAcquisitionHealth(baseAddress, machineId, bearer, abort.signal)
-      .then(data => { if (!abort.signal.aborted) setState({ kind: "ready", data }); })
-      .catch(error => { if (!abort.signal.aborted) setState({ kind: failure(error) }); });
-    return () => abort.abort();
-  }, [enabled, refresh, machineId, baseAddress, bearer]);
+    let pending = false;
+    const read = () => {
+      if (pending || document.visibilityState === "hidden") return;
+      pending = true;
+      setState({ kind: "loading" });
+      void readAcquisitionHealth(baseAddress, machineId, bearer, abort.signal)
+        .then(data => { if (!abort.signal.aborted) setState({ kind: "ready", data, scope }); })
+        .catch(error => {
+          if (abort.signal.aborted) return;
+          const kind = failure(error);
+          setState({ kind });
+          if (kind === "denied") setAutoRefresh(false);
+        })
+        .finally(() => { pending = false; });
+    };
+    read();
+    const timer = autoRefresh ? setInterval(read, 30000) : undefined;
+    return () => { abort.abort(); if (timer !== undefined) clearInterval(timer); };
+  }, [enabled, refresh, autoRefresh, machineId, baseAddress, bearer, scope]);
+  const healthView = state.kind === "ready" && (
+    state.scope !== scope || state.data.machineId !== machineId || !bearer || !enabled)
+    ? { kind: "loading" as const } : state;
   return <section aria-label="Acquisition host health">
     <h3>Acquisition host health</h3>
     <p>Local acquisition-host telemetry only. Does not establish live CNC connectivity or machine activity.</p>
     <button type="button" disabled={!bearer} onClick={() => { setEnabled(true); setRefresh(x => x + 1); }}>
       {enabled ? "Refresh acquisition health" : "Check acquisition health"}
     </button>
-    {enabled && state.kind === "loading" && <p role="status">Reading acquisition health…</p>}
-    {enabled && state.kind === "unavailable" && <p role="status">Acquisition health is not configured or currently unavailable.</p>}
-    {enabled && state.kind === "denied" && <p role="alert">Acquisition health access is not authorized.</p>}
-    {enabled && state.kind === "failed" && <p role="alert">Unable to read acquisition health.</p>}
-    {enabled && state.kind === "ready" && <dl>
-      <dt>Host status</dt><dd>{state.data.health.status} ({state.data.health.operational ? "recent operational event" : "not operational or not established"})</dd>
-      {state.data.health.ageSeconds !== undefined && <><dt>Snapshot age</dt><dd>{state.data.health.ageSeconds} seconds</dd></>}
-      {state.data.health.snapshot?.lastSourceResponseAt && <><dt>Last MTConnect source response</dt>
-        <dd><time dateTime={state.data.health.snapshot.lastSourceResponseAt}>{new Date(state.data.health.snapshot.lastSourceResponseAt).toLocaleString()}</time></dd></>}
-      {state.data.health.snapshot?.lastDurableCommitAt && <><dt>Last durable SQL admission</dt>
-        <dd><time dateTime={state.data.health.snapshot.lastDurableCommitAt}>{new Date(state.data.health.snapshot.lastDurableCommitAt).toLocaleString()}</time></dd></>}
-      {state.data.health.reason && <><dt>Reason</dt><dd>{state.data.health.reason}</dd></>}
+    <label><input type="checkbox" checked={autoRefresh} disabled={!enabled || !bearer}
+      onChange={event => setAutoRefresh(event.currentTarget.checked)} /> Refresh acquisition health every 30 seconds while visible</label>
+    {enabled && healthView.kind === "loading" && <p role="status">Reading acquisition health…</p>}
+    {enabled && healthView.kind === "unavailable" && <p role="status">Acquisition health is not configured or currently unavailable.</p>}
+    {enabled && healthView.kind === "denied" && <p role="alert">Acquisition health access is not authorized.</p>}
+    {enabled && healthView.kind === "failed" && <p role="alert">Unable to read acquisition health.</p>}
+    {enabled && healthView.kind === "ready" && <dl>
+      <dt>Host status</dt><dd>{healthView.data.health.status} ({healthView.data.health.operational ? "recent operational event" : "not operational or not established"})</dd>
+      {healthView.data.health.ageSeconds !== undefined && <><dt>Snapshot age</dt><dd>{healthView.data.health.ageSeconds} seconds</dd></>}
+      {healthView.data.health.snapshot?.lastSourceResponseAt && <><dt>Last MTConnect source response</dt>
+        <dd><time dateTime={healthView.data.health.snapshot.lastSourceResponseAt}>{new Date(healthView.data.health.snapshot.lastSourceResponseAt).toLocaleString()}</time></dd></>}
+      {healthView.data.health.snapshot?.lastDurableCommitAt && <><dt>Last durable SQL admission</dt>
+        <dd><time dateTime={healthView.data.health.snapshot.lastDurableCommitAt}>{new Date(healthView.data.health.snapshot.lastDurableCommitAt).toLocaleString()}</time></dd></>}
+      {healthView.data.health.reason && <><dt>Reason</dt><dd>{healthView.data.health.reason}</dd></>}
     </dl>}
   </section>;
 }
