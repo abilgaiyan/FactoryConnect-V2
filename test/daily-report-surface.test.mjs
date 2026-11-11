@@ -5,6 +5,7 @@ import { dailyReportPath } from "../src/application/daily-report-navigation.ts";
 import {
   canPrintDailyReportState,
   visibleDailyReportModel,
+  filterDailyReportModel,
 } from "../src/presentation/daily-report-page-policy.ts";
 
 const day = "2026-09-09";
@@ -97,4 +98,17 @@ test("loading, invalid selection, and failures without a previous model expose n
     previous: undefined,
     canPrint: false,
   }), null);
+});
+
+test("Daily Report filters retain authoritative cells and do not mutate source", () => {
+  const source = model();
+  const first = source.groups[0].machines[0];
+  const second = { ...first, machineId: "M2", displayName: "Machine 2", productionLineId: "line-b" };
+  const input = { ...source, groups: [{ ...source.groups[0], machines: [first, second] }] };
+  const line = filterDailyReportModel(input, "line-b", "");
+  assert.deepEqual(line.groups[0].machines.map(machine => machine.machineId), ["M2"]);
+  assert.deepEqual(filterDailyReportModel(input, "", "M1").groups[0].machines, [first]);
+  assert.deepEqual(filterDailyReportModel(input, "line-b", "M1").groups, []);
+  assert.equal(filterDailyReportModel(input, "", ""), input);
+  assert.equal(input.groups[0].machines.length, 2);
 });
