@@ -14,6 +14,7 @@ export function RetainedMachineEvidence({
   sessionBearer: string | null;
 }) {
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: "loading" });
@@ -31,7 +32,7 @@ export function RetainedMachineEvidence({
           : "failed" });
       });
     return () => controller.abort();
-  }, [machineId, baseAddress, sessionBearer]);
+  }, [machineId, baseAddress, sessionBearer, refresh]);
 
   // Effects run after paint: never expose a previous machine/session result while
   // React is committing a new selection or a revoked local session.
@@ -42,6 +43,7 @@ export function RetainedMachineEvidence({
   return <section aria-label="Retained machine evidence">
     <h2>Accepted machine observations</h2>
     <p>Historical retained source evidence. This does not establish current connectivity, machine state, quantity or OEE.</p>
+    <button type="button" disabled={!sessionBearer || visible.kind === "loading"} onClick={() => setRefresh(value => value + 1)}>Refresh accepted observations</button>
     {visible.kind === "loading" && <p role="status">Loading accepted evidence…</p>}
     {visible.kind === "denied" && <p role="alert">Commissioning evidence access is not authorized.</p>}
     {visible.kind === "unavailable" && <p role="alert">Evidence authority is unavailable. No zero or healthy state is assumed.</p>}
