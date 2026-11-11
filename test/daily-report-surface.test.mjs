@@ -112,3 +112,15 @@ test("Daily Report filters retain authoritative cells and do not mutate source",
   assert.equal(filterDailyReportModel(input, "", ""), input);
   assert.equal(input.groups[0].machines.length, 2);
 });
+
+test("shift selection preserves original shift evidence and does not show other occurrences", () => {
+  const source = model();
+  const machine = source.groups[0].machines[0];
+  const morning = { shift: { shiftId: "Morning" }, cells: [{ state: "unavailable", reasonCode: "missing-counts" }] };
+  const evening = { shift: { shiftId: "Evening" }, cells: [{ state: "calculated", value: "0.75" }] };
+  const input = { ...source, groups: [{ ...source.groups[0], machines: [{ ...machine, shifts: [morning, evening] }] }] };
+  const result = filterDailyReportModel(input, "", "", "Evening");
+  assert.deepEqual(result.groups[0].machines[0].shifts, [evening]);
+  assert.equal(input.groups[0].machines[0].shifts.length, 2);
+  assert.deepEqual(filterDailyReportModel(input, "", "", "Night").groups, []);
+});
