@@ -12,6 +12,32 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 }) {
   const [revision, setRevision] = useState(0);
   const [search, setSearch] = useState("");
+  const [kind, setKind] = useState<"site" | "line" | "machine">("site");
+  const [siteId, setSiteId] = useState("");
+  const [name, setName] = useState("");
+  const [registrationMessage, setRegistrationMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  async function register(event: { preventDefault(): void }) {
+    event.preventDefault();
+    if (!sessionBearer || saving) return;
+    setSaving(true);
+    setRegistrationMessage("");
+    try {
+      const response = await fetch(new URL("/api/admin/v2/master-registration", baseAddress), {
+        method: "POST",
+        headers: { Authorization: "Bearer " + sessionBearer, "Content-Type": "application/json" },
+        body: JSON.stringify({ operationId: crypto.randomUUID(), kind,
+          siteId: kind === "site" ? null : siteId.trim(), displayName: name.trim() })
+      });
+      if (!response.ok) throw new Error("Registration failed (HTTP " + response.status + ").");
+      const result: { recordId: string } = await response.json();
+      setRegistrationMessage("Registered " + kind + ": " + result.recordId + ". Acquisition remains inactive.");
+      setName("");
+    } catch (error) {
+      setRegistrationMessage(error instanceof Error ? error.message : "Registration failed.");
+    } finally { setSaving(false); }
+  }
+
   const [state, setState] = useState<
     { kind: "loading" | "signIn" | "unavailable" } |
     { kind: "ready"; bearer: string; machines: readonly OperatorEvidenceMachine[]; complete: boolean }
@@ -45,7 +71,28 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     <h1 id="machine-administration-title">Machine administration</h1>
     <p>Authorized machine discovery — read only. This list includes only machines for which your session has
       commissioning evidence access. It is not the complete registered machine inventory or proof of live connectivity.</p>
-    <p>Site, production-line and machine registration is not yet enabled. No configuration or acquisition changes can be made here.</p>
+
+    <p>Register master data below. Registration does not activate MTConnect acquisition.</p>
+    {sessionBearer && <form onSubmit={event => { void register(event); }}>
+      <h2>Register master record</h2>
+      <label htmlFor="admin-record-kind">Record type</label>
+      <select id="admin-record-kind" value={kind}
+        onChange={event => setKind(event.currentTarget.value as "site" | "line" | "machine")}>
+        <option value="site">Site</option><option value="line">Production line</option>
+        <option value="machine">Machine</option>
+      </select>
+      {kind !== "site" && <>
+        <label htmlFor="admin-site-id">Existing site ID</label>
+        <input id="admin-site-id" required value={siteId}
+          onChange={event => setSiteId(event.currentTarget.value)} placeholder="Site GUID" />
+      </>}
+      <label htmlFor="admin-display-name">Display name</label>
+      <input id="admin-display-name" required maxLength={200} value={name}
+        onChange={event => setName(event.currentTarget.value)} />
+      <button type="submit" disabled={saving || !name.trim()}>{saving ? "Registering…" : "Register"}</button>
+      {registrationMessage && <p role="status">{registrationMessage}</p>}
+    </form>}
+
     <button type="button" disabled={!sessionBearer || current.kind === "loading"}
       onClick={() => setRevision(value => value + 1)}>Refresh authorized machines</button>
     {current.kind === "loading" && <p role="status">Checking authorized machines…</p>}
