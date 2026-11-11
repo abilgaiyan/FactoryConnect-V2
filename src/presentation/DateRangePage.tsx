@@ -15,6 +15,14 @@ export function DateRangePage({ runtime }: {
     const [from, setFrom] = useState(initialQuery.get('from') ?? defaultDate);
     const [through, setThrough] = useState(initialQuery.get('through') ?? defaultDate);
     const [machines, setMachines] = useState<string[]>(initialQuery.has('machine') ? [initialQuery.get('machine')!.toLowerCase()] : [...new Set(runtime.configuration.sources.map(s => s.machineId.toLowerCase()))]);
+    const [site, setSite] = useState(initialQuery.get('site') ?? '');
+    const [line, setLine] = useState(initialQuery.get('line') ?? '');
+    const sites = [...new Set(runtime.configuration.sources.map(s => s.siteId))].sort();
+    const lines = [...new Set(runtime.configuration.sources.filter(s => !site || s.siteId === site).map(s => s.productionLineId))].sort();
+    const eligibleSources = runtime.configuration.sources.filter(s => (!site || s.siteId === site) && (!line || s.productionLineId === line));
+    const eligibleMachines = [...new Set(eligibleSources.map(s => s.machineId.toLowerCase()))];
+    const selectedSources = eligibleSources.filter(s => machines.includes(s.machineId.toLowerCase()));
+    const noSources = runtime.configuration.sources.length === 0;
     const [state, setState] = useState<{
         kind: 'idle' | 'loading' | 'success' | 'failure';
         rows?: RangeRow[];
@@ -31,7 +39,7 @@ export function DateRangePage({ runtime }: {
         const own = ++generation.current;
         setState({ kind: 'loading' });
         try {
-            const sources = runtime.configuration.sources.filter(s => machines.includes(s.machineId.toLowerCase()));
+            const sources = selectedSources;
             if (!sources.length)
                 throw new Error('Select at least one machine.');
             const rows = await loadRange(from, through, sources, runtime.reportingClient, controller.signal);
@@ -53,10 +61,15 @@ export function DateRangePage({ runtime }: {
     }
     return <section className="fleet-range"><h1>Date-range results and trends</h1><p>Ongoing day: Undetermined — calendar provenance unavailable. Range ratios withheld — operand evidence unavailable.</p>
     <p>Selection limit: {maximumRangeDays} inclusive days and {maximumSourceDays} reporting-source/day combinations. Each configured processor counts as a reporting source.</p>
+    {noSources && <p role="status">No reporting machines are configured for this installation. Ask a factory administrator to commission a reporting source; no OEE values can be shown yet.</p>}
     <form onSubmit={e => { e.preventDefault(); void submit(); }}><label>From <input type="date" required value={from} onChange={e => { invalidate(); setFrom(e.target.value); }}/></label>
     <label>Through (inclusive) <input type="date" required value={through} onChange={e => { invalidate(); setThrough(e.target.value); }}/></label>
-    <fieldset><legend>Machines</legend>{[...new Set(runtime.configuration.sources.map(s => s.machineId.toLowerCase()))].map(id => <label key={id}><input type="checkbox" checked={machines.includes(id)} onChange={e => { invalidate(); setMachines(old => e.target.checked ? [...old, id] : old.filter(x => x !== id)); }}/>{id}</label>)}</fieldset>
-    <button type="submit">Load range</button></form>
+    <label>Site <select value={site} onChange={e => { invalidate(); setSite(e.target.value); setLine(''); }}><option value="">All sites</option>{sites.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
+    <label>Production line <select value={line} onChange={e => { invalidate(); setLine(e.target.value); }}><option value="">All lines</option>{lines.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
+    <fieldset><legend>Machines</legend>{eligibleMachines.map(id => <label key={id}><input type="checkbox" checked={machines.includes(id)} onChange={e => { invalidate(); setMachines(old => e.target.checked ? [...old, id] : old.filter(x => x !== id)); }}/>{id}</label>)}</fieldset>
+    <button type="submit" disabled={noSources || selectedSources.length === 0}>Load range</button></form>
+    {!noSources && selectedSources.length === 0 && <p role="status">No machines are selected for the chosen site and line.</p>}
+    {state.kind === 'success' && rows.length === 0 && <p role="status">No reporting results were returned for this selection. Metrics are unavailable, not zero.</p>}
     {state.kind === 'loading' && <p role="status">Loading all selected reporting pages…</p>}{state.kind === 'failure' && <p role="alert">Request failed: {state.error}. Presence or absence has not been established for this selection.</p>}
     {[...series].map(([key, values]) => <section key={key}><h2>{values[0]!.source.displayName} — processor {values[0]!.source.processorId}</h2><p>Machine {values[0]!.source.machineId}; site {values[0]!.source.siteId}</p>
       {[...new Set([...rangeMetrics.map(name => JSON.stringify([name, '1.0', 'ratio'])), ...values.flatMap(row => row.items.map(i => JSON.stringify([i.metricKey, i.definitionVersion, i.unit])))])].map(metric => {
