@@ -85,7 +85,9 @@ jobs:
         run: |
           npm ci
           npm run build
-          npx playwright install --with-deps chromium
+          # GitHub-hosted Ubuntu includes Chromium runtime libraries; avoid apt package
+          # downloads that can fail when the runner's Ubuntu mirror DNS is unavailable.
+          npx playwright install chromium
       - name: Real OIDC HTTPS SQL Chromium acceptance
         env:
           FC2_BROWSER_ACCEPTANCE: '1'
