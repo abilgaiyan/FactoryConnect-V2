@@ -46,7 +46,7 @@ def main():
     args = parser.parse_args()
     if not (1024 <= args.port <= 65535 and 1 <= args.observations <= MAX_RETAINED):
         parser.error("port must be 1024..65535; observations must be 1..10000")
-    started = datetime.now(timezone.utc).replace(microsecond=0)
+    started = datetime(2026, 11, 11, 0, 0, 0, tzinfo=timezone.utc)  # Stable provenance across restarts
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
