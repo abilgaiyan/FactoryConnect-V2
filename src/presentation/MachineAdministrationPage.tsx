@@ -11,6 +11,44 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 }) {
   const [probeDevices, setProbeDevices] = useState<readonly { id: string; name: string; uuid: string; dataItems: readonly { id: string; name: string; type: string; subType: string }[] }[]>([]);
   const [probeError, setProbeError] = useState("");
+
+  const [edgeConfigured, setEdgeConfigured] = useState<readonly { machineId: string; deviceKey: string; baseUri: string }[]>([]);
+  const [edgeConfigError, setEdgeConfigError] = useState("");
+  async function previewEdgeConfig(file: File | undefined) {
+    setEdgeConfigured([]);
+    setEdgeConfigError("");
+    if (!file) return;
+    if (file.size > 2_000_000) { setEdgeConfigError("Edge configuration exceeds 2 MB."); return; }
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      if (!parsed || typeof parsed !== "object") throw new Error("Invalid Edge configuration.");
+      const root = parsed as Record<string, unknown>;
+      const mtconnect = root.MTConnect;
+      if (!mtconnect || typeof mtconnect !== "object") throw new Error("MTConnect configuration missing.");
+      const machines = (mtconnect as Record<string, unknown>).Machines;
+      if (!Array.isArray(machines) || machines.length > 500) throw new Error("Invalid MTConnect machines list.");
+      const identities = new Set<string>();
+      const configured = machines.map((entry: unknown) => {
+        if (!entry || typeof entry !== "object") throw new Error("Invalid configured machine.");
+        const value = entry as Record<string, unknown>;
+        const machineId = value.MachineId;
+        const deviceKey = value.DeviceKey;
+        const baseUri = value.BaseUri;
+        if (typeof machineId !== "string" || typeof deviceKey !== "string" ||
+            typeof baseUri !== "string" || !machineId.trim() || !deviceKey.trim() ||
+            !/^https?:\/\//i.test(baseUri))
+          throw new Error("Configured machine is missing MachineId, DeviceKey or BaseUri.");
+        const identity = machineId.toLowerCase();
+        if (identities.has(identity)) throw new Error("Duplicate configured MachineId.");
+        identities.add(identity);
+        return { machineId, deviceKey, baseUri };
+      });
+      setEdgeConfigured(configured);
+    } catch (error) {
+      setEdgeConfigError(error instanceof Error ? error.message : "Cannot read Edge configuration.");
+    }
+  }
+
   const [expandedProbeId, setExpandedProbeId] = useState<string | null>(null);
   const [selectedProbeIds, setSelectedProbeIds] = useState<readonly string[]>([]);
   function exportProbeSelection() {
@@ -307,6 +345,22 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       </tr>)}</tbody></table>
       {lines.length === 0 && <p>No production lines registered yet.</p>}
       {lines.length > 0 && visibleLines.length === 0 && <p>No production lines match the current filters.</p>}
+    </div>}
+    <h2>Review existing Edge MTConnect configuration</h2>
+    <p>Choose an existing Edge JSON configuration file locally to compare configured Agent URLs and machine identities. The file stays in your browser; no configuration is uploaded, saved or activated.</p>
+    <label htmlFor="admin-edge-config">Existing Edge configuration JSON</label>
+    <input id="admin-edge-config" type="file" accept=".json,application/json"
+      onChange={event => void previewEdgeConfig(event.currentTarget.files?.[0])} />
+    {edgeConfigError && <p role="alert">{edgeConfigError}</p>}
+    {edgeConfigured.length > 0 && <div className="commissioning-table-scroll" role="region" aria-label="Existing Edge machine configuration" tabIndex={0}>
+      <table><thead><tr><th>Device key</th><th>Machine ID</th><th>Agent URL</th><th>Registered machine</th></tr></thead>
+      <tbody>{edgeConfigured.map(machine => <tr key={machine.machineId}>
+        <td>{machine.deviceKey}</td><td><code>{machine.machineId}</code></td>
+        <td><code>{machine.baseUri}</code></td>
+        <td>{inventory === null ? "Inventory unavailable" :
+          inventory.some(item => item.machineId.toLowerCase() === machine.machineId.toLowerCase())
+            ? "Existing MachineId found" : "MachineId not registered"}</td>
+      </tr>)}</tbody></table>
     </div>}
     <h2>Preview MTConnect devices.xml</h2>
     <p>Read-only commissioning preview: choose a Devices XML file exported from an existing MTConnect Agent /probe endpoint. This does not save URLs, register machines or activate acquisition.</p>
