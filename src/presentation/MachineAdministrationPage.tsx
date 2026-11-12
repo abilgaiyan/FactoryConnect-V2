@@ -33,6 +33,27 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 
   const [inventory, setInventory] = useState<readonly { machineId: string; siteId: string; displayName: string; isRetired: boolean }[] | null>(null);
   const [inventoryError, setInventoryError] = useState("");
+  function exportMachineInventory() {
+    if (!inventory) return;
+    const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
+    const rows = [
+      ["Machine ID", "Machine", "Site ID", "Site", "Status"],
+      ...visibleInventory.map(machine => [
+        machine.machineId, machine.displayName, machine.siteId,
+        sites.find(site => site.siteId === machine.siteId)?.displayName ?? "",
+        machine.isRetired ? "Retired" : "Registered"
+      ])
+    ];
+    const csv = "\uFEFF" + rows.map(row => row.map(quote).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "factoryconnect-machine-inventory.csv";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
   const [inventorySearch, setInventorySearch] = useState("");
   const [inventorySite, setInventorySite] = useState("");
   const [includeRetired, setIncludeRetired] = useState(false);
@@ -219,6 +240,8 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {lines.length > 0 && visibleLines.length === 0 && <p>No production lines match the current filters.</p>}
     </div>}
     <h2>Registered machine inventory</h2>
+    <button type="button" disabled={!inventory || visibleInventory.length === 0}
+      onClick={exportMachineInventory}>Export filtered machines (CSV)</button>
     <p>This administrator inventory includes registered machines whether or not they have published evidence.</p>
     <label htmlFor="admin-machine-search">Search registered machines</label>
     <input id="admin-machine-search" value={inventorySearch} onChange={event => setInventorySearch(event.currentTarget.value)}
