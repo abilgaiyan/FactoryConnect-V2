@@ -11,8 +11,29 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 }) {
   const [probeDevices, setProbeDevices] = useState<readonly { id: string; name: string; uuid: string; dataItems: number }[]>([]);
   const [probeError, setProbeError] = useState("");
+  const [selectedProbeIds, setSelectedProbeIds] = useState<readonly string[]>([]);
+  function exportProbeSelection() {
+    const selected = probeDevices.filter(device => selectedProbeIds.includes(device.id));
+    if (!selected.length) return;
+    const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
+    const rows = [
+      ["MTConnect Device ID", "MTConnect Device UUID", "Device Name", "Data Item Count", "Commissioning Status"],
+      ...selected.map(device => [device.id, device.uuid, device.name, String(device.dataItems), "Review required"])
+    ];
+    const csv = "\uFEFF" + rows.map(row => row.map(quote).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "factoryconnect-mtconnect-discovered-devices.csv";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
   async function previewProbeFile(file: File | undefined) {
     setProbeDevices([]);
+    setSelectedProbeIds([]);
     setProbeError("");
     if (!file) return;
     if (file.size > 4_000_000) { setProbeError("Devices XML must be smaller than 4 MB."); return; }
@@ -289,8 +310,14 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       onChange={event => void previewProbeFile(event.currentTarget.files?.[0])} />
     {probeError && <p role="alert">{probeError}</p>}
     {probeDevices.length > 0 && <div className="commissioning-table-scroll" role="region" aria-label="MTConnect probe preview" tabIndex={0}>
-      <table><thead><tr><th>Device</th><th>Device ID</th><th>UUID</th><th>Data items</th><th>Inventory comparison</th><th>Action</th></tr></thead>
+      <button type="button" disabled={selectedProbeIds.length === 0} onClick={exportProbeSelection}>
+        Export selected devices ({selectedProbeIds.length})</button>
+      <table><thead><tr><th>Select</th><th>Device</th><th>Device ID</th><th>UUID</th><th>Data items</th><th>Inventory comparison</th><th>Action</th></tr></thead>
       <tbody>{probeDevices.map(device => <tr key={device.id}>
+        <td><input type="checkbox" aria-label={"Select " + device.name}
+          checked={selectedProbeIds.includes(device.id)}
+          onChange={event => setSelectedProbeIds(current => event.currentTarget.checked
+            ? [...current, device.id] : current.filter(id => id !== device.id))} /></td>
         <td>{device.name}</td><td><code>{device.id}</code></td><td><code>{device.uuid || "Not supplied"}</code></td>
         <td>{device.dataItems}</td>
         <td>{(inventory ?? []).some(machine => machine.displayName.toLocaleLowerCase() === device.name.toLocaleLowerCase())
