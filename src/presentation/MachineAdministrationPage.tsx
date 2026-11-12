@@ -235,7 +235,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [inventory, setInventory] = useState<readonly { machineId: string; siteId: string; displayName: string; isRetired: boolean }[] | null>(null);
   const [inventoryError, setInventoryError] = useState("");
   const [configuredMachines, setConfiguredMachines] = useState<readonly {
-    machineId: string; deviceKey: string; registered: boolean
+    machineId: string; deviceKey: string; registered: boolean; duplicateConfiguration: boolean
   }[] | null>(null);
   const [configuredError, setConfiguredError] = useState("");
   useEffect(() => {
@@ -494,13 +494,15 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     {configuredError && <p role="status">{configuredError}</p>}
     {configuredMachines !== null && <p role="status">
       {configuredMachines.length} Edge machine entries loaded by API;
+      {" "}{configuredMachines.filter(machine => machine.duplicateConfiguration).length} duplicate entries;
       {" "}{configuredMachines.filter(machine => machine.registered).length} registered and active in V2.
     </p>}
     {configuredMachines !== null && configuredMachines.length > 0 && <ul>
-      {configuredMachines.map(machine => <li key={machine.machineId}>
+      {configuredMachines.map((machine, index) => <li key={machine.machineId + ":" + index}>
         {machine.deviceKey} — {machine.registered ? "Registered in V2" : "Registration required"}
         {" "}({machine.machineId})
-        {!machine.registered && <button type="button" onClick={() => {
+        {machine.duplicateConfiguration && <strong role="alert"> — Duplicate MachineId in Edge configuration; resolve before commissioning.</strong>}
+        {!machine.duplicateConfiguration && !machine.registered && <button type="button" onClick={() => {
           setKind("machine");
           setExistingMachineId(machine.machineId);
           setName(machine.deviceKey);
@@ -508,7 +510,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
             machine.deviceKey + ". Select its site and submit to register without activating acquisition.");
           document.getElementById("admin-record-kind")?.scrollIntoView({ behavior: "smooth" });
         }}>Prepare registration</button>}
-        {machine.registered && <button type="button"
+        {machine.registered && !machine.duplicateConfiguration && <button type="button"
           disabled={liveDiscoveryBusy || !sessionBearer}
           onClick={() => {
             setLiveDiscoveryMachineId(machine.machineId);
