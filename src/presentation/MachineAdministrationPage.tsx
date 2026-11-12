@@ -99,7 +99,23 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         body: JSON.stringify({ operationId, kind,
           siteId: kind === "site" ? null : siteId.trim(), displayName: name.trim() })
       });
-      if (!response.ok) throw new Error("Registration failed (HTTP " + response.status + ").");
+      if (!response.ok) {
+        if (response.status === 409) {
+          let detail = "";
+          try {
+            const body: { error?: string } = await response.json();
+            detail = body.error ?? "";
+          } catch { /* The status alone is sufficient. */ }
+          if (detail === "Operation ID conflict")
+            throw new Error("This registration retry conflicts with a previous request. Change the details to start a new registration.");
+          throw new Error("A record with this name already exists, or its selected site is no longer active. Review the inventory before retrying.");
+        }
+        if (response.status === 401 || response.status === 403)
+          throw new Error("Your session cannot register master data. Sign in with an administrator account that has master-data management access.");
+        if (response.status === 400)
+          throw new Error("Invalid registration details. Check the name and selected site.");
+        throw new Error("Registration could not be confirmed (HTTP " + response.status + "). Retry the unchanged request to avoid duplicates.");
+      }
       const result: { recordId: string } = await response.json();
       setRegistrationMessage("Registered " + kind + ": " + result.recordId + ". Acquisition remains inactive.");
       pendingRegistration.current = null;
