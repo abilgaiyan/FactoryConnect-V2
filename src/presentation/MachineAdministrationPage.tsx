@@ -23,12 +23,51 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [discoveryMatchedIds, setDiscoveryMatchedIds] = useState<readonly string[]>([]);
   const [commissioningLineId, setCommissioningLineId] = useState("");
   const [commissioningDeviceId, setCommissioningDeviceId] = useState("");
+  const [savedAssignments, setSavedAssignments] = useState<readonly {
+    machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
+  }[] | null>(null);
+  const [savedAssignmentsError, setSavedAssignmentsError] = useState("");
+  const [assignmentRevision, setAssignmentRevision] = useState(0);
+  useEffect(() => {
+    if (!sessionBearer) { setSavedAssignments(null); return; }
+    const controller = new AbortController();
+    void fetch(new URL("/api/admin/v2/commissioning-assignments", baseAddress), {
+      headers: { Authorization: "Bearer " + sessionBearer }, signal: controller.signal
+    }).then(async response => {
+      if (!response.ok) throw new Error("Saved commissioning assignments unavailable.");
+      const payload: { assignments: {
+        machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
+      }[] } = await response.json();
+      if (!controller.signal.aborted) {
+        setSavedAssignments(payload.assignments);
+        setSavedAssignmentsError("");
+      }
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setSavedAssignments(null);
+        setSavedAssignmentsError("Cannot load saved commissioning assignments.");
+      }
+    });
+    return () => controller.abort();
+  }, [baseAddress, sessionBearer, revision, assignmentRevision]);
+  const selectedCommissioningMachine = inventory?.find(machine =>
+    machine.machineId === discoverySourceMachineId && !machine.isRetired);
+  const selectedCommissioningLine = lines?.find(line =>
+    line.productionLineId === commissioningLineId && !line.isRetired);
+  const commissioningSelectionValid = Boolean(selectedCommissioningMachine &&
+    selectedCommissioningLine &&
+    selectedCommissioningLine.siteId === selectedCommissioningMachine.siteId &&
+    probeDevices.some(device => device.id === commissioningDeviceId) &&
+    discoveryIdentityStatus === "potential-match" &&
+    discoveryMatchedIds.length === 1 &&
+    discoveryMatchedIds[0] === commissioningDeviceId &&
+    liveDiscoveryMachineId === discoverySourceMachineId);
   const [commissioningSaveMessage, setCommissioningSaveMessage] = useState("");
   const [commissioningSaving, setCommissioningSaving] = useState(false);
   const pendingCommissioning = useRef<{ fingerprint: string; operationId: string } | null>(null);
   async function saveCommissioningAssignment() {
     if (!sessionBearer || commissioningSaving || !commissioningDeviceId || !commissioningLineId ||
-        !discoverySourceMachineId) return;
+        !discoverySourceMachineId || !commissioningSelectionValid) return;
     const fingerprint = JSON.stringify({
       machineId: discoverySourceMachineId, productionLineId: commissioningLineId,
       deviceId: commissioningDeviceId
@@ -48,6 +87,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       if (!response.ok) throw new Error("Commissioning assignment was not saved (HTTP " +
         response.status + "). Retry the same selection to preserve the operation ID.");
       pendingCommissioning.current = null;
+      setAssignmentRevision(value => value + 1);
       setCommissioningSaveMessage("Assignment saved in V2. Machine acquisition remains inactive.");
     } catch (error) {
       setCommissioningSaveMessage(error instanceof Error ? error.message : "Assignment save failed.");
@@ -566,7 +606,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     {discoverySourceMachineId && probeDevices.length > 0 && <section>
       <h3>Prepare commissioning review</h3>
       <p>Select the exact MTConnect device and a production line in the registered machine's site.
-        This exports a review document only; it does not save or activate configuration.</p>
+        Export a review or save the verified assignment in V2. Saving never activates acquisition.</p>
       <label htmlFor="commissioning-device">Discovered device</label>
       <select id="commissioning-device" value={commissioningDeviceId}
         onChange={event => setCommissioningDeviceId(event.currentTarget.value)}>
@@ -586,12 +626,28 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       <button type="button" disabled={!commissioningDeviceId || !commissioningLineId}
         onClick={exportCommissioningReview}>Export commissioning review JSON</button>
       <button type="button" disabled={!sessionBearer || commissioningSaving ||
-        !commissioningDeviceId || !commissioningLineId}
+        !commissioningSelectionValid}
         onClick={() => { void saveCommissioningAssignment(); }}>
         {commissioningSaving ? "Saving…" : "Save commissioning assignment"}
       </button>
       {commissioningSaveMessage && <p role="status">{commissioningSaveMessage}</p>}
     </section>}
+    <h2>Saved commissioning assignments</h2>
+    <p>Persisted machine-to-line and MTConnect device mappings. These are administrative records, not proof of active acquisition.</p>
+    {savedAssignmentsError && <p role="status">{savedAssignmentsError}</p>}
+    {savedAssignments && <div className="commissioning-table-scroll" role="region"
+      aria-label="Saved commissioning assignments" tabIndex={0}>
+      <table><thead><tr><th>Machine</th><th>Production line</th><th>MTConnect device ID</th><th>Acquisition</th></tr></thead>
+      <tbody>{savedAssignments.map(assignment => <tr key={assignment.machineId}>
+        <td>{inventory?.find(machine => machine.machineId === assignment.machineId)?.displayName ??
+          assignment.machineId}</td>
+        <td>{lines?.find(line => line.productionLineId === assignment.productionLineId)?.displayName ??
+          assignment.productionLineId}</td>
+        <td><code>{assignment.mtConnectDeviceId}</code></td>
+        <td>Not activated by commissioning</td>
+      </tr>)}</tbody></table>
+      {savedAssignments.length === 0 && <p>No commissioning assignments saved yet.</p>}
+    </div>}
     <h2>Review existing Edge MTConnect configuration</h2>
     <p>Choose an existing Edge JSON configuration file locally to compare configured Agent URLs and machine identities. The file stays in your browser; no configuration is uploaded, saved or activated.</p>
     <label htmlFor="admin-edge-config">Existing Edge configuration JSON</label>
