@@ -397,6 +397,42 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [savedAssignments, setSavedAssignments] = useState<readonly {
     machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
   }[] | null>(null);
+  const [readiness, setReadiness] = useState<Record<string, { status: string; detail: string }>>({});
+  const [validatingMachineId, setValidatingMachineId] = useState("");
+  async function validateSavedAssignment(machineId: string, deviceId: string) {
+    if (!sessionBearer || validatingMachineId) return;
+    setValidatingMachineId(machineId);
+    setReadiness(previous => ({ ...previous, [machineId]: {
+      status: "Checking connection", detail: "Contacting the configured MTConnect Agent…" } }));
+    try {
+      const response = await fetch(new URL("/api/admin/v2/mtconnect/discover/" +
+        encodeURIComponent(machineId), baseAddress), {
+        headers: { Authorization: "Bearer " + sessionBearer }
+      });
+      if (!response.ok) {
+        const detail = response.status === 404 ? "No trusted Agent configuration is available for this machine."
+          : response.status === 401 || response.status === 403 ? "Administrator session is not authorized."
+          : "Agent validation failed (HTTP " + response.status + ").";
+        setReadiness(previous => ({ ...previous, [machineId]: {
+          status: "Validation failed", detail } }));
+        return;
+      }
+      const result: { identityStatus: string; matchingDeviceIds: string[];
+        devices: { id: string }[] } = await response.json();
+      const valid = result.identityStatus === "potential-match" &&
+        result.matchingDeviceIds.length === 1 &&
+        result.matchingDeviceIds[0] === deviceId &&
+        result.devices.some(device => device.id === deviceId);
+      setReadiness(previous => ({ ...previous, [machineId]: valid
+        ? { status: "Agent validated", detail: "Saved device identity matches the live /probe response. Acquisition is not activated or verified." }
+        : { status: "Identity mismatch", detail: "The saved device ID does not uniquely match the configured Agent. Review commissioning before activation." } }));
+    } catch {
+      setReadiness(previous => ({ ...previous, [machineId]: {
+        status: "Validation failed", detail: "The Agent could not be validated. Check connectivity and try again." } }));
+    } finally {
+      setValidatingMachineId("");
+    }
+  }
   const [savedAssignmentsError, setSavedAssignmentsError] = useState("");
   const [assignmentRevision, setAssignmentRevision] = useState(0);
   useEffect(() => {
@@ -672,7 +708,14 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         <td>{lines?.find(line => line.productionLineId === assignment.productionLineId)?.displayName ??
           assignment.productionLineId}</td>
         <td><code>{assignment.mtConnectDeviceId}</code></td>
-        <td>Not activated by commissioning</td>
+        <td>
+          <strong>{readiness[assignment.machineId]?.status ?? "Commissioned — not validated"}</strong>
+          {readiness[assignment.machineId] && <p role="status">{readiness[assignment.machineId].detail}</p>}
+          <button type="button" disabled={!sessionBearer || Boolean(validatingMachineId)}
+            onClick={() => void validateSavedAssignment(assignment.machineId, assignment.mtConnectDeviceId)}>
+            {validatingMachineId === assignment.machineId ? "Validating…" : "Validate Agent"}
+          </button>
+        </td>
       </tr>)}</tbody></table>
       {savedAssignments.length === 0 && <p>No commissioning assignments saved yet.</p>}
     </div>}
