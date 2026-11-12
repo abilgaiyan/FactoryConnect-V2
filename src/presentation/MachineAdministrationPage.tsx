@@ -23,6 +23,36 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [discoveryMatchedIds, setDiscoveryMatchedIds] = useState<readonly string[]>([]);
   const [commissioningLineId, setCommissioningLineId] = useState("");
   const [commissioningDeviceId, setCommissioningDeviceId] = useState("");
+  const [commissioningSaveMessage, setCommissioningSaveMessage] = useState("");
+  const [commissioningSaving, setCommissioningSaving] = useState(false);
+  const pendingCommissioning = useRef<{ fingerprint: string; operationId: string } | null>(null);
+  async function saveCommissioningAssignment() {
+    if (!sessionBearer || commissioningSaving || !commissioningDeviceId || !commissioningLineId ||
+        !discoverySourceMachineId) return;
+    const fingerprint = JSON.stringify({
+      machineId: discoverySourceMachineId, productionLineId: commissioningLineId,
+      deviceId: commissioningDeviceId
+    });
+    if (pendingCommissioning.current?.fingerprint !== fingerprint)
+      pendingCommissioning.current = { fingerprint, operationId: crypto.randomUUID() };
+    setCommissioningSaving(true);
+    setCommissioningSaveMessage("");
+    try {
+      const response = await fetch(new URL("/api/admin/v2/commissioning-assignments", baseAddress), {
+        method: "POST",
+        headers: { Authorization: "Bearer " + sessionBearer, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...JSON.parse(fingerprint) as {
+          machineId: string; productionLineId: string; deviceId: string
+        }, operationId: pendingCommissioning.current.operationId })
+      });
+      if (!response.ok) throw new Error("Commissioning assignment was not saved (HTTP " +
+        response.status + "). Retry the same selection to preserve the operation ID.");
+      pendingCommissioning.current = null;
+      setCommissioningSaveMessage("Assignment saved in V2. Machine acquisition remains inactive.");
+    } catch (error) {
+      setCommissioningSaveMessage(error instanceof Error ? error.message : "Assignment save failed.");
+    } finally { setCommissioningSaving(false); }
+  }
   function exportCommissioningReview() {
     const machine = inventory?.find(item => item.machineId === discoverySourceMachineId);
     const device = probeDevices.find(item => item.id === commissioningDeviceId);
@@ -555,6 +585,12 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       </select>
       <button type="button" disabled={!commissioningDeviceId || !commissioningLineId}
         onClick={exportCommissioningReview}>Export commissioning review JSON</button>
+      <button type="button" disabled={!sessionBearer || commissioningSaving ||
+        !commissioningDeviceId || !commissioningLineId}
+        onClick={() => { void saveCommissioningAssignment(); }}>
+        {commissioningSaving ? "Saving…" : "Save commissioning assignment"}
+      </button>
+      {commissioningSaveMessage && <p role="status">{commissioningSaveMessage}</p>}
     </section>}
     <h2>Review existing Edge MTConnect configuration</h2>
     <p>Choose an existing Edge JSON configuration file locally to compare configured Agent URLs and machine identities. The file stays in your browser; no configuration is uploaded, saved or activated.</p>
