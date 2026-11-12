@@ -16,6 +16,8 @@ public static WebApplication Build(string[] args, Action<WebApplicationBuilder>?
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args,
     ApplicationName = typeof(EvidenceApiHost).Assembly.FullName, WebRootPath = webRoot });
 configure?.Invoke(builder);
+// Opt-in: import only MTConnect machine entries from the trusted local Edge file.
+EdgeMtConnectConfiguration.Load(builder);
 builder.Services.AddOperatorLogin(builder.Configuration);
 // Forwarding is opt-in and accepts only explicitly enumerated proxy IP addresses.
 // An unset configuration keeps direct HTTPS behavior unchanged.
