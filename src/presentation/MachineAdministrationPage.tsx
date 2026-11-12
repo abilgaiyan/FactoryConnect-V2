@@ -14,6 +14,14 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 
   const [edgeConfigured, setEdgeConfigured] = useState<readonly { machineId: string; deviceKey: string; baseUri: string }[]>([]);
   const [edgeConfigError, setEdgeConfigError] = useState("");
+
+  const probeEdgeComparison = useMemo(() => probeDevices.map(device => {
+    const matches = edgeConfigured.filter(configured =>
+      configured.deviceKey === device.name || configured.deviceKey === device.id ||
+      (device.uuid !== "" && configured.deviceKey === device.uuid));
+    return { device, matches };
+  }), [probeDevices, edgeConfigured]);
+
   async function previewEdgeConfig(file: File | undefined) {
     setEdgeConfigured([]);
     setEdgeConfigError("");
@@ -400,6 +408,22 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
           </tr>)}</tbody>
         </table>
       </div>)}
+    </div>}
+    {probeDevices.length > 0 && edgeConfigured.length > 0 && <div>
+      <h2>MTConnect / Edge identity comparison</h2>
+      <p>Comparison uses exact DeviceKey against discovered device name, ID or UUID. Review matches before commissioning; this comparison does not authorize an identity mapping.</p>
+      <div className="commissioning-table-scroll" role="region" aria-label="MTConnect and Edge identity comparison" tabIndex={0}>
+        <table><thead><tr><th>Discovered device</th><th>Configured MachineId</th><th>Result</th></tr></thead>
+        <tbody>{probeEdgeComparison.map(({device, matches}) => <tr key={device.id}>
+          <td>{device.name} (<code>{device.id}</code>)</td>
+          <td>{matches.length === 1 ? <code>{matches[0].machineId}</code> : "—"}</td>
+          <td>{matches.length === 1 ? "Potential configuration match — verify" :
+            matches.length === 0 ? "No matching Edge DeviceKey" : "Ambiguous: multiple Edge entries"}</td>
+        </tr>)}</tbody></table>
+      </div>
+      {edgeConfigured.filter(configured => !probeEdgeComparison.some(row =>
+        row.matches.some(match => match.machineId === configured.machineId))).length > 0 &&
+        <p role="status">Some configured Edge machines were not found in the selected Devices XML. Check Agent selection and device identities.</p>}
     </div>}
     <h2>Registered machine inventory</h2>
     <button type="button" disabled={!inventory || visibleInventory.length === 0}
