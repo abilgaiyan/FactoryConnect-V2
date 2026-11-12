@@ -416,7 +416,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         <table><thead><tr><th>Discovered device</th><th>Configured MachineId</th><th>Result</th></tr></thead>
         <tbody>{probeEdgeComparison.map(({device, matches}) => <tr key={device.id}>
           <td>{device.name} (<code>{device.id}</code>)</td>
-          <td>{matches.length === 1 ? <code>{matches[0].machineId}</code> : "—"}</td>
+          <td>{matches.length === 1 && matches[0] ? <code>{matches[0].machineId}</code> : "—"}</td>
           <td>{matches.length === 1 ? "Potential configuration match — verify" :
             matches.length === 0 ? "No matching Edge DeviceKey" : "Ambiguous: multiple Edge entries"}</td>
         </tr>)}</tbody></table>
