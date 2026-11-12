@@ -55,9 +55,14 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         setCommissioningSaveMessage("Save accepted, but the assignment could not be verified by read-back. Refresh the inventory before continuing.");
         return;
       }
-      const persisted: { assignments: {
+      let persisted: { assignments: {
         machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
-      }[] } = await readback.json();
+      }[] };
+      try { persisted = await readback.json(); }
+      catch {
+        setCommissioningSaveMessage("Save accepted, but the read-back response was invalid. Refresh the inventory to verify.");
+        return;
+      }
       const match = persisted.assignments.find(assignment =>
         assignment.machineId.toLowerCase() === discoverySourceMachineId.toLowerCase() &&
         assignment.productionLineId.toLowerCase() === commissioningLineId.toLowerCase() &&
