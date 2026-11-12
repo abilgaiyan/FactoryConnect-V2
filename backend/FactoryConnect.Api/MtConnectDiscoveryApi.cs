@@ -1,4 +1,3 @@
-using System.Net;
 using System.Security.Cryptography;
 using FactoryConnect.Sql.Security;
 
@@ -35,8 +34,10 @@ public static class MtConnectDiscoveryApi
             try
             {
                 // The same administration permission as machine inventory is required.
-                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                var machines = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
                     .ReadAdministrationMachinesAsync(hash, ct);
+                if (!machines.Any(machine => machine.MachineId == machineId && !machine.IsRetired))
+                    return Results.NotFound(new { error = "Active registered machine not found" });
 
                 // Read the Edge configuration as supplied to this host; no second Agent URL registry.
                 var configured = config.GetSection("MTConnect:Machines").Get<ConfiguredMachine[]>() ?? [];
@@ -73,7 +74,20 @@ public static class MtConnectDiscoveryApi
                 }
                 limited.Position = 0;
                 var devices = MtConnectProbeDevices.Parse(limited);
-                return Results.Ok(new { machineId, target.DeviceKey, devices, acquisitionActivated = false });
+                var matching = devices.Where(device =>
+                    string.Equals(device.Id, target.DeviceKey, StringComparison.Ordinal) ||
+                    string.Equals(device.Name, target.DeviceKey, StringComparison.Ordinal) ||
+                    (!string.IsNullOrWhiteSpace(device.Uuid) &&
+                     string.Equals(device.Uuid, target.DeviceKey, StringComparison.OrdinalIgnoreCase))).ToArray();
+                var identityStatus = matching.Length switch
+                {
+                    0 => "unmatched",
+                    1 => "potential-match",
+                    _ => "ambiguous"
+                };
+                return Results.Ok(new { machineId, target.DeviceKey, devices, identityStatus,
+                    matchingDeviceIds = matching.Select(device => device.Id).ToArray(),
+                    acquisitionActivated = false });
             }
             catch (SecurityDeniedException) { return Results.Unauthorized(); }
             catch (InvalidDataException) { return Results.Problem(statusCode: 502, title: "Invalid MTConnect probe document"); }
