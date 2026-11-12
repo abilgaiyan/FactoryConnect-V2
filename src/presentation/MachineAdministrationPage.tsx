@@ -289,10 +289,17 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       onChange={event => void previewProbeFile(event.currentTarget.files?.[0])} />
     {probeError && <p role="alert">{probeError}</p>}
     {probeDevices.length > 0 && <div className="commissioning-table-scroll" role="region" aria-label="MTConnect probe preview" tabIndex={0}>
-      <table><thead><tr><th>Device</th><th>Device ID</th><th>UUID</th><th>Data items</th></tr></thead>
+      <table><thead><tr><th>Device</th><th>Device ID</th><th>UUID</th><th>Data items</th><th>Inventory comparison</th><th>Action</th></tr></thead>
       <tbody>{probeDevices.map(device => <tr key={device.id}>
         <td>{device.name}</td><td><code>{device.id}</code></td><td><code>{device.uuid || "Not supplied"}</code></td>
         <td>{device.dataItems}</td>
+        <td>{(inventory ?? []).some(machine => machine.displayName.toLocaleLowerCase() === device.name.toLocaleLowerCase())
+          ? "Name already in inventory — verify identity manually"
+          : "Not matched by name"}</td>
+        <td><button type="button" disabled={!sessionBearer || !inventory || sites.filter(site => !site.isRetired).length === 0}
+          onClick={() => { setKind("machine"); setName(device.name); setRegistrationMessage(
+            "Device name copied into machine registration. Choose a site and review identity before submitting. Device ID/UUID is not yet linked."); }}>
+          Prepare registration</button></td>
       </tr>)}</tbody></table>
     </div>}
     <h2>Registered machine inventory</h2>
