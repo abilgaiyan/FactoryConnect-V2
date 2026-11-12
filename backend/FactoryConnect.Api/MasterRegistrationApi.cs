@@ -5,6 +5,7 @@ namespace FactoryConnect.Api;
 
 public static class MasterRegistrationApi
 {
+    private sealed record CommissioningRequest(Guid OperationId, Guid MachineId, Guid ProductionLineId, string DeviceId);
     private sealed record RegistrationRequest(Guid OperationId, string Kind, Guid? SiteId, string DisplayName, Guid? MachineId = null);
 
     public static void MapMasterRegistration(this WebApplication app)
@@ -183,6 +184,50 @@ public static class MasterRegistrationApi
             catch (InvalidOperationException) { return Results.Conflict(new { error = "Registration conflicts with existing master data" }); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "master-registration", "Master-data authority unavailable"); }
+            finally { CryptographicOperations.ZeroMemory(sessionHash); }
+        }).RequireRateLimiting("security-boundary");
+        app.MapPost("/api/admin/v2/commissioning-assignments", async (
+            HttpContext http, IConfiguration config, CancellationToken ct) =>
+        {
+            http.Response.Headers.CacheControl = "no-store";
+            if (!http.Request.IsHttps)
+                return Results.Problem(statusCode: 403, title: "HTTPS required");
+            if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId) ||
+                string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
+                return Results.Problem(statusCode: 503, title: "Master-data authority unavailable");
+            if (!http.Request.Headers.TryGetValue("Authorization", out var authorization) ||
+                authorization.Count != 1 || !authorization[0]!.StartsWith("Bearer ", StringComparison.Ordinal) ||
+                authorization[0]!.Length > 192)
+                return Results.Unauthorized();
+            byte[] bearer;
+            try { bearer = Convert.FromBase64String(authorization[0]![7..]); }
+            catch (FormatException) { return Results.Unauthorized(); }
+            if (bearer.Length != 32)
+            {
+                CryptographicOperations.ZeroMemory(bearer);
+                return Results.Unauthorized();
+            }
+            var sessionHash = SHA256.HashData(bearer);
+            CryptographicOperations.ZeroMemory(bearer);
+            try
+            {
+                CommissioningRequest? request;
+                try { request = await http.Request.ReadFromJsonAsync<CommissioningRequest>(cancellationToken: ct); }
+                catch (System.Text.Json.JsonException) { return Results.BadRequest(new { error = "Invalid commissioning JSON" }); }
+                if (request is null || request.OperationId == Guid.Empty ||
+                    request.MachineId == Guid.Empty || request.ProductionLineId == Guid.Empty ||
+                    string.IsNullOrWhiteSpace(request.DeviceId) || request.DeviceId.Trim().Length > 200)
+                    return Results.BadRequest(new { error = "Invalid commissioning assignment" });
+                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .SaveCommissioningAssignmentAsync(sessionHash, request.OperationId,
+                        request.MachineId, request.ProductionLineId, request.DeviceId, ct);
+                return Results.Ok(new { saved = true, request.OperationId, acquisitionActivated = false });
+            }
+            catch (SecurityDeniedException) { return Results.Unauthorized(); }
+            catch (SecurityConflictException) { return Results.Conflict(new { error = "Operation ID conflict" }); }
+            catch (InvalidOperationException) { return Results.Conflict(new { error = "Machine or production line invalid for commissioning" }); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "commissioning-save", "Commissioning authority unavailable"); }
             finally { CryptographicOperations.ZeroMemory(sessionHash); }
         }).RequireRateLimiting("security-boundary");
     }
