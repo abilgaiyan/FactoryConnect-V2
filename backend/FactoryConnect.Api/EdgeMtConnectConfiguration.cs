@@ -30,11 +30,14 @@ internal static class EdgeMtConnectConfiguration
         {
             if (machine.ValueKind != JsonValueKind.Object ||
                 !machine.TryGetProperty("MachineId", out var idValue) ||
+                idValue.ValueKind != JsonValueKind.String ||
                 !Guid.TryParse(idValue.GetString(), out var machineId) ||
                 !seen.Add(machineId) ||
                 !machine.TryGetProperty("DeviceKey", out var keyValue) ||
+                keyValue.ValueKind != JsonValueKind.String ||
                 string.IsNullOrWhiteSpace(keyValue.GetString()) ||
                 !machine.TryGetProperty("BaseUri", out var uriValue) ||
+                uriValue.ValueKind != JsonValueKind.String ||
                 !Uri.TryCreate(uriValue.GetString(), UriKind.Absolute, out var uri) ||
                 uri.Scheme is not ("http" or "https") ||
                 !string.IsNullOrEmpty(uri.UserInfo) ||
