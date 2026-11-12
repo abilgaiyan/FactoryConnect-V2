@@ -27,6 +27,26 @@ public sealed partial class SqlSecurityAuthority
     }
 
 
+    public sealed record AdministrationLine(Guid ProductionLineId, Guid SiteId, string DisplayName, bool IsRetired);
+    public Task<IReadOnlyList<AdministrationLine>> ReadAdministrationLinesAsync(
+        byte[] sessionHash, CancellationToken ct = default)
+    {
+        if (sessionHash is null || sessionHash.Length != 32) throw new SecurityDeniedException();
+        return ReadAsync(sessionHash, "configuration.master.manage", AuthorizationScope.Installation,
+            async (connection, transaction, token) =>
+            {
+                await using var command = new Microsoft.Data.SqlClient.SqlCommand(
+                    "SELECT ProductionLineId, SiteId, DisplayName, IsRetired FROM master.ProductionLine ORDER BY DisplayName, ProductionLineId",
+                    connection, transaction);
+                await using var reader = await command.ExecuteReaderAsync(token);
+                var lines = new List<AdministrationLine>();
+                while (await reader.ReadAsync(token))
+                    lines.Add(new AdministrationLine(reader.GetGuid(0), reader.GetGuid(1),
+                        reader.GetString(2), reader.GetBoolean(3)));
+                return (IReadOnlyList<AdministrationLine>)lines;
+            }, ct);
+    }
+
     public sealed record AdministrationMachine(Guid MachineId, Guid SiteId, string DisplayName, bool IsRetired);
     public Task<IReadOnlyList<AdministrationMachine>> ReadAdministrationMachinesAsync(
         byte[] sessionHash, CancellationToken ct = default)
