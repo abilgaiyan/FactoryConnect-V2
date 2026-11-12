@@ -438,6 +438,13 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {configuredMachines.map(machine => <li key={machine.machineId}>
         {machine.deviceKey} — {machine.registered ? "Registered in V2" : "Registration required"}
         {" "}({machine.machineId})
+        {machine.registered && <button type="button"
+          disabled={liveDiscoveryBusy || !sessionBearer}
+          onClick={() => {
+            setLiveDiscoveryMachineId(machine.machineId);
+            setLiveDiscoveryMessage("Selected " + machine.deviceKey +
+              ". Use Discover Agent devices to inspect its configured Agent.");
+          }}>Select for discovery</button>}
       </li>)}
     </ul>}
     <h2>Discover devices from a configured MTConnect Agent</h2>
