@@ -63,18 +63,19 @@ internal sealed class MachineAdministrationStore(string connectionString)
     internal Task<Guid> RegisterLineAsync(SqlConnection connection, SqlTransaction transaction, Guid siteId, string name, CancellationToken ct = default)
         => RegisterAsync(connection, transaction, "ProductionLine", "ProductionLineId", siteId, name, ct);
 
-    internal Task<Guid> RegisterMachineAsync(SqlConnection connection, SqlTransaction transaction, Guid siteId, string name, CancellationToken ct = default)
-        => RegisterAsync(connection, transaction, "Machine", "MachineId", siteId, name, ct);
+    internal Task<Guid> RegisterMachineAsync(SqlConnection connection, SqlTransaction transaction, Guid siteId, string name, Guid? machineId = null, CancellationToken ct = default)
+        => RegisterAsync(connection, transaction, "Machine", "MachineId", siteId, name, ct, machineId);
 
     private static async Task<Guid> RegisterAsync(SqlConnection connection, SqlTransaction transaction,
-        string table, string idColumn, Guid? siteId, string name, CancellationToken ct)
+        string table, string idColumn, Guid? siteId, string name, CancellationToken ct, Guid? requestedId = null)
     {
         // Identifiers are selected exclusively from the fixed methods above.
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 200)
             throw new ArgumentException("Display name must contain 1 to 200 characters.", nameof(name));
         if (siteId == Guid.Empty) throw new ArgumentException("Site ID is required.", nameof(siteId));
         name = name.Trim();
-        var id = Guid.NewGuid();
+        var id = requestedId ?? Guid.NewGuid();
+        if (id == Guid.Empty) throw new ArgumentException("Machine ID cannot be empty.");
         // The security authority owns transaction isolation and commit. UPDLOCK/HOLDLOCK
         // serializes duplicate-name checks until that transaction completes.
         var predicate = siteId.HasValue ? "SiteId=@site AND " : "";
