@@ -23,45 +23,6 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [discoveryMatchedIds, setDiscoveryMatchedIds] = useState<readonly string[]>([]);
   const [commissioningLineId, setCommissioningLineId] = useState("");
   const [commissioningDeviceId, setCommissioningDeviceId] = useState("");
-  const [savedAssignments, setSavedAssignments] = useState<readonly {
-    machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
-  }[] | null>(null);
-  const [savedAssignmentsError, setSavedAssignmentsError] = useState("");
-  const [assignmentRevision, setAssignmentRevision] = useState(0);
-  useEffect(() => {
-    if (!sessionBearer) { setSavedAssignments(null); return; }
-    const controller = new AbortController();
-    void fetch(new URL("/api/admin/v2/commissioning-assignments", baseAddress), {
-      headers: { Authorization: "Bearer " + sessionBearer }, signal: controller.signal
-    }).then(async response => {
-      if (!response.ok) throw new Error("Saved commissioning assignments unavailable.");
-      const payload: { assignments: {
-        machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
-      }[] } = await response.json();
-      if (!controller.signal.aborted) {
-        setSavedAssignments(payload.assignments);
-        setSavedAssignmentsError("");
-      }
-    }).catch(() => {
-      if (!controller.signal.aborted) {
-        setSavedAssignments(null);
-        setSavedAssignmentsError("Cannot load saved commissioning assignments.");
-      }
-    });
-    return () => controller.abort();
-  }, [baseAddress, sessionBearer, revision, assignmentRevision]);
-  const selectedCommissioningMachine = inventory?.find(machine =>
-    machine.machineId === discoverySourceMachineId && !machine.isRetired);
-  const selectedCommissioningLine = lines?.find(line =>
-    line.productionLineId === commissioningLineId && !line.isRetired);
-  const commissioningSelectionValid = Boolean(selectedCommissioningMachine &&
-    selectedCommissioningLine &&
-    selectedCommissioningLine.siteId === selectedCommissioningMachine.siteId &&
-    probeDevices.some(device => device.id === commissioningDeviceId) &&
-    discoveryIdentityStatus === "potential-match" &&
-    discoveryMatchedIds.length === 1 &&
-    discoveryMatchedIds[0] === commissioningDeviceId &&
-    liveDiscoveryMachineId === discoverySourceMachineId);
   const [commissioningSaveMessage, setCommissioningSaveMessage] = useState("");
   const [commissioningSaving, setCommissioningSaving] = useState(false);
   const pendingCommissioning = useRef<{ fingerprint: string; operationId: string } | null>(null);
@@ -405,6 +366,45 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     return () => controller.abort();
   }, [baseAddress, sessionBearer, revision]);
 
+  const [savedAssignments, setSavedAssignments] = useState<readonly {
+    machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
+  }[] | null>(null);
+  const [savedAssignmentsError, setSavedAssignmentsError] = useState("");
+  const [assignmentRevision, setAssignmentRevision] = useState(0);
+  useEffect(() => {
+    if (!sessionBearer) { setSavedAssignments(null); return; }
+    const controller = new AbortController();
+    void fetch(new URL("/api/admin/v2/commissioning-assignments", baseAddress), {
+      headers: { Authorization: "Bearer " + sessionBearer }, signal: controller.signal
+    }).then(async response => {
+      if (!response.ok) throw new Error("Saved commissioning assignments unavailable.");
+      const payload: { assignments: {
+        machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
+      }[] } = await response.json();
+      if (!controller.signal.aborted) {
+        setSavedAssignments(payload.assignments);
+        setSavedAssignmentsError("");
+      }
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setSavedAssignments(null);
+        setSavedAssignmentsError("Cannot load saved commissioning assignments.");
+      }
+    });
+    return () => controller.abort();
+  }, [baseAddress, sessionBearer, revision, assignmentRevision]);
+  const selectedCommissioningMachine = inventory?.find(machine =>
+    machine.machineId === discoverySourceMachineId && !machine.isRetired);
+  const selectedCommissioningLine = lines?.find(line =>
+    line.productionLineId === commissioningLineId && !line.isRetired);
+  const commissioningSelectionValid = Boolean(selectedCommissioningMachine &&
+    selectedCommissioningLine &&
+    selectedCommissioningLine.siteId === selectedCommissioningMachine.siteId &&
+    probeDevices.some(device => device.id === commissioningDeviceId) &&
+    discoveryIdentityStatus === "potential-match" &&
+    discoveryMatchedIds.length === 1 &&
+    discoveryMatchedIds[0] === commissioningDeviceId &&
+    liveDiscoveryMachineId === discoverySourceMachineId);
   const [name, setName] = useState("");
   const [existingMachineId, setExistingMachineId] = useState("");
   const [registrationMessage, setRegistrationMessage] = useState("");
