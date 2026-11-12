@@ -89,6 +89,75 @@ public sealed partial class SqlSecurityAuthority
             }, ct);
     }
 
+    // A commissioning assignment is administrative configuration, never acquisition activation.
+    public Task SaveCommissioningAssignmentAsync(byte[] sessionHash, Guid operationId,
+        Guid machineId, Guid productionLineId, string deviceId, CancellationToken ct = default)
+    {
+        if (sessionHash is null || sessionHash.Length != 32 || operationId == Guid.Empty)
+            throw new SecurityDeniedException();
+        if (machineId == Guid.Empty || productionLineId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(deviceId) || deviceId.Trim().Length > 200)
+            throw new ArgumentException("Invalid commissioning assignment.");
+        var normalizedDeviceId = deviceId.Trim();
+        var token = sessionHash.ToArray();
+        var request = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            version = 1, action = "commissioning-assign", machineId, productionLineId,
+            deviceId = normalizedDeviceId
+        });
+        return Transaction(operationId, true, async (connection, transaction) =>
+        {
+            var state = await State(connection, transaction, ct);
+            var actor = await Session(connection, transaction, token, state.Now, ct);
+            await Authorize(connection, transaction, actor, "configuration.master.manage",
+                AuthorizationScope.Installation, state.Now, ct);
+            var completed = await FindOperation(connection, transaction, operationId, ct);
+            if (completed is not null)
+            {
+                if (completed.Actor != actor || !completed.Request.AsSpan().SequenceEqual(request))
+                    throw new SecurityConflictException();
+                return 0;
+            }
+
+            await using (var check = new Microsoft.Data.SqlClient.SqlCommand("""
+                SELECT COUNT_BIG(*)
+                FROM master.Machine AS m WITH (UPDLOCK, HOLDLOCK)
+                JOIN master.ProductionLine AS l WITH (UPDLOCK, HOLDLOCK) ON l.SiteId=m.SiteId
+                WHERE m.MachineId=@machine AND l.ProductionLineId=@line
+                  AND m.IsRetired=0 AND l.IsRetired=0
+                """, connection, transaction))
+            {
+                check.Parameters.AddWithValue("@machine", machineId);
+                check.Parameters.AddWithValue("@line", productionLineId);
+                if ((long)(await check.ExecuteScalarAsync(ct) ?? 0L) != 1)
+                    throw new InvalidOperationException("Machine and production line must be active and in the same site.");
+            }
+            await Exec(connection, transaction, """
+                INSERT security.SecurityOperation
+                    (OperationId,ActorPrincipalId,RequestBytes,RequestHash,ScopeKind,SiteId,MachineId,ResultBytes)
+                VALUES (@op,@actor,@bytes,@hash,'I',NULL,NULL,@result);
+                """, ct, ("@op", operationId), ("@actor", actor), ("@bytes", request),
+                ("@hash", SHA256.HashData(request)),
+                ("@result", JsonSerializer.SerializeToUtf8Bytes(new { saved = true })));
+            await Exec(connection, transaction, """
+                MERGE master.MachineCommissioning WITH (HOLDLOCK) AS target
+                USING (SELECT @machine AS MachineId) AS source ON target.MachineId=source.MachineId
+                WHEN MATCHED THEN UPDATE SET ProductionLineId=@line,
+                    MtConnectDeviceId=@device, LastOperationId=@op
+                WHEN NOT MATCHED THEN INSERT (MachineId,ProductionLineId,MtConnectDeviceId,LastOperationId)
+                    VALUES (@machine,@line,@device,@op);
+                """, ct, ("@machine", machineId), ("@line", productionLineId),
+                ("@device", normalizedDeviceId), ("@op", operationId));
+            await Exec(connection, transaction, """
+                INSERT security.SecurityAudit(AuditId,OperationId,ActorPrincipalId,Action,Reason)
+                VALUES (@id,@op,@actor,@action,@reason);
+                """, ct, ("@id", Guid.NewGuid()), ("@op", operationId), ("@actor", actor),
+                ("@action", "machine-commissioning-assign"),
+                ("@reason", "Administrator assigned production line and MTConnect device"));
+            return 0;
+        }, ct);
+    }
+
     // Registration is a master-data change, not an acquisition or machine activation.
     // The installation-level grant is deliberately separate from evidence-reading rights.
     public Task<Guid> RegisterMasterRecordAsync(byte[] sessionHash, Guid operationId,
