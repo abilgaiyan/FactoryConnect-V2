@@ -59,7 +59,12 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     return () => controller.abort();
   }, [baseAddress, sessionBearer, revision]);
 
+  const [lineSiteFilter, setLineSiteFilter] = useState("");
+  const [showRetiredLines, setShowRetiredLines] = useState(false);
   const [lines, setLines] = useState<readonly { productionLineId: string; siteId: string; displayName: string; isRetired: boolean }[] | null>(null);
+  const visibleLines = useMemo(() => (lines ?? []).filter(line =>
+    (showRetiredLines || !line.isRetired) && (!lineSiteFilter || line.siteId === lineSiteFilter)
+  ), [lines, lineSiteFilter, showRetiredLines]);
   useEffect(() => {
     if (!sessionBearer) { setLines(null); return; }
     const controller = new AbortController();
@@ -178,14 +183,24 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {sites.length === 0 && <p>No sites available to this administrator.</p>}
     </div>}
     <h2>Registered production lines</h2>
+    <label htmlFor="admin-line-site-filter">Production-line site</label>
+    <select id="admin-line-site-filter" value={lineSiteFilter} onChange={event => setLineSiteFilter(event.currentTarget.value)}>
+      <option value="">All sites</option>
+      {sites.map(site => <option key={site.siteId} value={site.siteId}>{site.displayName}</option>)}
+    </select>
+    <label htmlFor="admin-retired-lines">
+      <input id="admin-retired-lines" type="checkbox" checked={showRetiredLines}
+        onChange={event => setShowRetiredLines(event.currentTarget.checked)} /> Include retired lines
+    </label>
     {lines && <div role="region" aria-label="Registered production lines" tabIndex={0}>
       <table><thead><tr><th>Production line</th><th>Site</th><th>Status</th></tr></thead>
-      <tbody>{lines.map(line => <tr key={line.productionLineId}>
+      <tbody>{visibleLines.map(line => <tr key={line.productionLineId}>
         <td>{line.displayName}</td>
         <td>{sites.find(site => site.siteId === line.siteId)?.displayName ?? line.siteId}</td>
         <td>{line.isRetired ? "Retired" : "Registered"}</td>
       </tr>)}</tbody></table>
       {lines.length === 0 && <p>No production lines registered yet.</p>}
+      {lines.length > 0 && visibleLines.length === 0 && <p>No production lines match the current filters.</p>}
     </div>}
     <h2>Registered machine inventory</h2>
     <p>This administrator inventory includes registered machines whether or not they have published evidence.</p>
