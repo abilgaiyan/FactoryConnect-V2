@@ -19,8 +19,13 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     const matches = edgeConfigured.filter(configured =>
       configured.deviceKey === device.name || configured.deviceKey === device.id ||
       (device.uuid !== "" && configured.deviceKey === device.uuid));
-    return { device, matches };
-  }), [probeDevices, edgeConfigured]);
+    const configuredIds = new Set(matches.map(match => match.machineId.toLowerCase()));
+    const duplicateDeviceKey = matches.length > 1;
+    const registered = matches.length === 1 && inventory?.find(machine =>
+      machine.machineId.toLowerCase() === matches[0]?.machineId.toLowerCase());
+    return { device, matches, duplicateDeviceKey, registered,
+      identityConflict: configuredIds.size > 1 || duplicateDeviceKey };
+  }), [probeDevices, edgeConfigured, inventory]);
 
   async function previewEdgeConfig(file: File | undefined) {
     setEdgeConfigured([]);
@@ -411,14 +416,16 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     </div>}
     {probeDevices.length > 0 && edgeConfigured.length > 0 && <div>
       <h2>MTConnect / Edge identity comparison</h2>
-      <p>Comparison uses exact DeviceKey against discovered device name, ID or UUID. Review matches before commissioning; this comparison does not authorize an identity mapping.</p>
+      <p>Comparison uses exact DeviceKey against discovered device name, ID or UUID. Multiple matching Edge entries block automatic reconciliation. Existing MachineIds must be reused; names are not authoritative identities. No mapping is approved or saved.</p>
       <div className="commissioning-table-scroll" role="region" aria-label="MTConnect and Edge identity comparison" tabIndex={0}>
         <table><thead><tr><th>Discovered device</th><th>Configured MachineId</th><th>Result</th></tr></thead>
-        <tbody>{probeEdgeComparison.map(({device, matches}) => <tr key={device.id}>
+        <tbody>{probeEdgeComparison.map(({device, matches, registered, identityConflict}) => <tr key={device.id}>
           <td>{device.name} (<code>{device.id}</code>)</td>
           <td>{matches.length === 1 && matches[0] ? <code>{matches[0].machineId}</code> : "—"}</td>
-          <td>{matches.length === 1 ? "Potential configuration match — verify" :
-            matches.length === 0 ? "No matching Edge DeviceKey" : "Ambiguous: multiple Edge entries"}</td>
+          <td>{identityConflict ? "BLOCKED: multiple Edge entries match this device" :
+            matches.length === 0 ? "No matching Edge DeviceKey" :
+            registered ? "Configured MachineId exists in V2 — verify identity" :
+            "Configured MachineId absent from V2 — review before registration"}</td>
         </tr>)}</tbody></table>
       </div>
       {edgeConfigured.filter(configured => !probeEdgeComparison.some(row =>
