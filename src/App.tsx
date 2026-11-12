@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { MachineAdministrationPage } from "./presentation/MachineAdministrationPage.tsx";
 import { CommissioningPage } from "./presentation/CommissioningPage.tsx";
 import { OperatorEvidencePage } from "./presentation/OperatorEvidencePage.tsx";
 import { RetainedMachineEvidence } from "./presentation/RetainedMachineEvidence.tsx";
@@ -103,10 +104,11 @@ export function App({ runtime }: AppProps) {
         </div>
         <div className="operator-session-control">{validEvidenceSession
           ? <button type="button" onClick={() => { void endEvidenceSession(); }}>End evidence session</button>
-          : <a href="/api/security/v2/login">Sign in to view machine evidence</a>}</div>
+          : <a href="/api/security/v2/login">Sign in to FactoryConnect</a>}</div>
         <nav aria-label="Dashboard">
           {SupervisorWorkspace && <ApplicationLink href="/supervisor-preview" navigate={navigate} current={route.kind === "supervisorPreview"}>Supervisor desk preview</ApplicationLink>}
           <ApplicationLink href="/operator-evidence" navigate={navigate} current={route.kind === "operatorEvidence"}>Operator evidence</ApplicationLink>{" "}
+          <ApplicationLink href="/admin/machines" navigate={navigate} current={route.kind === "machineAdministration"}>Machine administration</ApplicationLink>{" "}
           <ApplicationLink href="/commissioning" navigate={navigate} current={route.kind === "commissioning"}>Commissioning</ApplicationLink>{" "}
           <ApplicationLink href="/overview" navigate={navigate} current={route.kind === "overview"}>Overview</ApplicationLink>{" "}
           <ApplicationLink href="/fleet" navigate={navigate} current={route.kind === "fleet"}>Fleet status</ApplicationLink>{" "}
@@ -160,6 +162,8 @@ function RouteView({ route, navigate, runtime }: RouteViewProps) {
       ? <Suspense fallback={<p role="status">Loading screen review…</p>}><SupervisorWorkspace runtime={runtime} /></Suspense>
       : <section><h1>Supervisor workspace not enabled</h1><p>The screen-review preview is available only in development builds. No production data-entry service is connected.</p></section>;
     case "commissioning": return <CommissioningPage />;
+    case "machineAdministration": return <MachineAdministrationPage sessionBearer={runtime.evidenceSession?.bearer ?? null}
+      baseAddress={new URL(runtime.configuration.reportingBasePath, window.location.origin).toString()} />;
     case "operatorEvidence": return <OperatorEvidencePage sessionBearer={runtime.evidenceSession?.bearer ?? null}
       baseAddress={new URL(runtime.configuration.reportingBasePath, window.location.origin).toString()} />;
     case "overview": return <ManagementOverviewPage runtime={runtime} search={route.search} navigate={navigate} />;
