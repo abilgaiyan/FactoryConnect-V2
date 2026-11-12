@@ -29,7 +29,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   async function saveCommissioningAssignment() {
     if (!sessionBearer || commissioningSaving || !commissioningSelectionValid) return;
     const fingerprint = JSON.stringify({
-      machineId: discoverySourceMachineId, productionLineId: commissioningLineId,
+      sessionBearer, machineId: discoverySourceMachineId, productionLineId: commissioningLineId,
       deviceId: commissioningDeviceId
     });
     if (pendingCommissioning.current?.fingerprint !== fingerprint)
@@ -40,9 +40,9 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       const response = await fetch(new URL("/api/admin/v2/commissioning-assignments", baseAddress), {
         method: "POST",
         headers: { Authorization: "Bearer " + sessionBearer, "Content-Type": "application/json" },
-        body: JSON.stringify({ ...JSON.parse(fingerprint) as {
-          machineId: string; productionLineId: string; deviceId: string
-        }, operationId: pendingCommissioning.current.operationId })
+        body: JSON.stringify({ machineId: discoverySourceMachineId,
+          productionLineId: commissioningLineId, deviceId: commissioningDeviceId,
+          operationId: pendingCommissioning.current.operationId })
       });
       if (!response.ok) throw new Error("Commissioning assignment was not saved (HTTP " +
         response.status + "). Retry the same selection to preserve the operation ID.");
