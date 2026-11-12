@@ -47,6 +47,21 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     });
     return () => controller.abort();
   }, [baseAddress, sessionBearer, revision]);
+
+  const [lines, setLines] = useState<readonly { productionLineId: string; siteId: string; displayName: string; isRetired: boolean }[] | null>(null);
+  useEffect(() => {
+    if (!sessionBearer) { setLines(null); return; }
+    const controller = new AbortController();
+    void fetch(new URL("/api/admin/v2/lines", baseAddress), {
+      headers: { Authorization: "Bearer " + sessionBearer }, signal: controller.signal
+    }).then(async response => {
+      if (!response.ok) throw new Error("Production-line inventory unavailable.");
+      const data: { lines: { productionLineId: string; siteId: string; displayName: string; isRetired: boolean }[] } = await response.json();
+      if (!controller.signal.aborted) setLines(data.lines);
+    }).catch(() => { if (!controller.signal.aborted) setLines(null); });
+    return () => controller.abort();
+  }, [baseAddress, sessionBearer, revision]);
+
   const [name, setName] = useState("");
   const [registrationMessage, setRegistrationMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -133,6 +148,17 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     </form>}
 
 
+
+    <h2>Registered production lines</h2>
+    {lines && <div role="region" aria-label="Registered production lines" tabIndex={0}>
+      <table><thead><tr><th>Production line</th><th>Site</th><th>Status</th></tr></thead>
+      <tbody>{lines.map(line => <tr key={line.productionLineId}>
+        <td>{line.displayName}</td>
+        <td>{sites.find(site => site.siteId === line.siteId)?.displayName ?? line.siteId}</td>
+        <td>{line.isRetired ? "Retired" : "Registered"}</td>
+      </tr>)}</tbody></table>
+      {lines.length === 0 && <p>No production lines registered yet.</p>}
+    </div>}
     <h2>Registered machine inventory</h2>
     <p>This administrator inventory includes registered machines whether or not they have published evidence.</p>
     {inventoryError && <p role="status">{inventoryError}</p>}
