@@ -17,9 +17,12 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     if (!file) return;
     if (file.size > 4_000_000) { setProbeError("Devices XML must be smaller than 4 MB."); return; }
     try {
-      const xml = new DOMParser().parseFromString(await file.text(), "application/xml");
+      const source = await file.text();
+      if (/<!DOCTYPE|<!ENTITY/i.test(source))
+        throw new Error("XML DTD and entity declarations are not allowed.");
+      const xml = new DOMParser().parseFromString(source, "application/xml");
       if (xml.querySelector("parsererror") || xml.documentElement.localName !== "MTConnectDevices" ||
-          xml.doctype || /<!DOCTYPE/i.test(xml.documentElement.outerHTML))
+          xml.doctype)
         throw new Error("Invalid MTConnect Devices XML.");
       const devices = Array.from(xml.getElementsByTagName("*")).filter(node => node.localName === "Device");
       if (devices.length > 500) throw new Error("Too many devices.");
@@ -35,6 +38,13 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         if (uuid) uuids.add(uuid);
         const dataItems = Array.from(device.getElementsByTagName("*")).filter(node => node.localName === "DataItem");
         if (dataItems.length > 5000) throw new Error("Too many data items.");
+        const dataItemIds = new Set<string>();
+        for (const item of dataItems) {
+          const dataItemId = item.getAttribute("id")?.trim() ?? "";
+          if (!dataItemId || dataItemIds.has(dataItemId))
+            throw new Error("Missing or duplicate MTConnect data item ID.");
+          dataItemIds.add(dataItemId);
+        }
         return { id, name, uuid, dataItems: dataItems.length };
       });
       setProbeDevices(found);
