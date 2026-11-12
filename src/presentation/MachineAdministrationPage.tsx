@@ -187,6 +187,29 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 
   const [inventory, setInventory] = useState<readonly { machineId: string; siteId: string; displayName: string; isRetired: boolean }[] | null>(null);
   const [inventoryError, setInventoryError] = useState("");
+  const [configuredMachines, setConfiguredMachines] = useState<readonly {
+    machineId: string; deviceKey: string; registered: boolean
+  }[] | null>(null);
+  const [configuredError, setConfiguredError] = useState("");
+  useEffect(() => {
+    if (!sessionBearer) { setConfiguredMachines(null); return; }
+    const controller = new AbortController();
+    void fetch(new URL("/api/admin/v2/mtconnect/configured-machines", baseAddress), {
+      headers: { Authorization: "Bearer " + sessionBearer }, signal: controller.signal
+    }).then(async response => {
+      if (!response.ok) throw new Error("Configured Edge machine inventory unavailable.");
+      const data: { configured: { machineId: string; deviceKey: string; registered: boolean }[] } =
+        await response.json();
+      if (!controller.signal.aborted) { setConfiguredMachines(data.configured); setConfiguredError(""); }
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setConfiguredMachines(null);
+        setConfiguredError("Edge configuration status unavailable.");
+      }
+    });
+    return () => controller.abort();
+  }, [baseAddress, sessionBearer, revision]);
+
   const probeEdgeComparison = useMemo(() => probeDevices.map(device => {
     const matches = edgeConfigured.filter(configured =>
       configured.deviceKey === device.name || configured.deviceKey === device.id ||
@@ -405,6 +428,18 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {lines.length === 0 && <p>No production lines registered yet.</p>}
       {lines.length > 0 && visibleLines.length === 0 && <p>No production lines match the current filters.</p>}
     </div>}
+    <h2>Existing Edge configuration readiness</h2>
+    {configuredError && <p role="status">{configuredError}</p>}
+    {configuredMachines !== null && <p role="status">
+      {configuredMachines.length} Edge machine entries loaded by API;
+      {" "}{configuredMachines.filter(machine => machine.registered).length} registered and active in V2.
+    </p>}
+    {configuredMachines !== null && configuredMachines.length > 0 && <ul>
+      {configuredMachines.map(machine => <li key={machine.machineId}>
+        {machine.deviceKey} — {machine.registered ? "Registered in V2" : "Registration required"}
+        {" "}({machine.machineId})
+      </li>)}
+    </ul>}
     <h2>Discover devices from a configured MTConnect Agent</h2>
     <p>Read-only server-side /probe request. The API host must already have the trusted Edge MTConnect configuration loaded. Discovery does not register or activate machines.</p>
     <label htmlFor="admin-live-machine">Configured machine</label>
