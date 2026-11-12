@@ -15,6 +15,47 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [edgeConfigured, setEdgeConfigured] = useState<readonly { machineId: string; deviceKey: string; baseUri: string }[]>([]);
   const [edgeConfigError, setEdgeConfigError] = useState("");
 
+  const [liveDiscoveryMachineId, setLiveDiscoveryMachineId] = useState("");
+  const [liveDiscoveryBusy, setLiveDiscoveryBusy] = useState(false);
+  const [liveDiscoveryMessage, setLiveDiscoveryMessage] = useState("");
+  async function discoverConfiguredMachine() {
+    if (!sessionBearer || !liveDiscoveryMachineId || liveDiscoveryBusy) return;
+    setLiveDiscoveryBusy(true);
+    setLiveDiscoveryMessage("");
+    try {
+      const response = await fetch(new URL("/api/admin/v2/mtconnect/discover/" +
+        encodeURIComponent(liveDiscoveryMachineId), baseAddress), {
+        headers: { Authorization: "Bearer " + sessionBearer }
+      });
+      if (!response.ok) {
+        if (response.status === 404)
+          throw new Error("This machine is not configured in the API host's existing Edge MTConnect settings.");
+        if (response.status === 401 || response.status === 403)
+          throw new Error("Administrator authorization is required for live discovery.");
+        throw new Error("Agent discovery failed (HTTP " + response.status + ").");
+      }
+      const payload: { devices: readonly {
+        id: string; name: string; uuid?: string | null;
+        dataItems: readonly { id: string; name?: string | null; type?: string | null; subType?: string | null }[]
+      }[] } = await response.json();
+      const discovered = payload.devices.map(device => ({
+        id: device.id, name: device.name, uuid: device.uuid ?? "",
+        dataItems: device.dataItems.map(item => ({
+          id: item.id, name: item.name ?? "", type: item.type ?? "", subType: item.subType ?? ""
+        }))
+      }));
+      setProbeDevices(discovered);
+      setSelectedProbeIds([]);
+      setExpandedProbeId(null);
+      setProbeError("");
+      setLiveDiscoveryMessage("Read-only Agent probe completed: " + discovered.length +
+        " devices. Review identities and signals before commissioning.");
+    } catch (error) {
+      setLiveDiscoveryMessage(error instanceof Error ? error.message : "Agent discovery unavailable.");
+    } finally { setLiveDiscoveryBusy(false); }
+  }
+
+
 
   async function previewEdgeConfig(file: File | undefined) {
     setEdgeConfigured([]);
@@ -360,6 +401,20 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {lines.length === 0 && <p>No production lines registered yet.</p>}
       {lines.length > 0 && visibleLines.length === 0 && <p>No production lines match the current filters.</p>}
     </div>}
+    <h2>Discover devices from a configured MTConnect Agent</h2>
+    <p>Read-only server-side /probe request. The API host must already have the trusted Edge MTConnect configuration loaded. Discovery does not register or activate machines.</p>
+    <label htmlFor="admin-live-machine">Configured machine</label>
+    <select id="admin-live-machine" value={liveDiscoveryMachineId}
+      onChange={event => setLiveDiscoveryMachineId(event.currentTarget.value)}>
+      <option value="">Choose an existing registered machine</option>
+      {(inventory ?? []).filter(machine => !machine.isRetired).map(machine =>
+        <option key={machine.machineId} value={machine.machineId}>{machine.displayName}</option>)}
+    </select>
+    <button type="button" disabled={!sessionBearer || !liveDiscoveryMachineId || liveDiscoveryBusy}
+      onClick={() => void discoverConfiguredMachine()}>
+      {liveDiscoveryBusy ? "Discovering…" : "Discover Agent devices"}
+    </button>
+    {liveDiscoveryMessage && <p role="status">{liveDiscoveryMessage}</p>}
     <h2>Review existing Edge MTConnect configuration</h2>
     <p>Choose an existing Edge JSON configuration file locally to compare configured Agent URLs and machine identities. The file stays in your browser; no configuration is uploaded, saved or activated.</p>
     <label htmlFor="admin-edge-config">Existing Edge configuration JSON</label>
