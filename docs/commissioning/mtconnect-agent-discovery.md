@@ -37,3 +37,14 @@ An Agent endpoint and a CNC machine are different identities. One Agent can expo
 5. Implement connection test, signal mapping, controlled activation and end-to-end data acceptance.
 
 Keep production activation and deployment out of repository-only work.
+
+
+## Local developer-machine live discovery (opt-in)
+
+The V2 API can now read the existing Edge `MTConnect.Machines` entries from a trusted, absolute local file path. No Agent URL is entered through the browser and no new Agent registry is created.
+
+In the **API process environment** set `MTConnect__EdgeConfigurationFile` to the absolute path of the existing Edge JSON configuration (for example, a local development copy of `edge.production.json`). Restart the API after changing the path. The API fails startup if an explicitly configured file is absent, malformed, duplicated by MachineId, or contains invalid machine addresses. Only MachineId, DeviceKey and BaseUri are imported; database credentials, security configuration and other Edge settings are not loaded.
+
+The machine must already be registered in V2 with the **same MachineId** and must not be retired. Open **Administration → Machines**, select the registered machine, then choose **Discover Agent devices**. The API makes a bounded read-only `/probe` request to the configured Agent. It reports the devices and whether the configured DeviceKey has zero, one, or multiple matching devices. A potential match still requires administrator verification. Discovery never enables acquisition or saves a mapping.
+
+The API host must be able to reach the configured Agent address from its own network context. Edge loopback URLs such as `127.0.0.1` only work when the API and Agent run on the same host; do not assume a copied production Edge configuration is reachable from a developer machine. Never activate production machines just to test discovery.
