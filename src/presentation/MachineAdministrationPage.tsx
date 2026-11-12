@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { readAllOperatorEvidenceMachines, type OperatorEvidenceMachine } from "../api/evidence/operator-evidence-machines-client.ts";
 
 /**
@@ -65,21 +65,28 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [name, setName] = useState("");
   const [registrationMessage, setRegistrationMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const pendingRegistration = useRef<{ fingerprint: string; operationId: string } | null>(null);
   async function register(event: { preventDefault(): void }) {
     event.preventDefault();
     if (!sessionBearer || saving) return;
+    const fingerprint = JSON.stringify({ sessionBearer, kind,
+      siteId: kind === "site" ? null : siteId.trim(), displayName: name.trim() });
+    if (pendingRegistration.current?.fingerprint !== fingerprint)
+      pendingRegistration.current = { fingerprint, operationId: crypto.randomUUID() };
+    const operationId = pendingRegistration.current.operationId;
     setSaving(true);
     setRegistrationMessage("");
     try {
       const response = await fetch(new URL("/api/admin/v2/master-registration", baseAddress), {
         method: "POST",
         headers: { Authorization: "Bearer " + sessionBearer, "Content-Type": "application/json" },
-        body: JSON.stringify({ operationId: crypto.randomUUID(), kind,
+        body: JSON.stringify({ operationId, kind,
           siteId: kind === "site" ? null : siteId.trim(), displayName: name.trim() })
       });
       if (!response.ok) throw new Error("Registration failed (HTTP " + response.status + ").");
       const result: { recordId: string } = await response.json();
       setRegistrationMessage("Registered " + kind + ": " + result.recordId + ". Acquisition remains inactive.");
+      pendingRegistration.current = null;
       setName("");
       setRevision(value => value + 1);
     } catch (error) {
