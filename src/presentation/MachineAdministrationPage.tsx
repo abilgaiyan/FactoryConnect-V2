@@ -85,7 +85,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       setDiscoverySourceMachineId(liveDiscoveryMachineId);
       setDiscoveryIdentityStatus(payload.identityStatus);
       setDiscoveryMatchedIds(payload.matchingDeviceIds);
-      setCommissioningDeviceId(payload.matchingDeviceIds.length === 1 ? payload.matchingDeviceIds[0] : "");
+      setCommissioningDeviceId(payload.matchingDeviceIds.length === 1 ? (payload.matchingDeviceIds[0] ?? "") : "");
       setCommissioningLineId("");
       setSelectedProbeIds([]);
       setExpandedProbeId(null);
