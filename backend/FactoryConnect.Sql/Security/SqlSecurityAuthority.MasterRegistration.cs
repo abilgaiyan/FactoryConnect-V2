@@ -70,17 +70,18 @@ public sealed partial class SqlSecurityAuthority
     // Registration is a master-data change, not an acquisition or machine activation.
     // The installation-level grant is deliberately separate from evidence-reading rights.
     public Task<Guid> RegisterMasterRecordAsync(byte[] sessionHash, Guid operationId,
-        string kind, Guid? siteId, string displayName, CancellationToken ct = default)
+        string kind, Guid? siteId, string displayName, CancellationToken ct = default, Guid? machineId = null)
     {
         if (sessionHash is null || sessionHash.Length != 32 || operationId == Guid.Empty)
             throw new SecurityDeniedException();
         if (kind is not ("site" or "line" or "machine") ||
             (kind == "site" ? siteId is not null : siteId is null || siteId == Guid.Empty) ||
-            string.IsNullOrWhiteSpace(displayName) || displayName.Trim().Length > 200)
+            string.IsNullOrWhiteSpace(displayName) || displayName.Trim().Length > 200 ||
+            (machineId.HasValue && (kind != "machine" || machineId == Guid.Empty)))
             throw new ArgumentException("Invalid master-data registration request.");
         var name = displayName.Trim();
         var token = sessionHash.ToArray();
-        var request = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, kind, siteId, displayName = name });
+        var request = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, kind, siteId, displayName = name, machineId });
         return Transaction(operationId, true, async (connection, transaction) =>
         {
             var state = await State(connection, transaction, ct);
@@ -101,7 +102,7 @@ public sealed partial class SqlSecurityAuthority
             {
                 "site" => await store.RegisterSiteAsync(connection, transaction, name, ct),
                 "line" => await store.RegisterLineAsync(connection, transaction, siteId!.Value, name, ct),
-                _ => await store.RegisterMachineAsync(connection, transaction, siteId!.Value, name, ct)
+                _ => await store.RegisterMachineAsync(connection, transaction, siteId!.Value, name, machineId, ct)
             };
             var resultBytes = JsonSerializer.SerializeToUtf8Bytes(new { recordId });
             await Exec(connection, transaction, """
