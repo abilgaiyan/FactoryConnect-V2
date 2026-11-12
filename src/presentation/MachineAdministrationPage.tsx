@@ -18,6 +18,43 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [liveDiscoveryMachineId, setLiveDiscoveryMachineId] = useState("");
   const [liveDiscoveryBusy, setLiveDiscoveryBusy] = useState(false);
   const [liveDiscoveryMessage, setLiveDiscoveryMessage] = useState("");
+  const [discoverySourceMachineId, setDiscoverySourceMachineId] = useState("");
+  const [discoveryIdentityStatus, setDiscoveryIdentityStatus] = useState("");
+  const [discoveryMatchedIds, setDiscoveryMatchedIds] = useState<readonly string[]>([]);
+  const [commissioningLineId, setCommissioningLineId] = useState("");
+  const [commissioningDeviceId, setCommissioningDeviceId] = useState("");
+  function exportCommissioningReview() {
+    const machine = inventory?.find(item => item.machineId === discoverySourceMachineId);
+    const device = probeDevices.find(item => item.id === commissioningDeviceId);
+    const line = lines?.find(item => item.productionLineId === commissioningLineId);
+    if (!machine || !device || !line || line.siteId !== machine.siteId ||
+        machine.isRetired || line.isRetired) return;
+    const review = {
+      format: "factoryconnect-v2-mtconnect-commissioning-review-v1",
+      status: "review-only-not-approved",
+      acquisitionActivated: false,
+      machineId: machine.machineId,
+      machineName: machine.displayName,
+      siteId: machine.siteId,
+      productionLineId: line.productionLineId,
+      productionLineName: line.displayName,
+      device: { id: device.id, name: device.name, uuid: device.uuid },
+      configuredIdentityStatus: discoveryIdentityStatus,
+      configuredIdentityMatches: discoveryMatchedIds,
+      dataItems: device.dataItems
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(review, null, 2)], {
+      type: "application/json"
+    }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "factoryconnect-commissioning-review-" + machine.machineId + ".json";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
   async function discoverConfiguredMachine() {
     if (!sessionBearer || !liveDiscoveryMachineId || liveDiscoveryBusy) return;
     setLiveDiscoveryBusy(true);
@@ -45,6 +82,11 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         }))
       }));
       setProbeDevices(discovered);
+      setDiscoverySourceMachineId(liveDiscoveryMachineId);
+      setDiscoveryIdentityStatus(payload.identityStatus);
+      setDiscoveryMatchedIds(payload.matchingDeviceIds);
+      setCommissioningDeviceId(payload.matchingDeviceIds.length === 1 ? payload.matchingDeviceIds[0] : "");
+      setCommissioningLineId("");
       setSelectedProbeIds([]);
       setExpandedProbeId(null);
       setProbeError("");
@@ -119,6 +161,11 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 
   async function previewProbeFile(file: File | undefined) {
     setProbeDevices([]);
+    setDiscoverySourceMachineId("");
+    setDiscoveryIdentityStatus("");
+    setDiscoveryMatchedIds([]);
+    setCommissioningDeviceId("");
+    setCommissioningLineId("");
     setSelectedProbeIds([]);
     setExpandedProbeId(null);
     setProbeError("");
@@ -461,6 +508,29 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {liveDiscoveryBusy ? "Discovering…" : "Discover Agent devices"}
     </button>
     {liveDiscoveryMessage && <p role="status">{liveDiscoveryMessage}</p>}
+    {discoverySourceMachineId && probeDevices.length > 0 && <section>
+      <h3>Prepare commissioning review</h3>
+      <p>Select the exact MTConnect device and a production line in the registered machine's site.
+        This exports a review document only; it does not save or activate configuration.</p>
+      <label htmlFor="commissioning-device">Discovered device</label>
+      <select id="commissioning-device" value={commissioningDeviceId}
+        onChange={event => setCommissioningDeviceId(event.currentTarget.value)}>
+        <option value="">Select a device</option>
+        {probeDevices.map(device => <option key={device.id} value={device.id}>
+          {device.name} ({device.id})</option>)}
+      </select>
+      <label htmlFor="commissioning-line">Production line</label>
+      <select id="commissioning-line" value={commissioningLineId}
+        onChange={event => setCommissioningLineId(event.currentTarget.value)}>
+        <option value="">Select a production line</option>
+        {(lines ?? []).filter(line => !line.isRetired && line.siteId ===
+          inventory?.find(machine => machine.machineId === discoverySourceMachineId)?.siteId)
+          .map(line => <option key={line.productionLineId} value={line.productionLineId}>
+            {line.displayName}</option>)}
+      </select>
+      <button type="button" disabled={!commissioningDeviceId || !commissioningLineId}
+        onClick={exportCommissioningReview}>Export commissioning review JSON</button>
+    </section>}
     <h2>Review existing Edge MTConnect configuration</h2>
     <p>Choose an existing Edge JSON configuration file locally to compare configured Agent URLs and machine identities. The file stays in your browser; no configuration is uploaded, saved or activated.</p>
     <label htmlFor="admin-edge-config">Existing Edge configuration JSON</label>
