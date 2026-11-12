@@ -754,8 +754,8 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     {current.kind === "unavailable" && <p role="alert">Machine discovery is unavailable. No cached inventory is shown.</p>}
     {current.kind === "ready" && <>
       {!current.complete && <p role="alert">The authorized machine list is incomplete. Counts below are partial.</p>}
-      <label htmlFor="admin-machine-search">Search by machine, site or ID</label>
-      <input id="admin-machine-search" type="search" value={search}
+      <label htmlFor="admin-authorized-machine-search">Search by machine, site or ID</label>
+      <input id="admin-authorized-machine-search" type="search" value={search}
         onChange={event => setSearch(event.currentTarget.value)} />
       <p role="status">{matches.length} matching machines from {current.machines.length} returned.</p>
       <div className="commissioning-table-scroll" role="region" aria-label="Authorized machine directory" tabIndex={0}>
