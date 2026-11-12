@@ -336,6 +336,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   }, [baseAddress, sessionBearer, revision]);
 
   const [name, setName] = useState("");
+  const [existingMachineId, setExistingMachineId] = useState("");
   const [registrationMessage, setRegistrationMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const pendingRegistration = useRef<{ fingerprint: string; operationId: string } | null>(null);
@@ -343,7 +344,8 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     event.preventDefault();
     if (!sessionBearer || saving) return;
     const fingerprint = JSON.stringify({ sessionBearer, kind,
-      siteId: kind === "site" ? null : siteId.trim(), displayName: name.trim() });
+      siteId: kind === "site" ? null : siteId.trim(), displayName: name.trim(),
+      machineId: kind === "machine" && existingMachineId ? existingMachineId : null });
     if (pendingRegistration.current?.fingerprint !== fingerprint)
       pendingRegistration.current = { fingerprint, operationId: crypto.randomUUID() };
     const operationId = pendingRegistration.current.operationId;
@@ -354,7 +356,8 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         method: "POST",
         headers: { Authorization: "Bearer " + sessionBearer, "Content-Type": "application/json" },
         body: JSON.stringify({ operationId, kind,
-          siteId: kind === "site" ? null : siteId.trim(), displayName: name.trim() })
+          siteId: kind === "site" ? null : siteId.trim(), displayName: name.trim(),
+          machineId: kind === "machine" && existingMachineId ? existingMachineId : null })
       });
       if (!response.ok) {
         if (response.status === 409) {
@@ -377,6 +380,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       setRegistrationMessage("Registered " + kind + ": " + result.recordId + ". Acquisition remains inactive.");
       pendingRegistration.current = null;
       setName("");
+      setExistingMachineId("");
       setRevision(value => value + 1);
     } catch (error) {
       setRegistrationMessage(error instanceof Error ? error.message : "Registration failed.");
@@ -439,6 +443,17 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       <label htmlFor="admin-display-name">Display name</label>
       <input id="admin-display-name" required maxLength={200} value={name}
         onChange={event => setName(event.currentTarget.value)} />
+      {kind === "machine" && <>
+        <label htmlFor="admin-existing-machine-id">Existing Edge machine ID (optional)</label>
+        <select id="admin-existing-machine-id" value={existingMachineId}
+          onChange={event => setExistingMachineId(event.currentTarget.value)}>
+          <option value="">Generate a new machine ID</option>
+          {(configuredMachines ?? []).filter(machine => !machine.registered).map(machine =>
+            <option key={machine.machineId} value={machine.machineId}>
+              {machine.deviceKey} ({machine.machineId})</option>)}
+        </select>
+        <p>Choose an existing Edge machine to preserve its identity. Registration does not activate acquisition.</p>
+      </>}
       <button type="submit" disabled={saving || !name.trim() || (kind !== "site" && (!siteId || !!sitesError))}>{saving ? "Registering…" : "Register"}</button>
       {registrationMessage && <p role="status">{registrationMessage}</p>}
     </form>}
