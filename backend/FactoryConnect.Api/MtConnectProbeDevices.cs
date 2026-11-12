@@ -30,16 +30,30 @@ internal static class MtConnectProbeDevices
             .Take(501).ToArray();
         if (devices.Length > 500) throw new InvalidDataException("Too many MTConnect devices.");
         var result = new List<Device>(devices.Length);
+        var deviceIds = new HashSet<string>(StringComparer.Ordinal);
+        var deviceUuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var device in devices)
         {
             var id = (string?)device.Attribute("id");
             var name = (string?)device.Attribute("name");
             if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
                 throw new InvalidDataException("MTConnect device is missing its ID or name.");
+            if (!deviceIds.Add(id))
+                throw new InvalidDataException("Duplicate MTConnect device ID.");
+            var uuid = ((string?)device.Attribute("uuid"))?.Trim();
+            if (!string.IsNullOrEmpty(uuid) && !deviceUuids.Add(uuid))
+                throw new InvalidDataException("Duplicate MTConnect device UUID.");
             var items = device.Descendants().Where(node => node.Name.LocalName == "DataItem")
                 .Take(5001).ToArray();
             if (items.Length > 5000) throw new InvalidDataException("Too many data items in MTConnect device.");
-            result.Add(new Device(id, name, (string?)device.Attribute("uuid"),
+            var dataItemIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in items)
+            {
+                var dataItemId = (string?)item.Attribute("id");
+                if (string.IsNullOrWhiteSpace(dataItemId) || !dataItemIds.Add(dataItemId))
+                    throw new InvalidDataException("Missing or duplicate MTConnect data item ID.");
+            }
+            result.Add(new Device(id, name, uuid,
                 items.Select(item => new DataItem((string?)item.Attribute("id") ?? "",
                     (string?)item.Attribute("name"), (string?)item.Attribute("type"),
                     (string?)item.Attribute("subType"))).ToArray()));
