@@ -12,6 +12,3 @@ CREATE TABLE master.MachineCommissioning (
         REFERENCES security.SecurityOperation(OperationId),
     CONSTRAINT CK_MachineCommissioning_DeviceId CHECK (LEN(LTRIM(RTRIM(MtConnectDeviceId))) BETWEEN 1 AND 200)
 );
-GO
-CREATE UNIQUE INDEX UX_MachineCommissioning_LineDevice
-    ON master.MachineCommissioning(ProductionLineId, MtConnectDeviceId);
