@@ -710,7 +710,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         <td><code>{assignment.mtConnectDeviceId}</code></td>
         <td>
           <strong>{readiness[assignment.machineId]?.status ?? "Commissioned — not validated"}</strong>
-          {readiness[assignment.machineId] && <p role="status">{readiness[assignment.machineId].detail}</p>}
+          {readiness[assignment.machineId] && <p role="status">{readiness[assignment.machineId]?.detail}</p>}
           <button type="button" disabled={!sessionBearer || Boolean(validatingMachineId)}
             onClick={() => void validateSavedAssignment(assignment.machineId, assignment.mtConnectDeviceId)}>
             {validatingMachineId === assignment.machineId ? "Validating…" : "Validate Agent"}
