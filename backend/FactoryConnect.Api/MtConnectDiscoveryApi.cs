@@ -38,11 +38,16 @@ public static class MtConnectDiscoveryApi
                 var registered = machines.Where(machine => !machine.IsRetired)
                     .Select(machine => machine.MachineId).ToHashSet();
                 var configured = config.GetSection("MTConnect:Machines").Get<ConfiguredMachine[]>() ?? [];
+                var duplicateIds = configured.GroupBy(machine => machine.MachineId, StringComparer.OrdinalIgnoreCase)
+                    .Where(group => group.Count() > 1)
+                    .Select(group => group.Key)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var entries = configured.Select(machine => new
                 {
                     machineId = machine.MachineId,
                     deviceKey = machine.DeviceKey,
-                    registered = Guid.TryParse(machine.MachineId, out var id) && registered.Contains(id)
+                    registered = Guid.TryParse(machine.MachineId, out var id) && registered.Contains(id),
+                    duplicateConfiguration = duplicateIds.Contains(machine.MachineId)
                 }).ToArray();
                 return Results.Ok(new { configured = entries, configuredCount = entries.Length });
             }
@@ -84,9 +89,11 @@ public static class MtConnectDiscoveryApi
 
                 // Read the Edge configuration as supplied to this host; no second Agent URL registry.
                 var configured = config.GetSection("MTConnect:Machines").Get<ConfiguredMachine[]>() ?? [];
-                var target = configured.SingleOrDefault(machine =>
-                    Guid.TryParse(machine.MachineId, out var id) && id == machineId);
-                if (target is null) return Results.NotFound(new { error = "Machine not configured for MTConnect discovery" });
+                var targets = configured.Where(machine =>
+                    Guid.TryParse(machine.MachineId, out var id) && id == machineId).ToArray();
+                if (targets.Length == 0) return Results.NotFound(new { error = "Machine not configured for MTConnect discovery" });
+                if (targets.Length > 1) return Results.Conflict(new { error = "Multiple Edge entries reference this MachineId; resolve the configuration before discovery" });
+                var target = targets[0];
                 if (!Uri.TryCreate(target.BaseUri, UriKind.Absolute, out var baseUri) ||
                     baseUri.Scheme is not ("http" or "https") || !string.IsNullOrEmpty(baseUri.UserInfo) ||
                     !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment))
