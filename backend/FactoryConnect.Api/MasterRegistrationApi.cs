@@ -5,7 +5,7 @@ namespace FactoryConnect.Api;
 
 public static class MasterRegistrationApi
 {
-    private sealed record RegistrationRequest(Guid OperationId, string Kind, Guid? SiteId, string DisplayName);
+    private sealed record RegistrationRequest(Guid OperationId, string Kind, Guid? SiteId, string DisplayName, Guid? MachineId = null);
 
     public static void MapMasterRegistration(this WebApplication app)
     {
@@ -138,11 +138,12 @@ public static class MasterRegistrationApi
                     (request.Kind == "site" ? request.SiteId is not null :
                         request.SiteId is null || request.SiteId == Guid.Empty) ||
                     string.IsNullOrWhiteSpace(request.DisplayName) ||
-                    request.DisplayName.Trim().Length > 200)
+                    request.DisplayName.Trim().Length > 200 ||
+                    (request.MachineId.HasValue && (request.Kind != "machine" || request.MachineId == Guid.Empty)))
                     return Results.BadRequest(new { error = "Invalid registration request" });
                 var recordId = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
                     .RegisterMasterRecordAsync(sessionHash, request.OperationId, request.Kind,
-                        request.SiteId, request.DisplayName, ct);
+                        request.SiteId, request.DisplayName, ct, request.MachineId);
                 return Results.Ok(new { recordId, request.OperationId, request.Kind });
             }
             catch (SecurityDeniedException) { return Results.Unauthorized(); }
