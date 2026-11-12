@@ -48,7 +48,24 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         response.status + "). Retry the same selection to preserve the operation ID.");
       pendingCommissioning.current = null;
       setAssignmentRevision(value => value + 1);
-      setCommissioningSaveMessage("Assignment saved in V2. Machine acquisition remains inactive.");
+      const readback = await fetch(new URL("/api/admin/v2/commissioning-assignments", baseAddress), {
+        headers: { Authorization: "Bearer " + sessionBearer }
+      });
+      if (!readback.ok) {
+        setCommissioningSaveMessage("Save accepted, but the assignment could not be verified by read-back. Refresh the inventory before continuing.");
+        return;
+      }
+      const persisted: { assignments: {
+        machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
+      }[] } = await readback.json();
+      const match = persisted.assignments.find(assignment =>
+        assignment.machineId.toLowerCase() === discoverySourceMachineId.toLowerCase() &&
+        assignment.productionLineId.toLowerCase() === commissioningLineId.toLowerCase() &&
+        assignment.mtConnectDeviceId === commissioningDeviceId);
+      setSavedAssignments(persisted.assignments);
+      setCommissioningSaveMessage(match
+        ? "Assignment saved and verified in V2. Machine acquisition remains inactive."
+        : "Save accepted, but the selected assignment was not found on read-back. Review the saved assignments.");
     } catch (error) {
       setCommissioningSaveMessage(error instanceof Error ? error.message : "Assignment save failed.");
     } finally { setCommissioningSaving(false); }
