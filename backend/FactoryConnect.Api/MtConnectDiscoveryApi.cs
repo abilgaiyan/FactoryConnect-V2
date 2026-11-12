@@ -10,6 +10,49 @@ public static class MtConnectDiscoveryApi
 
     public static void MapMtConnectDiscovery(this WebApplication app)
     {
+        app.MapGet("/api/admin/v2/mtconnect/configured-machines", async (
+            HttpContext http, IConfiguration config, CancellationToken ct) =>
+        {
+            http.Response.Headers.CacheControl = "no-store";
+            if (!http.Request.IsHttps) return Results.Problem(statusCode: 403, title: "HTTPS required");
+            if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId) ||
+                string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
+                return Results.Problem(statusCode: 503, title: "Administration authority unavailable");
+            if (!http.Request.Headers.TryGetValue("Authorization", out var authorization) ||
+                authorization.Count != 1 || !authorization[0]!.StartsWith("Bearer ", StringComparison.Ordinal) ||
+                authorization[0]!.Length > 192) return Results.Unauthorized();
+            byte[] bearer;
+            try { bearer = Convert.FromBase64String(authorization[0]![7..]); }
+            catch (FormatException) { return Results.Unauthorized(); }
+            if (bearer.Length != 32)
+            {
+                CryptographicOperations.ZeroMemory(bearer);
+                return Results.Unauthorized();
+            }
+            var hash = SHA256.HashData(bearer);
+            CryptographicOperations.ZeroMemory(bearer);
+            try
+            {
+                var machines = await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .ReadAdministrationMachinesAsync(hash, ct);
+                var registered = machines.Where(machine => !machine.IsRetired)
+                    .Select(machine => machine.MachineId).ToHashSet();
+                var configured = config.GetSection("MTConnect:Machines").Get<ConfiguredMachine[]>() ?? [];
+                var entries = configured.Select(machine => new
+                {
+                    machineId = machine.MachineId,
+                    deviceKey = machine.DeviceKey,
+                    registered = Guid.TryParse(machine.MachineId, out var id) && registered.Contains(id)
+                }).ToArray();
+                return Results.Ok(new { configured = entries, configuredCount = entries.Length });
+            }
+            catch (SecurityDeniedException) { return Results.Unauthorized(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex,
+                "mtconnect-configuration-inventory", "MTConnect configuration inventory unavailable"); }
+            finally { CryptographicOperations.ZeroMemory(hash); }
+        }).RequireRateLimiting("security-boundary");
+
         app.MapGet("/api/admin/v2/mtconnect/discover/{machineId:guid}", async (
             Guid machineId, HttpContext http, IConfiguration config, CancellationToken ct) =>
         {
