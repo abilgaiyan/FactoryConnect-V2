@@ -76,6 +76,17 @@ internal sealed class MachineAdministrationStore(string connectionString)
         name = name.Trim();
         var id = requestedId ?? Guid.NewGuid();
         if (id == Guid.Empty) throw new ArgumentException("Machine ID cannot be empty.");
+        // A supplied Edge identity must not silently collide with an existing V2 machine.
+        // Check it under the same transaction as the registration insert.
+        if (requestedId.HasValue)
+        {
+            await using var identityCheck = new SqlCommand(
+                "SELECT COUNT_BIG(*) FROM master.Machine WITH (UPDLOCK, HOLDLOCK) WHERE MachineId=@id",
+                connection, transaction);
+            identityCheck.Parameters.Add("@id", SqlDbType.UniqueIdentifier).Value = id;
+            if ((long)(await identityCheck.ExecuteScalarAsync(ct) ?? 0L) != 0)
+                throw new InvalidOperationException("This Edge machine identity is already registered in V2.");
+        }
         // The security authority owns transaction isolation and commit. UPDLOCK/HOLDLOCK
         // serializes duplicate-name checks until that transaction completes.
         var predicate = siteId.HasValue ? "SiteId=@site AND " : "";
