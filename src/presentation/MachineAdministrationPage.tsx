@@ -27,8 +27,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [commissioningSaving, setCommissioningSaving] = useState(false);
   const pendingCommissioning = useRef<{ fingerprint: string; operationId: string } | null>(null);
   async function saveCommissioningAssignment() {
-    if (!sessionBearer || commissioningSaving || !commissioningDeviceId || !commissioningLineId ||
-        !discoverySourceMachineId || !commissioningSelectionValid) return;
+    if (!sessionBearer || commissioningSaving || !commissioningSelectionValid) return;
     const fingerprint = JSON.stringify({
       machineId: discoverySourceMachineId, productionLineId: commissioningLineId,
       deviceId: commissioningDeviceId
@@ -88,6 +87,13 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 
   async function discoverConfiguredMachine() {
     if (!sessionBearer || !liveDiscoveryMachineId || liveDiscoveryBusy) return;
+    setDiscoverySourceMachineId("");
+    setDiscoveryIdentityStatus("");
+    setDiscoveryMatchedIds([]);
+    setCommissioningDeviceId("");
+    setCommissioningLineId("");
+    setProbeDevices([]);
+    setCommissioningSaveMessage("");
     setLiveDiscoveryBusy(true);
     setLiveDiscoveryMessage("");
     try {
