@@ -33,6 +33,17 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 
   const [inventory, setInventory] = useState<readonly { machineId: string; siteId: string; displayName: string; isRetired: boolean }[] | null>(null);
   const [inventoryError, setInventoryError] = useState("");
+  const [inventorySearch, setInventorySearch] = useState("");
+  const [inventorySite, setInventorySite] = useState("");
+  const [includeRetired, setIncludeRetired] = useState(false);
+  const visibleInventory = useMemo(() => (inventory ?? []).filter(machine => {
+    if (!includeRetired && machine.isRetired) return false;
+    if (inventorySite && machine.siteId !== inventorySite) return false;
+    const term = inventorySearch.trim().toLocaleLowerCase();
+    return !term || machine.displayName.toLocaleLowerCase().includes(term) ||
+      machine.machineId.toLocaleLowerCase().includes(term) ||
+      (sites.find(site => site.siteId === machine.siteId)?.displayName ?? "").toLocaleLowerCase().includes(term);
+  }), [inventory, inventorySearch, inventorySite, includeRetired, sites]);
   useEffect(() => {
     if (!sessionBearer) { setInventory(null); return; }
     const controller = new AbortController();
@@ -178,14 +189,27 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     </div>}
     <h2>Registered machine inventory</h2>
     <p>This administrator inventory includes registered machines whether or not they have published evidence.</p>
+    <label htmlFor="admin-machine-search">Search registered machines</label>
+    <input id="admin-machine-search" value={inventorySearch} onChange={event => setInventorySearch(event.currentTarget.value)}
+      placeholder="Machine name or ID" />
+    <label htmlFor="admin-machine-site-filter">Filter by site</label>
+    <select id="admin-machine-site-filter" value={inventorySite} onChange={event => setInventorySite(event.currentTarget.value)}>
+      <option value="">All sites</option>
+      {sites.map(site => <option key={site.siteId} value={site.siteId}>{site.displayName}</option>)}
+    </select>
+    <label htmlFor="admin-include-retired">
+      <input id="admin-include-retired" type="checkbox" checked={includeRetired}
+        onChange={event => setIncludeRetired(event.currentTarget.checked)} /> Include retired machines
+    </label>
     {inventoryError && <p role="status">{inventoryError}</p>}
     {inventory && <div className="commissioning-table-scroll" role="region" aria-label="Registered machine inventory" tabIndex={0}>
       <table><thead><tr><th>Machine</th><th>Machine ID</th><th>Site</th><th>Status</th></tr></thead>
-      <tbody>{inventory.map(machine => <tr key={machine.machineId}>
+      <tbody>{visibleInventory.map(machine => <tr key={machine.machineId}>
         <td>{machine.displayName}</td><td><code>{machine.machineId}</code></td>
         <td>{sites.find(site => site.siteId === machine.siteId)?.displayName ?? machine.siteId}</td><td>{machine.isRetired ? "Retired" : "Registered"}</td>
       </tr>)}</tbody></table>
       {inventory.length === 0 && <p>No machines registered yet.</p>}
+      {inventory.length > 0 && visibleInventory.length === 0 && <p>No machines match the current filters.</p>}
     </div>}
     <button type="button" disabled={!sessionBearer || current.kind === "loading"}
       onClick={() => setRevision(value => value + 1)}>Refresh authorized machines</button>
