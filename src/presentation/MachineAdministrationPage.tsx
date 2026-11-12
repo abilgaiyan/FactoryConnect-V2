@@ -242,7 +242,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     <h2>Registered machine inventory</h2>
     <button type="button" disabled={!inventory || visibleInventory.length === 0}
       onClick={exportMachineInventory}>Export filtered machines (CSV)</button>
-    <p>This administrator inventory includes registered machines whether or not they have published evidence.</p>
+    <p>This administrator inventory includes registered machines whether or not they have published evidence. Registration does not establish an MTConnect connection, prove acquisition is running, or activate a machine. Acquisition status is not yet verified by this screen.</p>
     <label htmlFor="admin-machine-search">Search registered machines</label>
     <input id="admin-machine-search" value={inventorySearch} onChange={event => setInventorySearch(event.currentTarget.value)}
       placeholder="Machine name or ID" />
@@ -257,10 +257,10 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     </label>
     {inventoryError && <p role="status">{inventoryError}</p>}
     {inventory && <div className="commissioning-table-scroll" role="region" aria-label="Registered machine inventory" tabIndex={0}>
-      <table><thead><tr><th>Machine</th><th>Machine ID</th><th>Site</th><th>Status</th></tr></thead>
+      <table><thead><tr><th>Machine</th><th>Machine ID</th><th>Site</th><th>Registration</th><th>Acquisition</th></tr></thead>
       <tbody>{visibleInventory.map(machine => <tr key={machine.machineId}>
         <td>{machine.displayName}</td><td><code>{machine.machineId}</code></td>
-        <td>{sites.find(site => site.siteId === machine.siteId)?.displayName ?? machine.siteId}</td><td>{machine.isRetired ? "Retired" : "Registered"}</td>
+        <td>{sites.find(site => site.siteId === machine.siteId)?.displayName ?? machine.siteId}</td><td>{machine.isRetired ? "Retired" : "Registered"}</td><td>Not verified — configure connection and activate separately</td>
       </tr>)}</tbody></table>
       {inventory.length === 0 && <p>No machines registered yet.</p>}
       {inventory.length > 0 && visibleInventory.length === 0 && <p>No machines match the current filters.</p>}
