@@ -48,3 +48,32 @@ In the **API process environment** set `MTConnect__EdgeConfigurationFile` to the
 The machine must already be registered in V2 with the **same MachineId** and must not be retired. Open **Administration → Machines**, select the registered machine, then choose **Discover Agent devices**. The API makes a bounded read-only `/probe` request to the configured Agent. It reports the devices and whether the configured DeviceKey has zero, one, or multiple matching devices. A potential match still requires administrator verification. Discovery never enables acquisition or saves a mapping.
 
 The API host must be able to reach the configured Agent address from its own network context. Edge loopback URLs such as `127.0.0.1` only work when the API and Agent run on the same host; do not assume a copied production Edge configuration is reachable from a developer machine. Never activate production machines just to test discovery.
+
+
+## Local commissioning save/read acceptance (COM-001)
+
+Run against the developer V2 database only, after applying migration
+`022-machine-commissioning.sql`. Use an administrator session with
+`configuration.master.manage`. No Edge acquisition or production deployment is required.
+
+1. Open `/admin/machines` and register a site and production line if none exist.
+2. Register an Edge-configured machine using its existing MachineId. Verify that a
+   second registration using the same MachineId is rejected, not duplicated.
+3. Select the registered machine for live Agent discovery. Confirm that the
+   configured DeviceKey has exactly one match; ambiguous or failed discovery
+   must not allow the Save commissioning assignment action.
+4. Choose a production line belonging to the machine's site and save the
+   matching device. Confirm the UI reports **saved and verified**, then refresh
+   the browser and confirm the assignment is still listed.
+5. Change the assignment to another valid line in the same site, if available.
+   Confirm the machine has one current assignment and the audit history records
+   the change. Reusing an operation ID with different request bytes must fail.
+6. Attempt to assign a production line from a different site (using the
+   authenticated API, not just the UI). Expect HTTP 409 and no assignment change.
+7. Confirm acquisition has not been activated: the saved assignment is
+   administrative intent, not a running connector or proof of production data.
+
+If any step fails, keep PR #76 in draft and record the request, HTTP status,
+database migration version, and relevant application log without exposing
+session tokens or Edge credentials. Do not perform these checks against Gajra
+production systems.
