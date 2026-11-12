@@ -9,8 +9,9 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   readonly sessionBearer: string | null;
   readonly baseAddress: string;
 }) {
-  const [probeDevices, setProbeDevices] = useState<readonly { id: string; name: string; uuid: string; dataItems: number }[]>([]);
+  const [probeDevices, setProbeDevices] = useState<readonly { id: string; name: string; uuid: string; dataItems: readonly { id: string; name: string; type: string; subType: string }[] }[]>([]);
   const [probeError, setProbeError] = useState("");
+  const [expandedProbeId, setExpandedProbeId] = useState<string | null>(null);
   const [selectedProbeIds, setSelectedProbeIds] = useState<readonly string[]>([]);
   function exportProbeSelection() {
     const selected = probeDevices.filter(device => selectedProbeIds.includes(device.id));
@@ -18,7 +19,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
     const rows = [
       ["MTConnect Device ID", "MTConnect Device UUID", "Device Name", "Data Item Count", "Commissioning Status"],
-      ...selected.map(device => [device.id, device.uuid, device.name, String(device.dataItems), "Review required"])
+      ...selected.map(device => [device.id, device.uuid, device.name, String(device.dataItems.length), "Review required"])
     ];
     const csv = "\uFEFF" + rows.map(row => row.map(quote).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -34,6 +35,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   async function previewProbeFile(file: File | undefined) {
     setProbeDevices([]);
     setSelectedProbeIds([]);
+    setExpandedProbeId(null);
     setProbeError("");
     if (!file) return;
     if (file.size > 4_000_000) { setProbeError("Devices XML must be smaller than 4 MB."); return; }
@@ -66,7 +68,10 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
             throw new Error("Missing or duplicate MTConnect data item ID.");
           dataItemIds.add(dataItemId);
         }
-        return { id, name, uuid, dataItems: dataItems.length };
+        return { id, name, uuid, dataItems: dataItems.map(item => ({
+          id: item.getAttribute("id") ?? "", name: item.getAttribute("name") ?? "",
+          type: item.getAttribute("type") ?? "", subType: item.getAttribute("subType") ?? ""
+        })) };
       });
       setProbeDevices(found);
     } catch (error) {
@@ -319,15 +324,28 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
           onChange={event => setSelectedProbeIds(current => event.currentTarget.checked
             ? [...current, device.id] : current.filter(id => id !== device.id))} /></td>
         <td>{device.name}</td><td><code>{device.id}</code></td><td><code>{device.uuid || "Not supplied"}</code></td>
-        <td>{device.dataItems}</td>
+        <td>{device.dataItems.length}</td>
         <td>{(inventory ?? []).some(machine => machine.displayName.toLocaleLowerCase() === device.name.toLocaleLowerCase())
           ? "Name already in inventory — verify identity manually"
           : "Not matched by name"}</td>
         <td><button type="button" disabled={!sessionBearer || !inventory || sites.filter(site => !site.isRetired).length === 0}
           onClick={() => { setKind("machine"); setName(device.name); setRegistrationMessage(
             "Device name copied into machine registration. Choose a site and review identity before submitting. Device ID/UUID is not yet linked."); }}>
-          Prepare registration</button></td>
+          Prepare registration</button>
+          <button type="button" onClick={() => setExpandedProbeId(current => current === device.id ? null : device.id)}>
+            {expandedProbeId === device.id ? "Hide signals" : "Inspect signals"}
+          </button></td>
       </tr>)}</tbody></table>
+      {probeDevices.filter(device => device.id === expandedProbeId).map(device => <div key={device.id}>
+        <h3>Signals: {device.name}</h3>
+        <p>Read-only MTConnect DataItem metadata. Signal roles and mappings are not yet approved or saved.</p>
+        <table><thead><tr><th>DataItem ID</th><th>Name</th><th>Type</th><th>Sub-type</th></tr></thead>
+          <tbody>{device.dataItems.map(item => <tr key={item.id}>
+            <td><code>{item.id}</code></td><td>{item.name || "—"}</td>
+            <td>{item.type || "—"}</td><td>{item.subType || "—"}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>)}
     </div>}
     <h2>Registered machine inventory</h2>
     <button type="button" disabled={!inventory || visibleInventory.length === 0}
