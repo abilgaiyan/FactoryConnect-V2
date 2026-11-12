@@ -500,6 +500,14 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {configuredMachines.map(machine => <li key={machine.machineId}>
         {machine.deviceKey} — {machine.registered ? "Registered in V2" : "Registration required"}
         {" "}({machine.machineId})
+        {!machine.registered && <button type="button" onClick={() => {
+          setKind("machine");
+          setExistingMachineId(machine.machineId);
+          setName(machine.deviceKey);
+          setRegistrationMessage("Registration prepared for existing Edge machine " +
+            machine.deviceKey + ". Select its site and submit to register without activating acquisition.");
+          document.getElementById("admin-record-kind")?.scrollIntoView({ behavior: "smooth" });
+        }}>Prepare registration</button>}
         {machine.registered && <button type="button"
           disabled={liveDiscoveryBusy || !sessionBearer}
           onClick={() => {
