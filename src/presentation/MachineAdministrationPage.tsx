@@ -138,7 +138,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         <option value="machine">Machine</option>
       </select>
       {kind !== "site" && <>
-        <label htmlFor="admin-site-id">Existing site ID</label>
+        <label htmlFor="admin-site-id">Site</label>
         <select id="admin-site-id" required value={siteId}
           onChange={event => setSiteId(event.currentTarget.value)}>
           <option value="">Select an active site</option>
@@ -150,12 +150,22 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       <label htmlFor="admin-display-name">Display name</label>
       <input id="admin-display-name" required maxLength={200} value={name}
         onChange={event => setName(event.currentTarget.value)} />
-      <button type="submit" disabled={saving || !name.trim()}>{saving ? "Registering…" : "Register"}</button>
+      <button type="submit" disabled={saving || !name.trim() || (kind !== "site" && (!siteId || !!sitesError))}>{saving ? "Registering…" : "Register"}</button>
       {registrationMessage && <p role="status">{registrationMessage}</p>}
     </form>}
 
 
 
+    <h2>Registered sites</h2>
+    {sitesError && <p role="alert">{sitesError}</p>}
+    {!sitesError && <div role="region" aria-label="Registered sites" tabIndex={0}>
+      <table><thead><tr><th>Site</th><th>Site ID</th><th>Status</th></tr></thead>
+      <tbody>{sites.map(site => <tr key={site.siteId}>
+        <td>{site.displayName}</td><td><code>{site.siteId}</code></td>
+        <td>{site.isRetired ? "Retired" : "Registered"}</td>
+      </tr>)}</tbody></table>
+      {sites.length === 0 && <p>No sites available to this administrator.</p>}
+    </div>}
     <h2>Registered production lines</h2>
     {lines && <div role="region" aria-label="Registered production lines" tabIndex={0}>
       <table><thead><tr><th>Production line</th><th>Site</th><th>Status</th></tr></thead>
@@ -173,7 +183,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       <table><thead><tr><th>Machine</th><th>Machine ID</th><th>Site</th><th>Status</th></tr></thead>
       <tbody>{inventory.map(machine => <tr key={machine.machineId}>
         <td>{machine.displayName}</td><td><code>{machine.machineId}</code></td>
-        <td><code>{machine.siteId}</code></td><td>{machine.isRetired ? "Retired" : "Registered"}</td>
+        <td>{sites.find(site => site.siteId === machine.siteId)?.displayName ?? machine.siteId}</td><td>{machine.isRetired ? "Retired" : "Registered"}</td>
       </tr>)}</tbody></table>
       {inventory.length === 0 && <p>No machines registered yet.</p>}
     </div>}
