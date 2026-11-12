@@ -245,7 +245,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       headers: { Authorization: "Bearer " + sessionBearer }, signal: controller.signal
     }).then(async response => {
       if (!response.ok) throw new Error("Configured Edge machine inventory unavailable.");
-      const data: { configured: { machineId: string; deviceKey: string; registered: boolean }[] } =
+      const data: { configured: { machineId: string; deviceKey: string; registered: boolean; duplicateConfiguration: boolean }[] } =
         await response.json();
       if (!controller.signal.aborted) { setConfiguredMachines(data.configured); setConfiguredError(""); }
     }).catch(() => {
