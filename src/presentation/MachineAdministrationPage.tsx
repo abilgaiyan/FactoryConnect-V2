@@ -34,7 +34,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
           throw new Error("Administrator authorization is required for live discovery.");
         throw new Error("Agent discovery failed (HTTP " + response.status + ").");
       }
-      const payload: { devices: readonly {
+      const payload: { identityStatus: string; matchingDeviceIds: readonly string[]; devices: readonly {
         id: string; name: string; uuid?: string | null;
         dataItems: readonly { id: string; name?: string | null; type?: string | null; subType?: string | null }[]
       }[] } = await response.json();
@@ -49,7 +49,11 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       setExpandedProbeId(null);
       setProbeError("");
       setLiveDiscoveryMessage("Read-only Agent probe completed: " + discovered.length +
-        " devices. Review identities and signals before commissioning.");
+        " devices. Configured DeviceKey identity: " + payload.identityStatus +
+        " (" + payload.matchingDeviceIds.length + " matches). " +
+        (payload.identityStatus === "potential-match"
+          ? "Verify the matching device before commissioning."
+          : "Identity requires administrator review; no device mapping was saved."));
     } catch (error) {
       setLiveDiscoveryMessage(error instanceof Error ? error.message : "Agent discovery unavailable.");
     } finally { setLiveDiscoveryBusy(false); }
