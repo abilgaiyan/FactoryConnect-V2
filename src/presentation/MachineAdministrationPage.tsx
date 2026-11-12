@@ -9,6 +9,39 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   readonly sessionBearer: string | null;
   readonly baseAddress: string;
 }) {
+  const [probeDevices, setProbeDevices] = useState<readonly { id: string; name: string; uuid: string; dataItems: number }[]>([]);
+  const [probeError, setProbeError] = useState("");
+  async function previewProbeFile(file: File | undefined) {
+    setProbeDevices([]);
+    setProbeError("");
+    if (!file) return;
+    if (file.size > 4_000_000) { setProbeError("Devices XML must be smaller than 4 MB."); return; }
+    try {
+      const xml = new DOMParser().parseFromString(await file.text(), "application/xml");
+      if (xml.querySelector("parsererror") || xml.documentElement.localName !== "MTConnectDevices" ||
+          xml.doctype || /<!DOCTYPE/i.test(xml.documentElement.outerHTML))
+        throw new Error("Invalid MTConnect Devices XML.");
+      const devices = Array.from(xml.getElementsByTagName("*")).filter(node => node.localName === "Device");
+      if (devices.length > 500) throw new Error("Too many devices.");
+      const ids = new Set<string>();
+      const uuids = new Set<string>();
+      const found = devices.map(device => {
+        const id = device.getAttribute("id")?.trim() ?? "";
+        const name = device.getAttribute("name")?.trim() ?? "";
+        const uuid = device.getAttribute("uuid")?.trim() ?? "";
+        if (!id || !name || ids.has(id) || (uuid && uuids.has(uuid)))
+          throw new Error("Missing or duplicate device identity.");
+        ids.add(id);
+        if (uuid) uuids.add(uuid);
+        const dataItems = Array.from(device.getElementsByTagName("*")).filter(node => node.localName === "DataItem");
+        if (dataItems.length > 5000) throw new Error("Too many data items.");
+        return { id, name, uuid, dataItems: dataItems.length };
+      });
+      setProbeDevices(found);
+    } catch (error) {
+      setProbeError(error instanceof Error ? error.message : "Unable to read MTConnect Devices XML.");
+    }
+  }
   const [revision, setRevision] = useState(0);
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"site" | "line" | "machine">("site");
@@ -238,6 +271,19 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       </tr>)}</tbody></table>
       {lines.length === 0 && <p>No production lines registered yet.</p>}
       {lines.length > 0 && visibleLines.length === 0 && <p>No production lines match the current filters.</p>}
+    </div>}
+    <h2>Preview MTConnect devices.xml</h2>
+    <p>Read-only commissioning preview: choose a Devices XML file exported from an existing MTConnect Agent /probe endpoint. This does not save URLs, register machines or activate acquisition.</p>
+    <label htmlFor="admin-probe-file">MTConnect Devices XML</label>
+    <input id="admin-probe-file" type="file" accept=".xml,text/xml,application/xml"
+      onChange={event => void previewProbeFile(event.currentTarget.files?.[0])} />
+    {probeError && <p role="alert">{probeError}</p>}
+    {probeDevices.length > 0 && <div className="commissioning-table-scroll" role="region" aria-label="MTConnect probe preview" tabIndex={0}>
+      <table><thead><tr><th>Device</th><th>Device ID</th><th>UUID</th><th>Data items</th></tr></thead>
+      <tbody>{probeDevices.map(device => <tr key={device.id}>
+        <td>{device.name}</td><td><code>{device.id}</code></td><td><code>{device.uuid || "Not supplied"}</code></td>
+        <td>{device.dataItems}</td>
+      </tr>)}</tbody></table>
     </div>}
     <h2>Registered machine inventory</h2>
     <button type="button" disabled={!inventory || visibleInventory.length === 0}
