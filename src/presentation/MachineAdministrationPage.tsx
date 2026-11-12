@@ -15,17 +15,6 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [edgeConfigured, setEdgeConfigured] = useState<readonly { machineId: string; deviceKey: string; baseUri: string }[]>([]);
   const [edgeConfigError, setEdgeConfigError] = useState("");
 
-  const probeEdgeComparison = useMemo(() => probeDevices.map(device => {
-    const matches = edgeConfigured.filter(configured =>
-      configured.deviceKey === device.name || configured.deviceKey === device.id ||
-      (device.uuid !== "" && configured.deviceKey === device.uuid));
-    const configuredIds = new Set(matches.map(match => match.machineId.toLowerCase()));
-    const duplicateDeviceKey = matches.length > 1;
-    const registered = matches.length === 1 && inventory?.find(machine =>
-      machine.machineId.toLowerCase() === matches[0]?.machineId.toLowerCase());
-    return { device, matches, duplicateDeviceKey, registered,
-      identityConflict: configuredIds.size > 1 || duplicateDeviceKey };
-  }), [probeDevices, edgeConfigured, inventory]);
 
   async function previewEdgeConfig(file: File | undefined) {
     setEdgeConfigured([]);
@@ -153,6 +142,18 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 
   const [inventory, setInventory] = useState<readonly { machineId: string; siteId: string; displayName: string; isRetired: boolean }[] | null>(null);
   const [inventoryError, setInventoryError] = useState("");
+  const probeEdgeComparison = useMemo(() => probeDevices.map(device => {
+    const matches = edgeConfigured.filter(configured =>
+      configured.deviceKey === device.name || configured.deviceKey === device.id ||
+      (device.uuid !== "" && configured.deviceKey === device.uuid));
+    const configuredIds = new Set(matches.map(match => match.machineId.toLowerCase()));
+    const duplicateDeviceKey = matches.length > 1;
+    const registered = matches.length === 1 && inventory?.find(machine =>
+      machine.machineId.toLowerCase() === matches[0]?.machineId.toLowerCase());
+    return { device, matches, duplicateDeviceKey, registered,
+      identityConflict: configuredIds.size > 1 || duplicateDeviceKey };
+  }), [probeDevices, edgeConfigured, inventory]);
+
   function exportMachineInventory() {
     if (!inventory) return;
     const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
