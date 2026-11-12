@@ -248,6 +248,7 @@ app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/evidence", async (
 
 app.MapActivityHistory();
 app.MapMasterRegistration();
+app.MapMtConnectDiscovery();
 
 app.MapMethods("/api/{**path}", ["GET", "POST"], NotReady);
 app.MapFallbackToFile("index.html");
