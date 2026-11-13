@@ -149,8 +149,16 @@ internal static class OperatorLogin
             CryptographicOperations.ZeroMemory(secret);
             try
             {
-                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, Guid.Parse(config["Evidence:InstallationId"]!))
-                    .ReadOperatorEvidenceMachinesAsync(hash, Guid.Parse(config["Evidence:SiteId"]!), ct);
+                var authority = new SqlSecurityAuthority(config.GetConnectionString("Evidence")!,
+                    Guid.Parse(config["Evidence:InstallationId"]!));
+                // An empty installation has no site-scoped operator inventory yet.
+                // Permit only an independently authorized installation administrator
+                // to obtain the browser credential needed for first-site registration.
+                if (string.IsNullOrWhiteSpace(config["Evidence:SiteId"]))
+                    await authority.ReadAdministrationSitesAsync(hash, ct);
+                else
+                    await authority.ReadOperatorEvidenceMachinesAsync(hash,
+                        Guid.Parse(config["Evidence:SiteId"]!), ct);
                 return Results.Ok(new { bearer, expiresAt = until });
             }
             catch (SecurityDeniedException) { return Results.Unauthorized(); }
