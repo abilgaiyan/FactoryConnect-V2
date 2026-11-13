@@ -12,23 +12,40 @@ try
     if(args is ["keygen", var keyPath, var publicPath])
     {
         if(Path.GetFullPath(keyPath)==Path.GetFullPath(publicPath))throw new InvalidOperationException();
+        if(File.Exists(keyPath)||File.Exists(publicPath))throw new InvalidOperationException("Refusing to overwrite a custodian key.");
         using var rsa=RSA.Create(3072);
-        // PKCS#8 PEM contains sensitive private material. Store outside the repository, restrict ACLs, and never share it.
-        await WriteNew(keyPath,Encoding.ASCII.GetBytes(rsa.ExportPkcs8PrivateKeyPem()));
-        await WriteNew(publicPath,Encoding.ASCII.GetBytes(rsa.ExportSubjectPublicKeyInfoPem()));
-        Console.WriteLine("Custodian key pair generated. Keep the private key offline under custodian control.");
+        var password=ReadSecret("New custodian key passphrase (12+ characters): ");
+        try
+        {
+            if(password.Length<12)throw new InvalidOperationException("Passphrase must contain at least 12 characters.");
+            var repeat=ReadSecret("Confirm passphrase: ");
+            try
+            {
+                if(!password.AsSpan().SequenceEqual(repeat))throw new InvalidOperationException("Passphrases differ.");
+            }
+            finally { Array.Clear(repeat); }
+            var encrypted=rsa.ExportEncryptedPkcs8PrivateKeyPem(password,
+                new PbeParameters(PbeEncryptionAlgorithm.Aes256Cbc,HashAlgorithmName.SHA256,200000));
+            await WriteNew(keyPath,Encoding.ASCII.GetBytes(encrypted));
+            await WriteNew(publicPath,Encoding.ASCII.GetBytes(rsa.ExportSubjectPublicKeyInfoPem()));
+        }
+        finally { Array.Clear(password); }
+        Console.WriteLine("Encrypted custodian key pair generated. Keep the private key under custodian control.");
         return 0;
     }
     if(args is ["sign",var privatePath,var canonicalPath,var signaturePath])
     {
         if(Path.GetFullPath(privatePath)==Path.GetFullPath(signaturePath)||Path.GetFullPath(canonicalPath)==Path.GetFullPath(signaturePath))
             throw new InvalidOperationException();
+        if(File.Exists(signaturePath))throw new InvalidOperationException("Refusing to overwrite an existing signature.");
         var keyText=await File.ReadAllTextAsync(privatePath);
         using var rsa=RSA.Create();
-        rsa.ImportFromPem(keyText);
+        var password=ReadSecret("Custodian key passphrase: ");
+        try { rsa.ImportFromEncryptedPem(keyText,password); }
+        finally { Array.Clear(password); }
         if(rsa.KeySize<3072)throw new InvalidOperationException();
         var bytes=await File.ReadAllBytesAsync(canonicalPath);
-        // Verify the input is canonical by the ordinary bootstrap command before distributing it for signature.
+        // Custodian must independently review the prepared payload and canonical bytes before signing.
         await WriteNew(signaturePath,rsa.SignData(bytes,HashAlgorithmName.SHA256,RSASignaturePadding.Pss));
         Console.WriteLine("Canonical request signed with the custodian private key.");
         return 0;
@@ -98,3 +115,23 @@ static void UniqueProperties(JsonElement value)
 }
 static async Task WriteNew(string path,byte[] bytes)
 {await using var stream=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None);await stream.WriteAsync(bytes);}
+
+static char[] ReadSecret(string prompt)
+{
+    if(Console.IsInputRedirected)throw new InvalidOperationException("Interactive passphrase entry required.");
+    Console.Error.Write(prompt);
+    var password=new List<char>();
+    while(true)
+    {
+        var k=Console.ReadKey(intercept:true);
+        if(k.Key==ConsoleKey.Enter)break;
+        if(k.Key==ConsoleKey.Backspace)
+        {
+            if(password.Count>0)password.RemoveAt(password.Count-1);
+            continue;
+        }
+        if(k.KeyChar!=0)password.Add(k.KeyChar);
+    }
+    Console.Error.WriteLine();
+    return password.ToArray();
+}
