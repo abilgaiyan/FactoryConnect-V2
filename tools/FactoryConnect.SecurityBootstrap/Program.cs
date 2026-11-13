@@ -66,8 +66,8 @@ try
         var identityMatch=payload.InstallationId==trust.InstallationId &&
             payload.AdministratorIssuer==trust.AllowedAdministratorIssuer;
         Console.WriteLine($"Installation and issuer match: {identityMatch}");
-        var approver=manifestFile.Keys.SingleOrDefault(k=>k.KeyId==payload.ApproverKeyId);
-        var executor=manifestFile.Keys.SingleOrDefault(k=>k.KeyId==payload.ExecutorKeyId);
+        var diagnosticApprover=manifestFile.Keys.SingleOrDefault(k=>k.KeyId==payload.ApproverKeyId);
+        var diagnosticExecutor=manifestFile.Keys.SingleOrDefault(k=>k.KeyId==payload.ExecutorKeyId);
         bool VerifyOne(BootstrapCustodian? custodian,string signaturePath)
         {
             if(custodian is null)return false;
@@ -76,12 +76,12 @@ try
             return rsa.VerifyData(canonical,File.ReadAllBytes(signaturePath),
                 HashAlgorithmName.SHA256,RSASignaturePadding.Pss);
         }
-        var firstValid=VerifyOne(approver,approverSigPath);
-        var secondValid=VerifyOne(executor,executorSigPath);
+        var firstValid=VerifyOne(diagnosticApprover,approverSigPath);
+        var secondValid=VerifyOne(diagnosticExecutor,executorSigPath);
         Console.WriteLine($"Approver signature valid against manifest: {firstValid}");
         Console.WriteLine($"Executor signature valid against manifest: {secondValid}");
-        var distinct=approver is not null && executor is not null &&
-            approver.CustodianId!=executor.CustodianId;
+        var distinct=diagnosticApprover is not null && diagnosticExecutor is not null &&
+            diagnosticApprover.CustodianId!=diagnosticExecutor.CustodianId;
         Console.WriteLine($"Distinct custodians: {distinct}");
         Console.WriteLine($"Request expired: {payload.ExpiresAt<=DateTimeOffset.UtcNow}");
         // Exit status reflects cryptographic diagnostics, not live bootstrap authorization.
