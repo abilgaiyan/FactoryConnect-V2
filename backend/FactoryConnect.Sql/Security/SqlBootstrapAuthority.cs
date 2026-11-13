@@ -12,7 +12,7 @@ public sealed class SqlBootstrapAuthority
     private readonly InstallationTarget target;
     private readonly BootstrapTrustManifest trust;
     private static readonly string[] Permissions=["security.access.manage","configuration.read","configuration.edit","configuration.submit",
-        "configuration.review","configuration.activate","commissioning.read","audit.read","machine.suspend","machine.enable","policy.revoke","runtime.assign","runtime.credential.manage"];
+        "configuration.review","configuration.activate","configuration.master.manage","commissioning.read","audit.read","machine.suspend","machine.enable","policy.revoke","runtime.assign","runtime.credential.manage"];
 
     public SqlBootstrapAuthority(InstallationTarget target,BootstrapTrustManifest trust)
     {
@@ -105,7 +105,7 @@ public sealed class SqlBootstrapAuthority
                     INSERT security.PermissionGrant(GrantId,GranteeId,GrantorId,RootOrigin,Permission,ScopeKind,UseAllowed,CanDelegate,EffectiveFrom,ExpiresAt)
                     VALUES(@id,@principal,@principal,'bootstrap',@permission,'I',@use,1,@from,@until)
                     """,("@id",permission=="security.access.manage"?managementGrant:Guid.NewGuid()),("@principal",p.PrincipalId),("@permission",permission),
-                    ("@use",permission is "security.access.manage" or "audit.read"),("@from",p.IssuedAt.ToUniversalTime()),("@until",p.AdministratorExpiresAt.ToUniversalTime()));
+                    ("@use",permission is "security.access.manage" or "configuration.master.manage" or "audit.read"),("@from",p.IssuedAt.ToUniversalTime()),("@until",p.AdministratorExpiresAt.ToUniversalTime()));
             var approver=trust.Keys.Single(k=>k.KeyId==p.ApproverKeyId);var executor=trust.Keys.Single(k=>k.KeyId==p.ExecutorKeyId);
             await Execute("""
                 INSERT security.InitialBootstrap(Singleton,OperationId,PrincipalId,NonceHash,ApproverKeyId,ApproverCustodianId,ApproverIdentityHash,
