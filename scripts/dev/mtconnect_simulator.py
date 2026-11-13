@@ -39,6 +39,19 @@ def frame(first_requested: int, count: int, available: int, start: datetime) -> 
             f'</ComponentStream></DeviceStream></Streams></MTConnectStreams>').encode("utf-8")
 
 
+def probe() -> bytes:
+    """Device identity and data-item metadata for commissioning discovery."""
+    return (f'<?xml version="1.0" encoding="UTF-8"?>'
+            f'<MTConnectDevices xmlns="urn:mtconnect.org:MTConnectDevices:2.0">'
+            f'<Header instanceId="{INSTANCE_ID}" version="2.0" sender="FC2-LOCAL-SIM" '
+            f'creationTime="2026-11-11T00:00:00Z" bufferSize="{MAX_RETAINED}"/>'
+            f'<Devices><Device id="fc2-local-sim-0001" name="FC2-LOCAL-SIM" uuid="{DEVICE_UUID}">'
+            f'<Components><Controller id="controller" name="controller">'
+            f'<DataItems><DataItem id="{DATA_ITEM}" name="execution" category="EVENT" type="EXECUTION"/>'
+            f'</DataItems></Controller></Components>'
+            f'</Device></Devices></MTConnectDevices>').encode("utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=5055)
@@ -54,6 +67,9 @@ def main():
             if uri.path == "/health":
                 data = b'{"status":"ready","kind":"simulated-mtconnect"}'
                 content_type = "application/json"
+            elif uri.path == "/device/probe":
+                data = probe()
+                content_type = "application/xml"
             elif uri.path == "/device/sample":
                 try:
                     params = parse_qs(uri.query, keep_blank_values=True, strict_parsing=True)
