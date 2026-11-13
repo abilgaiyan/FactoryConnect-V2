@@ -8,6 +8,31 @@ using FactoryConnect.Sql.Security;
 var options=new JsonSerializerOptions(JsonSerializerDefaults.Web){PropertyNameCaseInsensitive=false,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,WriteIndented=true};
 try
 {
+    // Offline custodian operations. Private keys are never read during SQL bootstrap apply.
+    if(args is ["keygen", var keyPath, var publicPath])
+    {
+        if(Path.GetFullPath(keyPath)==Path.GetFullPath(publicPath))throw new InvalidOperationException();
+        using var rsa=RSA.Create(3072);
+        // PKCS#8 PEM contains sensitive private material. Store outside the repository, restrict ACLs, and never share it.
+        await WriteNew(keyPath,Encoding.ASCII.GetBytes(rsa.ExportPkcs8PrivateKeyPem()));
+        await WriteNew(publicPath,Encoding.ASCII.GetBytes(rsa.ExportSubjectPublicKeyInfoPem()));
+        Console.WriteLine("Custodian key pair generated. Keep the private key offline under custodian control.");
+        return 0;
+    }
+    if(args is ["sign",var privatePath,var canonicalPath,var signaturePath])
+    {
+        if(Path.GetFullPath(privatePath)==Path.GetFullPath(signaturePath)||Path.GetFullPath(canonicalPath)==Path.GetFullPath(signaturePath))
+            throw new InvalidOperationException();
+        var keyText=await File.ReadAllTextAsync(privatePath);
+        using var rsa=RSA.Create();
+        rsa.ImportFromPem(keyText);
+        if(rsa.KeySize<3072)throw new InvalidOperationException();
+        var bytes=await File.ReadAllBytesAsync(canonicalPath);
+        // Verify the input is canonical by the ordinary bootstrap command before distributing it for signature.
+        await WriteNew(signaturePath,rsa.SignData(bytes,HashAlgorithmName.SHA256,RSASignaturePadding.Pss));
+        Console.WriteLine("Canonical request signed with the custodian private key.");
+        return 0;
+    }
     if(args is ["prepare",var manifestPath,var principal,var subject,var approver,var executor,var reason,var payloadPath,var bytesPath])
     {
         var file=await Read<BootstrapTrustFile>(manifestPath);var trust=new BootstrapTrustManifest(file);var now=DateTimeOffset.UtcNow;
@@ -38,6 +63,7 @@ try
     }
     if(args.Length!=6)
     {
+        Console.Error.WriteLine("Usage: keygen <private.pem> <public.pem> or sign <private.pem> <canonical.bin> <signature.bin>");
         Console.Error.WriteLine("Usage: prepare <public-manifest> <principal-guid> <subject> <approver-key-guid> <executor-key-guid> <reason> <payload.json> <canonical.bin>");
         Console.Error.WriteLine("Or: canonicalize <payload.json> <canonical.bin>");
         Console.Error.WriteLine("Or: assemble <public-manifest> <payload.json> <approver.sig> <executor.sig> <signed-request.json>");
