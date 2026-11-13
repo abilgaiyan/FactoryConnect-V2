@@ -115,12 +115,27 @@ internal static class OperatorLogin
         });
     }
 
+    private static string LoginReturnUri(IConfiguration config)
+    {
+        var configured = config["Identity:DevelopmentDashboardReturnUri"];
+        if (string.IsNullOrWhiteSpace(configured)) return "/operator-evidence";
+        if (!Uri.TryCreate(configured, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttp || uri.Host != "localhost" || uri.Port != 3000
+            || uri.AbsolutePath != "/operator-evidence" || uri.UserInfo.Length != 0
+            || uri.Query.Length != 0 || uri.Fragment.Length != 0)
+            throw new InvalidOperationException("Development dashboard return URI must be http://localhost:3000/operator-evidence.");
+        if (!string.Equals(config["ASPNETCORE_ENVIRONMENT"], "Development", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Development dashboard return URI requires Development environment.");
+        return uri.AbsoluteUri;
+    }
+
     internal static void MapOperatorLogin(this WebApplication app)
     {
         app.MapGet("/api/security/v2/login", (HttpContext http, IConfiguration config) =>
             !http.Request.IsHttps ? Results.StatusCode(403)
             : string.IsNullOrWhiteSpace(config["Identity:Authority"]) ? Results.StatusCode(503)
-            : Results.Challenge(new AuthenticationProperties { RedirectUri = "/operator-evidence" }, [Oidc])).RequireRateLimiting("security-boundary");
+            : Results.Challenge(new AuthenticationProperties { RedirectUri = LoginReturnUri(config) }, [Oidc])).RequireRateLimiting("security-boundary");
         app.MapGet("/api/security/v2/session", async (HttpContext http, IConfiguration config, CancellationToken ct) =>
         {
             http.Response.Headers.CacheControl = "no-store";
