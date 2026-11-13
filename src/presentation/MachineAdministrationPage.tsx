@@ -394,6 +394,43 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     return () => controller.abort();
   }, [baseAddress, sessionBearer, revision]);
 
+  const [activationReadiness, setActivationReadiness] = useState<Record<string, { reason: string; operationalStatus: string; currentAssignmentId: string | null; requestedActivation: unknown; acknowledgesRequestedActivation: boolean }>>({});
+  const [activationReadinessError, setActivationReadinessError] = useState("");
+  const [activationRevision, setActivationRevision] = useState(0);
+  useEffect(() => {
+    if (!sessionBearer || !inventory?.length) {
+      setActivationReadiness({});
+      setActivationReadinessError("");
+      return;
+    }
+    const controller = new AbortController();
+    const siteIds = [...new Set(inventory.filter(machine => !machine.isRetired).map(machine => machine.siteId))];
+    void Promise.all(siteIds.map(async siteId => {
+      const response = await fetch(new URL("/api/admin/v2/sites/" + encodeURIComponent(siteId) +
+        "/activation-readiness", baseAddress), {
+        headers: { Authorization: "Bearer " + sessionBearer },
+        cache: "no-store", signal: controller.signal
+      });
+      if (!response.ok) throw new Error("Activation readiness unavailable (HTTP " + response.status + ").");
+      const payload: { machines: { machineId: string; reason: string; operationalStatus: string;
+        currentAssignmentId: string | null; requestedActivation: unknown;
+        acknowledgesRequestedActivation: boolean }[] } = await response.json();
+      if (!Array.isArray(payload.machines)) throw new Error("Invalid activation readiness response.");
+      return payload.machines;
+    })).then(groups => {
+      if (controller.signal.aborted) return;
+      setActivationReadiness(Object.fromEntries(groups.flat().map(machine =>
+        [machine.machineId.toLowerCase(), machine])));
+      setActivationReadinessError("");
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setActivationReadiness({});
+        setActivationReadinessError("Activation readiness cannot be read with the current session. Commissioning assignments remain unchanged.");
+      }
+    });
+    return () => controller.abort();
+  }, [baseAddress, sessionBearer, inventory, activationRevision]);
+
   const [savedAssignments, setSavedAssignments] = useState<readonly {
     machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
   }[] | null>(null);
@@ -701,13 +738,16 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     {savedAssignmentsError && <p role="status">{savedAssignmentsError}</p>}
     {savedAssignments && <div className="commissioning-table-scroll" role="region"
       aria-label="Saved commissioning assignments" tabIndex={0}>
-      <table><thead><tr><th>Machine</th><th>Production line</th><th>MTConnect device ID</th><th>Acquisition</th></tr></thead>
+      <table><thead><tr><th>Machine</th><th>Production line</th><th>MTConnect device ID</th><th>Activation readiness</th><th>Acquisition</th></tr></thead>
       <tbody>{savedAssignments.map(assignment => <tr key={assignment.machineId}>
         <td>{inventory?.find(machine => machine.machineId === assignment.machineId)?.displayName ??
           assignment.machineId}</td>
         <td>{lines?.find(line => line.productionLineId === assignment.productionLineId)?.displayName ??
           assignment.productionLineId}</td>
         <td><code>{assignment.mtConnectDeviceId}</code></td>
+        <td>{activationReadiness[assignment.machineId.toLowerCase()]?.reason ?? "Not available"}
+          <p>Operational: {activationReadiness[assignment.machineId.toLowerCase()]?.operationalStatus ?? "Unknown"}</p>
+        </td>
         <td>
           <strong>{readiness[assignment.machineId]?.status ?? "Commissioned — not validated"}</strong>
           {readiness[assignment.machineId] && <p role="status">{readiness[assignment.machineId]?.detail}</p>}
@@ -718,6 +758,9 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         </td>
       </tr>)}</tbody></table>
       {savedAssignments.length === 0 && <p>No commissioning assignments saved yet.</p>}
+      {activationReadinessError && <p role="status">{activationReadinessError}</p>}
+      <button type="button" disabled={!sessionBearer} onClick={() => setActivationRevision(value => value + 1)}>Refresh activation readiness</button>
+      <p>Readiness is an authoritative status check, not a machine activation. Agent validation alone does not enable acquisition.</p>
     </div>}
     <h2>Review existing Edge MTConnect configuration</h2>
     <p>Choose an existing Edge JSON configuration file locally to compare configured Agent URLs and machine identities. The file stays in your browser; no configuration is uploaded, saved or activated.</p>
