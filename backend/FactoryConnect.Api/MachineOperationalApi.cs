@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using FactoryConnect.Sql.Security;
 
 namespace FactoryConnect.Api;
@@ -74,7 +73,7 @@ public static class MachineOperationalApi
                 return Results.Content(System.Text.Encoding.UTF8.GetString(json), "application/json");
             return Results.Ok(result);
         }
-        catch (SecurityDeniedException) { return Results.Forbid(); }
+        catch (SecurityDeniedException) { return Results.Unauthorized(); }
         catch (SecurityConflictException) { return Results.Conflict(new { error = "Operational authority changed; refresh before retrying." }); }
         catch (ArgumentException) { return Results.BadRequest(new { error = "Invalid operational request." }); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
