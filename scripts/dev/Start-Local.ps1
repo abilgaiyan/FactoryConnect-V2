@@ -34,6 +34,8 @@ try {
         try { $env:Identity__ClientSecret=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
         finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
       }
+      $env:ASPNETCORE_ENVIRONMENT='Development'
+      $env:Identity__DevelopmentDashboardReturnUri='http://localhost:3000/operator-evidence'
       $env:Identity__Authority=$issuer
       $env:Identity__ClientId='factoryconnect-api'
       $env:Evidence__InstallationId=$c.installationId
