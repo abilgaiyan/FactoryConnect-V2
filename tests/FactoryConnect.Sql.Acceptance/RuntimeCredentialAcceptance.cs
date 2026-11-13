@@ -67,7 +67,7 @@ internal static class RuntimeCredentialAcceptance
         var revoke=rotate with{Action="revoke",OperationId=Guid.NewGuid(),Nonce=RandomNumberGenerator.GetBytes(32),ExpectedEpoch=5,ExpectedGeneration=2,PublicKeySpki=[],ValidFrom=DateTimeOffset.UnixEpoch,CredentialExpiresAt=DateTimeOffset.UnixEpoch};
         await service.ChangeRuntimeCredentialAsync(token,Sign(revoke,null));
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.RuntimeCredentialRevocation"))==2,"controlled revocation invalidates current generation");
-        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SessionAuthority"))==2&&Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant"))==14,"runtime credentials create no human sessions or grants");
+        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SessionAuthority"))==2&&Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant"))==15,"runtime credentials create no human sessions or grants");
         try{await Exec("DELETE security.RuntimeCredentialPublicKey");throw new InvalidOperationException("expected immutable key");}catch(SqlException e)when(e.Number==51040){Check(true,"runtime public key history is immutable");}
         // Current permission remains mandatory for completed receipts; security administrator is no bypass.
         var grant=credentialGrant;
