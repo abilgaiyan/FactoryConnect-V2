@@ -41,12 +41,32 @@ try
         var keyText=await File.ReadAllTextAsync(privatePath);
         using var rsa=RSA.Create();
         var password=ReadSecret("Custodian key passphrase: ");
-        try { rsa.ImportFromEncryptedPem(keyText,password); }
+        try
+        {
+            try { rsa.ImportFromEncryptedPem(keyText,password); }
+            catch(CryptographicException)
+            {
+                Console.Error.WriteLine("Signing failed at encrypted private-key import. Check the custodian passphrase and key file.");
+                return 1;
+            }
+        }
         finally { Array.Clear(password); }
         if(rsa.KeySize<3072)throw new InvalidOperationException();
         var bytes=await File.ReadAllBytesAsync(canonicalPath);
         // Custodian must independently review the prepared payload and canonical bytes before signing.
-        await WriteNew(signaturePath,rsa.SignData(bytes,HashAlgorithmName.SHA256,RSASignaturePadding.Pss));
+        byte[] signature;
+        try { signature=rsa.SignData(bytes,HashAlgorithmName.SHA256,RSASignaturePadding.Pss); }
+        catch(CryptographicException)
+        {
+            Console.Error.WriteLine("Signing failed at RSA-PSS signature generation.");
+            return 1;
+        }
+        try { await WriteNew(signaturePath,signature); }
+        catch(IOException)
+        {
+            Console.Error.WriteLine("Signing failed writing signature output. Check path, permissions and existing files.");
+            return 1;
+        }
         Console.WriteLine("Canonical request signed with the custodian private key.");
         return 0;
     }
