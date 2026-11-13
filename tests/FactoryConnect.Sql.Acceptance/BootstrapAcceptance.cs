@@ -88,7 +88,7 @@ internal static class BootstrapAcceptance
         Check(receipts[0].SequenceEqual(receipts[1]),"concurrent exact bootstrap retries return identical receipt");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.InitialBootstrap"))==1,"one immutable initial ceremony");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SecurityAudit"))==1,"bootstrap retry appends one audit");
-        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant WHERE UseAllowed=1"))==2,"bootstrap use permissions limited to security management and audit");
+        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant WHERE UseAllowed=1"))==3,"bootstrap use permissions include security management, master administration and audit");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant WHERE UseAllowed=0 AND CanDelegate=1"))==11,"business permissions are delegable authority not implicit use");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SessionAuthority"))==0,"bootstrap does not fabricate an authenticated login session");
         var token=RandomNumberGenerator.GetBytes(32);
