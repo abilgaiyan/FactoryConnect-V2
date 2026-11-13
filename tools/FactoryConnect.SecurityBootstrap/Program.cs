@@ -50,6 +50,43 @@ try
         Console.WriteLine("Canonical request signed with the custodian private key.");
         return 0;
     }
+    if(args is ["verify-signatures",var manifestPathVerify,var payloadPathVerify,var canonicalPathVerify,
+        var approverSigPath,var executorSigPath])
+    {
+        // Diagnostic only: expired payloads can be checked offline. No authority is granted or changed.
+        var manifestFile=await Read<BootstrapTrustFile>(manifestPathVerify);
+        var trust=new BootstrapTrustManifest(manifestFile);
+        var payload=await Read<BootstrapPayload>(payloadPathVerify);
+        var canonical=BootstrapTrustManifest.Canonicalize(payload);
+        var suppliedCanonical=await File.ReadAllBytesAsync(canonicalPathVerify);
+        var bytesMatch=canonical.AsSpan().SequenceEqual(suppliedCanonical);
+        Console.WriteLine($"Canonical bytes match: {bytesMatch}");
+        var manifestHashMatch=CryptographicOperations.FixedTimeEquals(payload.TrustManifestHash,trust.Hash);
+        Console.WriteLine($"Manifest hash matches payload: {manifestHashMatch}");
+        var identityMatch=payload.InstallationId==trust.InstallationId &&
+            payload.AdministratorIssuer==trust.AllowedAdministratorIssuer;
+        Console.WriteLine($"Installation and issuer match: {identityMatch}");
+        var diagnosticApprover=manifestFile.Keys.SingleOrDefault(k=>k.KeyId==payload.ApproverKeyId);
+        var diagnosticExecutor=manifestFile.Keys.SingleOrDefault(k=>k.KeyId==payload.ExecutorKeyId);
+        bool VerifyOne(BootstrapCustodian? custodian,string signaturePath)
+        {
+            if(custodian is null)return false;
+            using var rsa=RSA.Create();
+            rsa.ImportSubjectPublicKeyInfo(custodian.PublicKeySpki,out _);
+            return rsa.VerifyData(canonical,File.ReadAllBytes(signaturePath),
+                HashAlgorithmName.SHA256,RSASignaturePadding.Pss);
+        }
+        var firstValid=VerifyOne(diagnosticApprover,approverSigPath);
+        var secondValid=VerifyOne(diagnosticExecutor,executorSigPath);
+        Console.WriteLine($"Approver signature valid against manifest: {firstValid}");
+        Console.WriteLine($"Executor signature valid against manifest: {secondValid}");
+        var distinct=diagnosticApprover is not null && diagnosticExecutor is not null &&
+            diagnosticApprover.CustodianId!=diagnosticExecutor.CustodianId;
+        Console.WriteLine($"Distinct custodians: {distinct}");
+        Console.WriteLine($"Request expired: {payload.ExpiresAt<=DateTimeOffset.UtcNow}");
+        // Exit status reflects cryptographic diagnostics, not live bootstrap authorization.
+        return bytesMatch&&manifestHashMatch&&identityMatch&&firstValid&&secondValid&&distinct?0:1;
+    }
     if(args is ["prepare",var manifestPath,var principal,var subject,var approver,var executor,var reason,var payloadPath,var bytesPath])
     {
         var file=await Read<BootstrapTrustFile>(manifestPath);var trust=new BootstrapTrustManifest(file);var now=DateTimeOffset.UtcNow;
@@ -80,6 +117,7 @@ try
     }
     if(args.Length!=6)
     {
+        Console.Error.WriteLine("Usage: verify-signatures <manifest.json> <payload.json> <canonical.bin> <approver.sig> <executor.sig>");
         Console.Error.WriteLine("Usage: keygen <private.pem> <public.pem> or sign <private.pem> <canonical.bin> <signature.bin>");
         Console.Error.WriteLine("Usage: prepare <public-manifest> <principal-guid> <subject> <approver-key-guid> <executor-key-guid> <reason> <payload.json> <canonical.bin>");
         Console.Error.WriteLine("Or: canonicalize <payload.json> <canonical.bin>");
