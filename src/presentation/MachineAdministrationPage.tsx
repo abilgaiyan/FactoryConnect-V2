@@ -421,7 +421,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     return () => controller.abort();
   }, [baseAddress, sessionBearer, revision]);
 
-  const [activationReadiness, setActivationReadiness] = useState<Record<string, { reason: string; operationalStatus: string; currentAssignmentId: string | null; requestedActivation: unknown; acknowledgesRequestedActivation: boolean }>>({});
+  const [activationReadiness, setActivationReadiness] = useState<Record<string, { reason: string; status: string; operationalStatus: string; currentAssignmentId: string | null; requestedActivation: unknown; acknowledgesRequestedActivation: boolean }>>({});
   const [activationReadinessError, setActivationReadinessError] = useState("");
   const [activationRevision, setActivationRevision] = useState(0);
   useEffect(() => {
@@ -439,7 +439,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         cache: "no-store", signal: controller.signal
       });
       if (!response.ok) throw new Error("Activation readiness unavailable (HTTP " + response.status + ").");
-      const payload: { machines: { machineId: string; reason: string; operationalStatus: string;
+      const payload: { machines: { machineId: string; reason: string; status: string; operationalStatus: string;
         currentAssignmentId: string | null; requestedActivation: unknown;
         acknowledgesRequestedActivation: boolean }[] } = await response.json();
       if (!Array.isArray(payload.machines)) throw new Error("Invalid activation readiness response.");
@@ -772,8 +772,12 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         <td>{lines?.find(line => line.productionLineId === assignment.productionLineId)?.displayName ??
           assignment.productionLineId}</td>
         <td><code>{assignment.mtConnectDeviceId}</code></td>
-        <td>{activationReadiness[assignment.machineId.toLowerCase()]?.reason ?? "Not available"}
+        <td><strong>{activationReadiness[assignment.machineId.toLowerCase()]?.status ?? "Not available"}</strong>
+          <p>Reason: {activationReadiness[assignment.machineId.toLowerCase()]?.reason ?? "Not available"}</p>
           <p>Operational: {activationReadiness[assignment.machineId.toLowerCase()]?.operationalStatus ?? "Unknown"}</p>
+          <p>Runtime assignment: {activationReadiness[assignment.machineId.toLowerCase()]?.currentAssignmentId ? "Present" : "Missing"}</p>
+          <p>Activation request: {activationReadiness[assignment.machineId.toLowerCase()]?.requestedActivation ? "Present" : "Missing"}</p>
+          <p>Runtime acknowledgement: {activationReadiness[assignment.machineId.toLowerCase()]?.acknowledgesRequestedActivation ? "Received" : "Not received"}</p>
           <p>Next: {activationNextStep(activationReadiness[assignment.machineId.toLowerCase()]?.reason)}</p>
         </td>
         <td>
