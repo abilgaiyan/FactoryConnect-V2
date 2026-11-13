@@ -1,0 +1,8 @@
+{
+  "sqlServer": ".\\FCINVENTORY",
+  "database": "FactoryConnect_V2_Dev",
+  "installationId": "AAE0C57A-BEA6-427F-8046-4E22DDFD63E9",
+  "siteId": null,
+  "keycloakUserSubject": "ab2d17fc-2630-4991-8533-2d83316cc82a",
+  "simulatedMachineId": "49befb26-0ac8-4bdf-87fe-a4ff9e6f3bfd"
+}
