@@ -95,7 +95,7 @@ internal static class RecoveryTrustAcceptance
         Check(Convert.ToInt64(await Scalar("SELECT AuthorityEpoch FROM security.InstallationState"))==2,"recovery trust provisioning advances epoch once");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SecurityAudit WHERE OperationId=@op",("@op",p.OperationId)))==1,"recovery trust retry writes one audit");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.Principal"))==1,"provisioning does not create a recovery administrator");
-        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant"))==13,"provisioning does not grant additional permissions");
+        Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.PermissionGrant"))==14,"provisioning does not grant additional permissions");
         Check(Convert.ToInt32(await Scalar("SELECT COUNT(*) FROM security.SessionAuthority"))==1,"provisioning does not fabricate a login session");
         Check(((byte[])(await Scalar("SELECT ManifestHash FROM security.RecoveryTrustRevision WHERE TrustId=@trust",("@trust",p.TrustId)))!).SequenceEqual(f.Recovery.Hash),"committed recovery trust hash matches exact public manifest");
         await Conflict(()=>service.ProvisionRecoveryTrustAsync(token,f.RecoveryFile,f.Sign(p with{Reason="changed"})),"recovery provisioning operation rejects conflicting content");
