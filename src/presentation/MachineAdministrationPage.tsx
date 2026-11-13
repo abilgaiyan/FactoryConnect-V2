@@ -1,6 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { readAllOperatorEvidenceMachines, type OperatorEvidenceMachine } from "../api/evidence/operator-evidence-machines-client.ts";
 
+/** Human-readable next action derived from the authoritative commissioning reason. */
+export function activationNextStep(reason: string | undefined): string {
+  switch (reason) {
+    case "NoRuntimeAssignment": return "Provision and assign a runtime identity before requesting activation.";
+    case "RuntimeCertificateNotRegistered": return "Register the runtime credential and certificate binding.";
+    case "NoActivationRequest": return "Complete the configuration package approval and request activation.";
+    case "MachineNotEnabled": return "Enable this machine through the authorized operational workflow.";
+    case "AwaitingRuntimeAcknowledgement": return "Start the authorized runtime and wait for its activation acknowledgement.";
+    case "ScheduledAwaitingAcknowledgement": return "Activation is scheduled; wait for the effective time and runtime acknowledgement.";
+    case "RequestedActivationAcknowledgedNotConnectivity": return "Activation acknowledged. Verify acquisition health and accepted observations separately.";
+    case "RuntimeAuthorityRevoked": return "Runtime authority was revoked. Review and reissue valid runtime credentials.";
+    case "RuntimeOutsideEffectiveInterval": return "Review runtime assignment and credential validity dates.";
+    case "RequestExpired": return "Review and issue a current activation request.";
+    case "RuntimeGenerationChanged":
+    case "OperatingGenerationChanged": return "Review the changed runtime or operational generation and request activation again.";
+    case "RequestOrApprovalRevoked":
+    case "PolicyRevokedAtFirstUse": return "Review revoked approval or policy before requesting activation again.";
+    case "IncompleteAuthority":
+    case "MissingOperationalHead":
+    case "MissingActivationHead":
+    case "MissingAcknowledgementHead":
+    case "MissingAssignmentHead": return "Commissioning authority is incomplete. Review the underlying records before continuing.";
+    case "Retired": return "Retired machine or production line cannot be activated.";
+    default: return "Refresh activation readiness to identify the next commissioning action.";
+  }
+}
+
 /**
  * Administrative inventory and registration require a current authorized session.
  * Evidence discovery is independently permission-scoped and may be incomplete.
@@ -747,6 +774,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         <td><code>{assignment.mtConnectDeviceId}</code></td>
         <td>{activationReadiness[assignment.machineId.toLowerCase()]?.reason ?? "Not available"}
           <p>Operational: {activationReadiness[assignment.machineId.toLowerCase()]?.operationalStatus ?? "Unknown"}</p>
+          <p>Next: {activationNextStep(activationReadiness[assignment.machineId.toLowerCase()]?.reason)}</p>
         </td>
         <td>
           <strong>{readiness[assignment.machineId]?.status ?? "Commissioned — not validated"}</strong>
