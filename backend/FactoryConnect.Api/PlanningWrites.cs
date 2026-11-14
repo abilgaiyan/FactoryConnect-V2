@@ -9,6 +9,8 @@ internal static class PlanningWrites
 {
     internal sealed record CreateShiftRequest(string? DisplayName, int StartMinute, int EndMinute);
 
+    internal sealed record CreateBreakRequest(string? DisplayName, int StartOffsetMinute, int DurationMinute, bool ExcludeFromPlannedProduction);
+
     internal static void MapPlanningWrites(this WebApplication app)
     {
         app.MapPost("/api/planning/v2/shifts", async (
@@ -72,6 +74,74 @@ internal static class PlanningWrites
             catch (Exception ex)
             {
                 return AuthorityDiagnostics.Unavailable(http, ex, "planning-shift-create", "Shift creation unavailable");
+            }
+            finally { CryptographicOperations.ZeroMemory(hash); }
+        }).RequireRateLimiting("security-boundary");
+
+        app.MapPost("/api/planning/v2/shifts/{shiftId:guid}/breaks", async (
+            Guid shiftId, CreateBreakRequest request, HttpContext http, IConfiguration config, CancellationToken ct) =>
+        {
+            http.Response.Headers.CacheControl = "no-store";
+            if (!http.Request.IsHttps || http.Request.Headers.Origin != $"https://{http.Request.Host}")
+                return Results.StatusCode(403);
+            if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
+                || !Guid.TryParse(config["Evidence:SiteId"], out var siteId)
+                || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
+                return Results.StatusCode(503);
+            var name = request.DisplayName?.Trim();
+            if (string.IsNullOrWhiteSpace(name) || name.Length > 100
+                || request.StartOffsetMinute is < 0 or > 1439
+                || request.DurationMinute is < 1 or > 480)
+                return Results.BadRequest(new { error = "Valid break name, offset (0–1439), and duration (1–480) required." });
+
+            var ticket = await http.AuthenticateAsync("operator-cookie");
+            var bearer = ticket.Principal?.FindFirst("fc2:session")?.Value;
+            if (!ticket.Succeeded || string.IsNullOrWhiteSpace(bearer)) return Results.Unauthorized();
+            byte[] token;
+            try { token = Convert.FromBase64String(bearer); }
+            catch (FormatException) { return Results.Unauthorized(); }
+            if (token.Length != 32) { CryptographicOperations.ZeroMemory(token); return Results.Unauthorized(); }
+            byte[] hash;
+            try { hash = SHA256.HashData(token); }
+            finally { CryptographicOperations.ZeroMemory(token); }
+            try
+            {
+                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .ValidateHumanSessionAsync(hash, ct);
+                var breakId = Guid.NewGuid();
+                await using var connection = new SqlConnection(config.GetConnectionString("Evidence"));
+                await connection.OpenAsync(ct);
+                await using var command = new SqlCommand("""
+                    INSERT INTO planning.ShiftBreak
+                        (BreakId, ShiftId, DisplayName, StartOffsetMinute, DurationMinute,
+                         ExcludeFromPlannedProduction)
+                    SELECT @breakId, ShiftId, @name, @start, @duration, @exclude
+                    FROM planning.ShiftDefinition
+                    WHERE ShiftId = @shiftId AND SiteId = @siteId AND IsRetired = 0
+                    """, connection);
+                command.Parameters.Add("@breakId", System.Data.SqlDbType.UniqueIdentifier).Value = breakId;
+                command.Parameters.Add("@shiftId", System.Data.SqlDbType.UniqueIdentifier).Value = shiftId;
+                command.Parameters.Add("@siteId", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
+                command.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 100).Value = name;
+                command.Parameters.Add("@start", System.Data.SqlDbType.SmallInt).Value = request.StartOffsetMinute;
+                command.Parameters.Add("@duration", System.Data.SqlDbType.SmallInt).Value = request.DurationMinute;
+                command.Parameters.Add("@exclude", System.Data.SqlDbType.Bit).Value = request.ExcludeFromPlannedProduction;
+                if (await command.ExecuteNonQueryAsync(ct) == 0) return Results.NotFound();
+                return Results.Created($"/api/planning/v2/shifts/{shiftId}/breaks", new
+                {
+                    breakId, shiftId, displayName = name, request.StartOffsetMinute,
+                    request.DurationMinute, request.ExcludeFromPlannedProduction
+                });
+            }
+            catch (SecurityDeniedException) { return Results.Unauthorized(); }
+            catch (SqlException ex) when (ex.Number is 51040 or 51043)
+            {
+                return Results.Conflict(new { error = "Break is outside the shift or overlaps an existing break." });
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                return AuthorityDiagnostics.Unavailable(http, ex, "planning-break-create", "Break creation unavailable");
             }
             finally { CryptographicOperations.ZeroMemory(hash); }
         }).RequireRateLimiting("security-boundary");
