@@ -11,6 +11,20 @@ internal static class PlanningWrites
 
     internal sealed record CreateBreakRequest(string? DisplayName, int StartOffsetMinute, int DurationMinute, bool ExcludeFromPlannedProduction);
 
+    // The local Vite dashboard is an explicitly configured development origin; production remains same-origin HTTPS.
+    private static bool AllowedOrigin(HttpContext http, IConfiguration config)
+    {
+        var origin = http.Request.Headers.Origin.ToString();
+        if (origin == $"https://{http.Request.Host}") return true;
+        return http.Request.IsHttps
+            && http.Request.Host.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            && http.Request.Host.Port == 5081
+            && http.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment()
+            && string.Equals(config["Identity:DevelopmentDashboardReturnUri"],
+                "http://localhost:3000/operator-evidence", StringComparison.Ordinal)
+            && origin == "http://localhost:3000";
+    }
+
     internal static void MapPlanningWrites(this WebApplication app)
     {
         app.MapPost("/api/planning/v2/shifts", async (
@@ -19,7 +33,7 @@ internal static class PlanningWrites
             http.Response.Headers.CacheControl = "no-store";
             if (!http.Request.IsHttps) return Results.StatusCode(403);
             // Same-origin browser writes only; the OIDC cookie must never authorize cross-site POSTs.
-            if (http.Request.Headers.Origin != $"https://{http.Request.Host}")
+            if (!AllowedOrigin(http, config))
                 return Results.StatusCode(403);
             if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
                 || !Guid.TryParse(config["Evidence:SiteId"], out var siteId)
@@ -82,7 +96,7 @@ internal static class PlanningWrites
             Guid shiftId, CreateBreakRequest request, HttpContext http, IConfiguration config, CancellationToken ct) =>
         {
             http.Response.Headers.CacheControl = "no-store";
-            if (!http.Request.IsHttps || http.Request.Headers.Origin != $"https://{http.Request.Host}")
+            if (!http.Request.IsHttps || !AllowedOrigin(http, config))
                 return Results.StatusCode(403);
             if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
                 || !Guid.TryParse(config["Evidence:SiteId"], out var siteId)
