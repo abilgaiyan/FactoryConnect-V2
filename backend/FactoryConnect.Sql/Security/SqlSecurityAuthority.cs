@@ -33,6 +33,20 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
         },ct);
     }
 
+    /// <summary>Validate a live human session without granting access to any protected resource.</summary>
+    public Task ValidateHumanSessionAsync(byte[] sessionHash, CancellationToken ct = default)
+    {
+        if (sessionHash is null || sessionHash.Length != 32)
+            throw new ArgumentException("A session hash is required.", nameof(sessionHash));
+        var token = sessionHash.ToArray();
+        return Transaction(null, false, async (connection, transaction) =>
+        {
+            var state = await State(connection, transaction, ct);
+            _ = await Session(connection, transaction, token, state.Now, ct);
+            return true;
+        }, ct);
+    }
+
     public Task<byte[]> RevokeGrantAsync(byte[] sessionHash,Guid operationId,Guid grantId,long expectedEpoch,string reason,CancellationToken ct=default)
         => Revoke(sessionHash,operationId,grantId,null,expectedEpoch,reason,ct);
     public Task<byte[]> RevokeSessionAsync(byte[] sessionHash,Guid operationId,byte[] targetSessionHash,long expectedEpoch,string reason,CancellationToken ct=default)
