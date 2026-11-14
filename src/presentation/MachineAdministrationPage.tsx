@@ -422,6 +422,13 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   }, [baseAddress, sessionBearer, revision]);
 
   const [activationReadiness, setActivationReadiness] = useState<Record<string, { reason: string; status: string; operationalStatus: string; currentAssignmentId: string | null; requestedActivation: unknown; acknowledgesRequestedActivation: boolean }>>({});
+  const [operationalEpoch, setOperationalEpoch] = useState<Record<string, number>>({});
+  const [operationalStates, setOperationalStates] = useState<Record<string, { status: string; generation: number; stateId: string | null }>>({});
+  const [selectedOperationalMachine, setSelectedOperationalMachine] = useState("");
+  const [operationalProposalId, setOperationalProposalId] = useState("");
+  const [operationalReason, setOperationalReason] = useState("Local machine commissioning");
+  const [operationalBusy, setOperationalBusy] = useState(false);
+  const [operationalMessage, setOperationalMessage] = useState("");
   const [activationReadinessError, setActivationReadinessError] = useState("");
   const [activationRevision, setActivationRevision] = useState(0);
   useEffect(() => {
@@ -443,11 +450,12 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
         currentAssignmentId: string | null; requestedActivation: unknown;
         acknowledgesRequestedActivation: boolean }[] } = await response.json();
       if (!Array.isArray(payload.machines)) throw new Error("Invalid activation readiness response.");
-      return payload.machines;
+      return { siteId, securityEpoch: (payload as typeof payload & { securityEpoch: number }).securityEpoch, machines: payload.machines };
     })).then(groups => {
       if (controller.signal.aborted) return;
-      setActivationReadiness(Object.fromEntries(groups.flat().map(machine =>
+      setActivationReadiness(Object.fromEntries(groups.flatMap(group => group.machines).map(machine =>
         [machine.machineId.toLowerCase(), machine])));
+      setOperationalEpoch(Object.fromEntries(groups.map(group => [group.siteId, group.securityEpoch])));
       setActivationReadinessError("");
     }).catch(() => {
       if (!controller.signal.aborted) {
@@ -457,6 +465,63 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     });
     return () => controller.abort();
   }, [baseAddress, sessionBearer, inventory, activationRevision]);
+
+  async function refreshOperationalState(machine: { siteId: string; machineId: string }) {
+    if (!sessionBearer) return;
+    const response = await fetch(new URL("/api/admin/v2/sites/" + machine.siteId +
+      "/machines/" + machine.machineId + "/operational-state", baseAddress), {
+      headers: { Authorization: "Bearer " + sessionBearer }, cache: "no-store"
+    });
+    if (!response.ok) throw new Error("Operational state unavailable (HTTP " + response.status + ").");
+    const state: { status: string; generation: number; stateId: string | null } = await response.json();
+    setOperationalStates(previous => ({ ...previous, [machine.machineId]: state }));
+    return state;
+  }
+
+  async function changeMachineOperation(kind: "propose" | "approve" | "suspend") {
+    const machine = inventory?.find(item => item.machineId === selectedOperationalMachine);
+    if (!machine || !sessionBearer || operationalBusy) return;
+    setOperationalBusy(true);
+    setOperationalMessage("");
+    try {
+      const state = await refreshOperationalState(machine);
+      if (!state) return;
+      const epoch = operationalEpoch[machine.siteId];
+      if (!Number.isSafeInteger(epoch)) throw new Error("Refresh activation readiness before changing machine state.");
+      const proposalId = kind === "propose" ? crypto.randomUUID() : operationalProposalId.trim();
+      if (kind === "approve" && !/^[0-9a-f-]{36}$/i.test(proposalId))
+        throw new Error("Enter the exact proposal ID supplied by the first administrator.");
+      const body = {
+        operationId: crypto.randomUUID(), stateId: crypto.randomUUID(),
+        proposalId, expectedStateId: state.stateId, expectedGeneration: state.generation,
+        expectedSecurityEpoch: epoch, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        reason: operationalReason.trim()
+      };
+      if (!body.reason) throw new Error("Enter an operational reason.");
+      const suffix = kind === "propose" ? "enable-proposals" : kind === "approve" ? "enable-approvals" : "suspensions";
+      const response = await fetch(new URL("/api/admin/v2/sites/" + machine.siteId +
+        "/machines/" + machine.machineId + "/" + suffix, baseAddress), {
+        method: "POST", headers: { Authorization: "Bearer " + sessionBearer, "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) throw new Error("Operation rejected (HTTP " + response.status +
+        "). Refresh state and check your permissions or the independent approval requirement.");
+      if (kind === "propose") {
+        setOperationalProposalId(proposalId);
+        setOperationalMessage("Enable proposal created. Give proposal ID " + proposalId +
+          " to a second authorized administrator. Proposal expires in 10 minutes.");
+      } else {
+        setOperationalMessage(kind === "approve" ? "Machine enabled; runtime activation is still required." :
+          "Machine suspended. Verify runtime acquisition separately.");
+      }
+      await refreshOperationalState(machine);
+      setActivationRevision(value => value + 1);
+    } catch (error) {
+      setOperationalMessage(error instanceof Error ? error.message : "Machine operation failed.");
+    } finally {
+      setOperationalBusy(false);
+    }
+  }
 
   const [savedAssignments, setSavedAssignments] = useState<readonly {
     machineId: string; productionLineId: string; mtConnectDeviceId: string; lastOperationId: string
@@ -893,6 +958,36 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {inventory.length === 0 && <p>No machines registered yet.</p>}
       {inventory.length > 0 && visibleInventory.length === 0 && <p>No machines match the current filters.</p>}
     </div>}
+    <h3>Machine operational controls</h3>
+    <p>Enablement requires two different authorized administrators. Proposing does not enable the machine;
+      approval does not activate MTConnect acquisition. Use the same proposal ID when the second administrator signs in.</p>
+    <label htmlFor="operational-machine">Select machine</label>
+    <select id="operational-machine" value={selectedOperationalMachine}
+      onChange={event => { setSelectedOperationalMachine(event.currentTarget.value); setOperationalMessage(""); }}>
+      <option value="">Choose a registered machine</option>
+      {inventory.filter(machine => !machine.isRetired).map(machine =>
+        <option key={machine.machineId} value={machine.machineId}>{machine.displayName}</option>)}
+    </select>
+    <label htmlFor="operational-reason">Reason</label>
+    <input id="operational-reason" value={operationalReason}
+      onChange={event => setOperationalReason(event.currentTarget.value)} />
+    <label htmlFor="operational-proposal">Enable proposal ID (for second administrator)</label>
+    <input id="operational-proposal" value={operationalProposalId}
+      onChange={event => setOperationalProposalId(event.currentTarget.value)} />
+    {selectedOperationalMachine && <p>Current operational state: {
+      operationalStates[selectedOperationalMachine]?.status ?? "Refresh to read current state"
+    }</p>}
+    <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || operationalBusy}
+      onClick={() => { const machine = inventory.find(item => item.machineId === selectedOperationalMachine);
+        if (machine) void refreshOperationalState(machine).catch(() => setOperationalMessage("Could not read operational state.")); }}>
+      Refresh operational state</button>
+    <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || operationalBusy}
+      onClick={() => { void changeMachineOperation("propose"); }}>Propose enablement</button>
+    <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || !operationalProposalId.trim() || operationalBusy}
+      onClick={() => { void changeMachineOperation("approve"); }}>Approve enablement (second admin)</button>
+    <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || operationalBusy}
+      onClick={() => { void changeMachineOperation("suspend"); }}>Suspend machine</button>
+    {operationalMessage && <p role="status">{operationalMessage}</p>}
     <button type="button" disabled={!sessionBearer || current.kind === "loading"}
       onClick={() => setRevision(value => value + 1)}>Refresh authorized machines</button>
     {current.kind === "loading" && <p role="status">Checking authorized machines…</p>}
