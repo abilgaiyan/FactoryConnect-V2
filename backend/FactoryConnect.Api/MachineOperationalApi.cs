@@ -13,8 +13,22 @@ public static class MachineOperationalApi
     private sealed record SuspendRequest(Guid OperationId, Guid StateId, Guid? ExpectedStateId,
         long ExpectedGeneration, long ExpectedSecurityEpoch, string Reason);
 
+    private sealed record RuntimeAssignmentInput(Guid OperationId, Guid AssignmentId, Guid RuntimeIdentityId,
+        long ExpectedCredentialGeneration, DateTimeOffset EffectiveFrom, DateTimeOffset? EffectiveTo,
+        long ExpectedAssignmentGeneration, Guid? SupersedesAssignmentId, long ExpectedSecurityEpoch, string Reason);
+
     public static void MapMachineOperational(this WebApplication app)
     {
+        app.MapPost("/api/admin/v2/sites/{siteId:guid}/machines/{machineId:guid}/runtime-assignments",
+            async (Guid siteId, Guid machineId, RuntimeAssignmentInput request, HttpContext http, IConfiguration config, CancellationToken ct) =>
+                await Execute(http, config, (authority, hash) =>
+                    authority.AssignRuntimeAsync(hash, new RuntimeAssignmentRequest(
+                        request.OperationId, request.AssignmentId, siteId, machineId, request.RuntimeIdentityId,
+                        request.ExpectedCredentialGeneration, request.EffectiveFrom, request.EffectiveTo,
+                        request.ExpectedAssignmentGeneration, request.SupersedesAssignmentId,
+                        request.ExpectedSecurityEpoch, request.Reason), ct), ct))
+            .RequireRateLimiting("security-boundary");
+
         app.MapGet("/api/admin/v2/sites/{siteId:guid}/machines/{machineId:guid}/operational-state",
             async (Guid siteId, Guid machineId, HttpContext http, IConfiguration config, CancellationToken ct) =>
                 await Execute(http, config, (authority, hash) =>
