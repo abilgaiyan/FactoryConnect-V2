@@ -435,6 +435,13 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [priorAssignmentId, setPriorAssignmentId] = useState("");
   const [runtimeAssignmentBusy, setRuntimeAssignmentBusy] = useState(false);
   const [runtimeAssignmentMessage, setRuntimeAssignmentMessage] = useState("");
+  const [activationFields, setActivationFields] = useState({
+    packageRevisionId: "", contentHash: "", approvalReviewId: "", runtimeIdentityId: "",
+    assignmentId: "", assignmentGeneration: "", credentialGeneration: "",
+    expectedActivationGeneration: "0", supersedesActivationId: ""
+  });
+  const [activationBusy, setActivationBusy] = useState(false);
+  const [activationMessage, setActivationMessage] = useState("");
   const [activationReadinessError, setActivationReadinessError] = useState("");
   const [activationRevision, setActivationRevision] = useState(0);
   useEffect(() => {
@@ -565,6 +572,53 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       setRuntimeAssignmentMessage(error instanceof Error ? error.message : "Runtime assignment failed.");
     } finally {
       setRuntimeAssignmentBusy(false);
+    }
+  }
+
+  async function requestMachineActivation() {
+    const machine = inventory?.find(item => item.machineId === selectedOperationalMachine);
+    if (!machine || !sessionBearer || activationBusy) return;
+    setActivationBusy(true);
+    setActivationMessage("");
+    try {
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const fields = activationFields;
+      const requiredIds = [fields.packageRevisionId, fields.approvalReviewId,
+        fields.runtimeIdentityId, fields.assignmentId];
+      const assignmentGeneration = Number(fields.assignmentGeneration);
+      const credentialGeneration = Number(fields.credentialGeneration);
+      const expectedActivationGeneration = Number(fields.expectedActivationGeneration);
+      const epoch = operationalEpoch[machine.siteId];
+      if (!requiredIds.every(id => uuid.test(id.trim())) ||
+          !/^[0-9a-f]{64}$/i.test(fields.contentHash.trim()) ||
+          !Number.isSafeInteger(assignmentGeneration) || assignmentGeneration <= 0 ||
+          !Number.isSafeInteger(credentialGeneration) || credentialGeneration <= 0 ||
+          !Number.isSafeInteger(expectedActivationGeneration) || expectedActivationGeneration < 0 ||
+          (expectedActivationGeneration > 0 && !uuid.test(fields.supersedesActivationId.trim())) ||
+          (expectedActivationGeneration === 0 && !!fields.supersedesActivationId.trim()) ||
+          !Number.isSafeInteger(epoch) || !operationalReason.trim())
+        throw new Error("Enter exact approved revision, runtime assignment, generations and current security epoch.");
+      const response = await fetch(new URL("/api/admin/v2/sites/" + machine.siteId +
+        "/machines/" + machine.machineId + "/activation-requests", baseAddress), {
+        method: "POST", headers: { Authorization: "Bearer " + sessionBearer, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operationId: crypto.randomUUID(), activationId: crypto.randomUUID(),
+          packageRevisionId: fields.packageRevisionId.trim(), contentHash: fields.contentHash.trim(),
+          approvalReviewId: fields.approvalReviewId.trim(), runtimeIdentityId: fields.runtimeIdentityId.trim(),
+          assignmentId: fields.assignmentId.trim(), assignmentGeneration, credentialGeneration,
+          effectiveFrom: new Date().toISOString(), effectiveTo: null, expectedActivationGeneration,
+          supersedesActivationId: fields.supersedesActivationId.trim() || null,
+          expectedSecurityEpoch: epoch, reason: operationalReason.trim()
+        })
+      });
+      if (!response.ok) throw new Error("Activation request rejected (HTTP " + response.status +
+        "). Verify approved package, operational state and runtime assignment.");
+      setActivationMessage("Activation requested. Start the authorized acquisition runtime and await acknowledgement.");
+      setActivationRevision(value => value + 1);
+    } catch (error) {
+      setActivationMessage(error instanceof Error ? error.message : "Activation request failed.");
+    } finally {
+      setActivationBusy(false);
     }
   }
 
@@ -1053,6 +1107,28 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       onClick={() => { void assignRuntimeIdentity(); }}>
       {runtimeAssignmentBusy ? "Assigning…" : "Assign runtime identity"}</button>
     {runtimeAssignmentMessage && <p role="status">{runtimeAssignmentMessage}</p>}
+    <h3>Request machine activation</h3>
+    <p>Requires an approved configuration package and an assigned, credentialed runtime.
+      Requesting activation does not start acquisition; runtime acknowledgement is required.</p>
+    {([
+      ["packageRevisionId", "Approved package revision ID"],
+      ["contentHash", "Approved package SHA-256 (64 hex characters)"],
+      ["approvalReviewId", "Approval review ID"],
+      ["runtimeIdentityId", "Runtime identity ID"],
+      ["assignmentId", "Current assignment ID"],
+      ["assignmentGeneration", "Current assignment generation"],
+      ["credentialGeneration", "Credential generation"],
+      ["expectedActivationGeneration", "Expected activation generation (0 for first activation)"],
+      ["supersedesActivationId", "Previous activation ID (if replacing)"]
+    ] as const).map(([key, label]) => <div key={key}>
+      <label htmlFor={"activation-" + key}>{label}</label>
+      <input id={"activation-" + key} value={activationFields[key]}
+        onChange={event => setActivationFields(previous => ({ ...previous, [key]: event.currentTarget.value }))} />
+    </div>)}
+    <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || activationBusy}
+      onClick={() => { void requestMachineActivation(); }}>
+      {activationBusy ? "Requesting…" : "Request activation"}</button>
+    {activationMessage && <p role="status">{activationMessage}</p>}
     <button type="button" disabled={!sessionBearer || current.kind === "loading"}
       onClick={() => setRevision(value => value + 1)}>Refresh authorized machines</button>
     {current.kind === "loading" && <p role="status">Checking authorized machines…</p>}
