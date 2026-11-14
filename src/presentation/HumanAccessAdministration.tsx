@@ -15,8 +15,28 @@ export function HumanAccessAdministration({ sessionBearer, baseAddress }: {
   const [permission, setPermission] = useState("commissioning.read");
   const [effectiveUntil, setEffectiveUntil] = useState("");
   const [busy, setBusy] = useState(false);
+  const [availableGrants, setAvailableGrants] = useState<readonly { grantId: string; permission: string; scopeKind: string; expiresAt: string }[]>([]);
   const [message, setMessage] = useState("");
   const pending = useRef<{ fingerprint: string; operationId: string; grantId?: string } | null>(null);
+
+  async function refreshAccess() {
+    if (!sessionBearer || busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch(new URL("/api/admin/v2/security/access-context", baseAddress), {
+        headers: { Authorization: "Bearer " + sessionBearer }
+      });
+      if (!response.ok) throw new Error("Access context unavailable (HTTP " + response.status + ").");
+      const data: { authorityEpoch: number; delegableGrants: {
+        grantId: string; permission: string; scopeKind: string; expiresAt: string
+      }[] } = await response.json();
+      setEpoch(String(data.authorityEpoch));
+      setAvailableGrants(data.delegableGrants);
+      setMessage("Current authority epoch and delegable grants refreshed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Access context unavailable.");
+    } finally { setBusy(false); }
+  }
 
   async function submit(kind: "enroll" | "grant") {
     if (!sessionBearer || busy) return;
@@ -77,6 +97,7 @@ export function HumanAccessAdministration({ sessionBearer, baseAddress }: {
     <input id="access-issuer" value={issuer} onChange={e => setIssuer(e.target.value)} />
     <label htmlFor="access-subject">Other Keycloak user's subject</label>
     <input id="access-subject" value={subject} onChange={e => setSubject(e.target.value)} />
+    <button type="button" disabled={!sessionBearer || busy} onClick={() => void refreshAccess()}>Refresh my access context</button>
     <label htmlFor="access-epoch">Current security authority epoch</label>
     <input id="access-epoch" type="number" min="0" step="1" value={epoch}
       onChange={e => setEpoch(e.target.value)} />
@@ -88,6 +109,13 @@ export function HumanAccessAdministration({ sessionBearer, baseAddress }: {
     <p>Refresh the authority epoch after enrollment. Use a valid delegable parent grant,
       never a self-grant. The selected scope and validity must be within the parent grant.</p>
     <label htmlFor="access-parent">Delegable parent grant ID</label>
+    {availableGrants.length > 0 && <select aria-label="Choose my delegable grant" value={parentGrantId}
+      onChange={e => { const grant = availableGrants.find(g => g.grantId === e.target.value);
+        setParentGrantId(e.target.value); if (grant) setPermission(grant.permission); }}>
+      <option value="">Choose a grant</option>
+      {availableGrants.map(g => <option key={g.grantId} value={g.grantId}>
+        {g.permission} ({g.scopeKind}) — expires {g.expiresAt}</option>)}
+    </select>}
     <input id="access-parent" value={parentGrantId} onChange={e => setParentGrantId(e.target.value)} />
     <label htmlFor="access-permission">Permission</label>
     <input id="access-permission" value={permission} onChange={e => setPermission(e.target.value)} />
