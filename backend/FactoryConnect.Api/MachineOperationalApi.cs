@@ -17,8 +17,30 @@ public static class MachineOperationalApi
         long ExpectedCredentialGeneration, DateTimeOffset EffectiveFrom, DateTimeOffset? EffectiveTo,
         long ExpectedAssignmentGeneration, Guid? SupersedesAssignmentId, long ExpectedSecurityEpoch, string Reason);
 
+    private sealed record ActivationInput(Guid OperationId, Guid ActivationId, Guid PackageRevisionId,
+        string ContentHash, Guid ApprovalReviewId, Guid RuntimeIdentityId, Guid AssignmentId,
+        long AssignmentGeneration, long CredentialGeneration, DateTimeOffset EffectiveFrom,
+        DateTimeOffset? EffectiveTo, long ExpectedActivationGeneration, Guid? SupersedesActivationId,
+        long ExpectedSecurityEpoch, string Reason);
+
     public static void MapMachineOperational(this WebApplication app)
     {
+        app.MapPost("/api/admin/v2/sites/{siteId:guid}/machines/{machineId:guid}/activation-requests",
+            async (Guid siteId, Guid machineId, ActivationInput request, HttpContext http, IConfiguration config, CancellationToken ct) =>
+            {
+                if (request.ContentHash is null || request.ContentHash.Length != 64 ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(request.ContentHash, "^[0-9a-fA-F]{64}$"))
+                    return Results.BadRequest(new { error = "Expected 32-byte SHA-256 content hash in hexadecimal." });
+                return await Execute(http, config, (authority, hash) =>
+                    authority.RequestActivationAsync(hash, new ActivationRequestCommand(
+                        request.OperationId, request.ActivationId, siteId, machineId,
+                        request.PackageRevisionId, Convert.FromHexString(request.ContentHash),
+                        request.ApprovalReviewId, request.RuntimeIdentityId, request.AssignmentId,
+                        request.AssignmentGeneration, request.CredentialGeneration, request.EffectiveFrom,
+                        request.EffectiveTo, request.ExpectedActivationGeneration,
+                        request.SupersedesActivationId, request.ExpectedSecurityEpoch, request.Reason), ct), ct);
+            }).RequireRateLimiting("security-boundary");
+
         app.MapPost("/api/admin/v2/sites/{siteId:guid}/machines/{machineId:guid}/runtime-assignments",
             async (Guid siteId, Guid machineId, RuntimeAssignmentInput request, HttpContext http, IConfiguration config, CancellationToken ct) =>
                 await Execute(http, config, (authority, hash) =>
