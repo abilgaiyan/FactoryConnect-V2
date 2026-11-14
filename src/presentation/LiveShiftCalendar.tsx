@@ -18,6 +18,22 @@ export default function LiveShiftCalendar() {
   const [selected, setSelected] = useState("");
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [name, setName] = useState("");
+  const [start, setStart] = useState("07:30");
+  const [end, setEnd] = useState("16:00");
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+  function minute(value: string): number { const parts = /^(\\d{2}):(\\d{2})$/.exec(value); return parts ? Number(parts[1]) * 60 + Number(parts[2]) : -1; }
+  async function createShift(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setError(""); setNotice("");
+    if (!name.trim() || minute(start) < 0 || minute(end) < 0 || start === end) { setError("Provide a name and distinct valid start/end times."); return; }
+    setSaving(true);
+    try {
+      const response = await fetch("/api/planning/v2/shifts", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ displayName: name.trim(), startMinute: minute(start), endMinute: minute(end) }) });
+      if (!response.ok) throw new Error(`Shift save failed (HTTP ${response.status}). Confirm administrator access and HTTPS origin.`);
+      setName(""); setNotice("Shift saved to SQL."); setRetry(v => v + 1);
+    } catch (e) { setError(String(e)); } finally { setSaving(false); }
+  }
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -49,6 +65,15 @@ export default function LiveShiftCalendar() {
     <h2>Shift calendar · live SQL planning</h2>
     <button type="button" aria-expanded={open} onClick={() => { setOpen(v => !v); setSelected(""); setError(""); }}> {open ? "Close shift calendar" : "Open shift calendar"} </button>
     {open && <>
+    <form onSubmit={createShift}>
+      <fieldset disabled={saving}><legend>Create site shift</legend>
+        <label>Shift name <input required maxLength={100} value={name} onChange={e => setName(e.target.value)} /></label>
+        <label>Start <input type="time" required value={start} onChange={e => setStart(e.target.value)} /></label>
+        <label>End <input type="time" required value={end} onChange={e => setEnd(e.target.value)} /></label>
+        <button type="submit">{saving ? "Saving…" : "Save shift"}</button>
+      </fieldset>
+    </form>
+    {notice && <p role="status">{notice}</p>}
     <p>Configured shifts and excluded breaks. This is planning data, not machine evidence or calculated OEE.</p>
     {error && <><p role="alert">{error}. No sample fallback.</p><button type="button" onClick={() => { setSelected(""); setRetry(v => v + 1); }}>Retry shift calendar</button></>}
     {!error && shifts === null && <p role="status">Loading shift definitions…</p>}
