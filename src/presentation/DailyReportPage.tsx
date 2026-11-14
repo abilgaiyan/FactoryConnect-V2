@@ -1,3 +1,4 @@
+import { OeeMetricBars } from "./OeeMetricBars.tsx";
 import { formatReportDate, formatReportTimestamp } from "./date-formatting.ts";
 import type { DailyReportLifecycleState } from "../application/daily-report-lifecycle.ts";
 import type {
@@ -125,6 +126,7 @@ function DailyReportMachineSection({ machine }: { readonly machine: DailyReportM
       <p>Production line: {machine.productionLineId}</p>
 
       <h5>Production day</h5>
+      <OeeMetricBars cells={machine.productionDayCells} />
       <MetricTable cells={machine.productionDayCells} caption={`${machine.displayName} production-day metrics`} />
 
       <h5>Shifts</h5>
