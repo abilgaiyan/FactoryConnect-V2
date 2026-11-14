@@ -16,8 +16,20 @@ try
         Report(result);
         return result.GetType().GetProperty("operational")?.GetValue(result) is true ? 0 : 20;
     }
-    if(args.Length is <2 or >3||args[0]!="--config"||(args.Length==3&&args[2]!="--read"))throw new ArgumentException("Use --config path [--read].");
-    var readOnly=args.Length==3;var options=HostOptions.Load(args[1],readOnly);
+    if(args.Length is <2 or >3||args[0]!="--config"||
+        (args.Length==3&&args[2] is not ("--read" or "--check")))
+        throw new ArgumentException("Use --config path [--read|--check].");
+    var readOnly=args.Length==3&&args[2]=="--read";
+    var checkOnly=args.Length==3&&args[2]=="--check";
+    var options=HostOptions.Load(args[1],readOnly);
+    if(checkOnly)
+    {
+        Report(new { status="configuration-valid", acquisitionStarted=false,
+            options.InstallationId, options.SiteId, options.MachineId, options.StreamKey,
+            agent=options.AgentBaseUri, pollIntervalMilliseconds=options.PollIntervalMilliseconds,
+            batchCount=options.BatchCount, healthSnapshotConfigured=options.HealthSnapshotPath is not null });
+        return 0;
+    }
     Console.CancelKeyPress+=(_,e)=>{e.Cancel=true;stopping.Cancel();};
     using var termination=OperatingSystem.IsWindows()?null:PosixSignalRegistration.Create(PosixSignal.SIGTERM,context=>{context.Cancel=true;stopping.Cancel();});
     if(readOnly)
