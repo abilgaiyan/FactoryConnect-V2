@@ -15,7 +15,7 @@ function DockerContainers {
   $null = docker info --format '{{.ServerVersion}}' 2>$null
   if ($LASTEXITCODE -ne 0) { throw 'Docker engine is unavailable. Start Docker Desktop and retry.' }
   $names = @(docker ps -a --format '{{.Names}}')
-  foreach ($name in @('dev-identity-postgres-1','dev-identity-identity-1')) {
+  foreach ($name in @('dev-identity-identity-db-1','dev-identity-identity-1')) {
     if ($names -notcontains $name) { throw "Expected existing development identity container not found: $name. Check Docker Desktop; this helper does not create containers." }
   }
 }
@@ -26,7 +26,7 @@ if ($Action -eq 'Check') {
   try {
     DockerContainers
     $running = @(docker ps --format '{{.Names}}')
-    Status 'PostgreSQL container' ($running -contains 'dev-identity-postgres-1')
+    Status 'PostgreSQL container' ($running -contains 'dev-identity-identity-db-1')
     Status 'Keycloak container' ($running -contains 'dev-identity-identity-1')
   } catch { Write-Warning $_.Exception.Message; Status 'Identity containers' $false }
   try {
@@ -45,7 +45,7 @@ try {
     'Identity' {
       DockerContainers
       $running = @(docker ps --format '{{.Names}}')
-      foreach ($name in @('dev-identity-postgres-1','dev-identity-identity-1')) {
+      foreach ($name in @('dev-identity-identity-db-1','dev-identity-identity-1')) {
         if ($running -notcontains $name) {
           docker start $name | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "Failed to start $name" }
