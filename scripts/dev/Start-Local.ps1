@@ -26,7 +26,8 @@ function IsReady($uri) {
 function StartLocalWindow($action) {
   $scriptPath = Join-Path $PSScriptRoot 'Start-Local.ps1'
   $command = "& '" + $scriptPath.Replace("'","''") + "' -Action " + $action
-  Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-NoExit','-Command', $command) | Out-Null
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+  Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-NoExit','-EncodedCommand', $encoded) | Out-Null
   Write-Host "Started $action in a separate PowerShell window."
 }
 function Status($label,$ok) { Write-Host ("{0}: {1}" -f $label, $(if($ok){'OK'}else{'NOT READY'})) }
