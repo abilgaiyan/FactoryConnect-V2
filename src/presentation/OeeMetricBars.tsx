@@ -1,3 +1,4 @@
+import "./oee-metric-bars.css";
 import type { DailyReportCell } from "./daily-report-model.ts";
 
 const labels: Record<string, string> = {
