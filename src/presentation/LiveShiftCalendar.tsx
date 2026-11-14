@@ -23,6 +23,27 @@ export default function LiveShiftCalendar() {
   const [end, setEnd] = useState("16:00");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
+  const [breakName, setBreakName] = useState("Planned break");
+  const [breakStart, setBreakStart] = useState("11:30");
+  const [breakDuration, setBreakDuration] = useState("30");
+  const [excludeBreak, setExcludeBreak] = useState(true);
+  const [breakReload, setBreakReload] = useState(0);
+  async function createBreak(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setError(""); setNotice("");
+    const shift = shifts?.find(s => s.shiftId === selected);
+    if (!shift) { setError("Select a configured shift."); return; }
+    const offset = (minute(breakStart) - shift.startMinute + 1440) % 1440;
+    const duration = Number(breakDuration);
+    if (!breakName.trim() || minute(breakStart) < 0 || !Number.isInteger(duration) || duration < 1 || duration > 480 || offset + duration > shift.durationMinutes) {
+      setError("Break must have a name, valid start time and duration within its shift."); return;
+    }
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/planning/v2/shifts/${encodeURIComponent(selected)}/breaks`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ displayName: breakName.trim(), startOffsetMinute: offset, durationMinute: duration, excludeFromPlannedProduction: excludeBreak }) });
+      if (!response.ok) throw new Error(`Break save failed (HTTP ${response.status}).`);
+      setNotice("Planned break saved to SQL."); setBreakReload(v => v + 1); setRetry(v => v + 1);
+    } catch (e) { setError(String(e)); } finally { setSaving(false); }
+  }
   function minute(value: string): number { const parts = /^(\\d{2}):(\\d{2})$/.exec(value); return parts ? Number(parts[1]) * 60 + Number(parts[2]) : -1; }
   async function createShift(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setNotice("");
@@ -60,7 +81,7 @@ export default function LiveShiftCalendar() {
         setBreaks(payload.breaks);
       }).catch(e => { if (!controller.signal.aborted) setError(String(e)); });
     return () => controller.abort();
-  }, [selected]);
+  }, [selected, breakReload]);
   return <section aria-label="Live shift calendar">
     <h2>Shift calendar · live SQL planning</h2>
     <button type="button" aria-expanded={open} onClick={() => { setOpen(v => !v); setSelected(""); setError(""); }}> {open ? "Close shift calendar" : "Open shift calendar"} </button>
@@ -88,6 +109,13 @@ export default function LiveShiftCalendar() {
           <td>{clock(s.startMinute)}–{clock(s.endMinute)}</td><td>{s.durationMinutes} min</td>
           <td>{s.excludedBreakMinutes} min</td><td>{s.plannedProductionMinutes} min</td></tr>)}</tbody></table>
       {selected && <><h3>Configured breaks</h3>
+        <form onSubmit={createBreak}><fieldset disabled={saving}><legend>Add planned break</legend>
+          <label>Break name <input required maxLength={100} value={breakName} onChange={e => setBreakName(e.target.value)} /></label>
+          <label>Break starts at <input type="time" required value={breakStart} onChange={e => setBreakStart(e.target.value)} /></label>
+          <label>Duration (minutes) <input type="number" required min={1} max={480} step={1} value={breakDuration} onChange={e => setBreakDuration(e.target.value)} /></label>
+          <label><input type="checkbox" checked={excludeBreak} onChange={e => setExcludeBreak(e.target.checked)} /> Exclude from planned production time</label>
+          <button type="submit">{saving ? "Saving…" : "Save planned break"}</button>
+        </fieldset></form>
         {breaks === null ? <p>Loading breaks…</p> : breaks.length === 0 ? <p>No breaks configured.</p>
           : <ul>{breaks.map(b => <li key={b.breakId}>{b.displayName}: +{b.startOffsetMinute} min, {b.durationMinutes} min
             {b.excludeFromPlannedProduction ? " · excluded from planned production" : " · included in planned production"}</li>)}</ul>}
