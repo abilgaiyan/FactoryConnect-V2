@@ -421,7 +421,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     return () => controller.abort();
   }, [baseAddress, sessionBearer, revision]);
 
-  const [activationReadiness, setActivationReadiness] = useState<Record<string, { reason: string; status: string; operationalStatus: string; currentAssignmentId: string | null; requestedActivation: unknown; acknowledgesRequestedActivation: boolean }>>({});
+  const [activationReadiness, setActivationReadiness] = useState<Record<string, { reason: string; status: string; operationalStatus: string; currentAssignmentId: string | null; currentRuntimeIdentityId: string | null; currentAssignmentGeneration: number | null; currentCredentialGeneration: number | null; requestedActivation: { activationId: string; activationGeneration: number; packageRevisionId: string; contentHash: string; approvalReviewId: string; runtimeIdentityId: string; assignmentId: string; assignmentGeneration: number; credentialGeneration: number } | null; acknowledgesRequestedActivation: boolean }>>({});
   const [operationalEpoch, setOperationalEpoch] = useState<Record<string, number>>({});
   const [operationalStates, setOperationalStates] = useState<Record<string, { status: string; generation: number; stateId: string | null }>>({});
   const [selectedOperationalMachine, setSelectedOperationalMachine] = useState("");
@@ -460,7 +460,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       });
       if (!response.ok) throw new Error("Activation readiness unavailable (HTTP " + response.status + ").");
       const payload: { machines: { machineId: string; reason: string; status: string; operationalStatus: string;
-        currentAssignmentId: string | null; requestedActivation: unknown;
+        currentAssignmentId: string | null; currentRuntimeIdentityId: string | null; currentAssignmentGeneration: number | null; currentCredentialGeneration: number | null; requestedActivation: { activationId: string; activationGeneration: number; packageRevisionId: string; contentHash: string; approvalReviewId: string; runtimeIdentityId: string; assignmentId: string; assignmentGeneration: number; credentialGeneration: number } | null;
         acknowledgesRequestedActivation: boolean }[] } = await response.json();
       if (!Array.isArray(payload.machines)) throw new Error("Invalid activation readiness response.");
       return { siteId, securityEpoch: (payload as typeof payload & { securityEpoch: number }).securityEpoch, machines: payload.machines };
@@ -534,6 +534,32 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     } finally {
       setOperationalBusy(false);
     }
+  }
+
+  function loadCurrentCommissioningValues() {
+    const machine = activationReadiness[selectedOperationalMachine.toLowerCase()];
+    if (!machine) {
+      setRuntimeAssignmentMessage("Refresh activation readiness before loading current values.");
+      return;
+    }
+    setRuntimeIdentityId(machine.currentRuntimeIdentityId ?? "");
+    setCredentialGeneration(machine.currentCredentialGeneration?.toString() ?? "");
+    setAssignmentGeneration((machine.currentAssignmentGeneration ?? 0).toString());
+    setPriorAssignmentId(machine.currentAssignmentId ?? "");
+    const pin = machine.requestedActivation;
+    setActivationFields(previous => ({
+      ...previous,
+      runtimeIdentityId: machine.currentRuntimeIdentityId ?? "",
+      assignmentId: machine.currentAssignmentId ?? "",
+      assignmentGeneration: machine.currentAssignmentGeneration?.toString() ?? "",
+      credentialGeneration: machine.currentCredentialGeneration?.toString() ?? "",
+      expectedActivationGeneration: (pin?.activationGeneration ?? 0).toString(),
+      supersedesActivationId: pin?.activationId ?? "",
+      packageRevisionId: pin?.packageRevisionId ?? previous.packageRevisionId,
+      contentHash: pin?.contentHash ?? previous.contentHash,
+      approvalReviewId: pin?.approvalReviewId ?? previous.approvalReviewId
+    }));
+    setRuntimeAssignmentMessage("Current assignment and activation values loaded from commissioning readiness. Confirm approved package details before submitting.");
   }
 
   async function assignRuntimeIdentity() {
@@ -1088,6 +1114,9 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       onClick={() => { void changeMachineOperation("suspend"); }}>Suspend machine</button>
     {operationalMessage && <p role="status">{operationalMessage}</p>}
     <h3>Runtime identity assignment</h3>
+    <button type="button" disabled={!selectedOperationalMachine ||
+      !activationReadiness[selectedOperationalMachine.toLowerCase()]}
+      onClick={loadCurrentCommissioningValues}>Load current machine assignment and activation values</button>
     <p>Assign an existing, credentialed runtime identity to the selected machine. The runtime identity and
       credential must already be provisioned. This does not activate the machine or start acquisition.</p>
     <label htmlFor="runtime-identity">Runtime identity ID</label>
