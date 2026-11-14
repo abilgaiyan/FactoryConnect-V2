@@ -3,6 +3,7 @@ import { createDashboardApplicationRuntime, type DashboardApplicationRuntime } f
 import SupervisorDeskPreview from "./SupervisorDeskPreview.tsx";
 import { SupervisorReadOnly } from "./SupervisorReadOnly.tsx";
 import "./supervisor-preview.css";
+import LiveShiftCalendar from "./LiveShiftCalendar.tsx";
 
 // Imported only by development entry points. Sample editors never mount in real-data mode.
 export default function SupervisorWorkspace({ runtime }: { readonly runtime?: DashboardApplicationRuntime }) {
@@ -36,6 +37,6 @@ function RuntimeReadOnly({ runtime }: { readonly runtime?: DashboardApplicationR
   return <>
     <p role="status"><strong>Real read-only mode — configured reporting sources.</strong> Data provenance is shown on every completed read; this mode does not certify factory acceptance.</p>
     {error ? <><p role="alert">Reporting configuration is unavailable. No factory evidence established; no sample fallback.</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry configuration</button></>
-      : loaded ? <SupervisorReadOnly runtime={loaded} /> : <p role="status">Loading reporting configuration…</p>}
+      : loaded ? <><LiveShiftCalendar /><SupervisorReadOnly runtime={loaded} /></> : <p role="status">Loading reporting configuration…</p>}
   </>;
 }
