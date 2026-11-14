@@ -965,7 +965,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     <select id="operational-machine" value={selectedOperationalMachine}
       onChange={event => { setSelectedOperationalMachine(event.currentTarget.value); setOperationalMessage(""); }}>
       <option value="">Choose a registered machine</option>
-      {inventory.filter(machine => !machine.isRetired).map(machine =>
+      {(inventory ?? []).filter(machine => !machine.isRetired).map(machine =>
         <option key={machine.machineId} value={machine.machineId}>{machine.displayName}</option>)}
     </select>
     <label htmlFor="operational-reason">Reason</label>
@@ -978,7 +978,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       operationalStates[selectedOperationalMachine]?.status ?? "Refresh to read current state"
     }</p>}
     <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || operationalBusy}
-      onClick={() => { const machine = inventory.find(item => item.machineId === selectedOperationalMachine);
+      onClick={() => { const machine = inventory?.find(item => item.machineId === selectedOperationalMachine);
         if (machine) void refreshOperationalState(machine).catch(() => setOperationalMessage("Could not read operational state.")); }}>
       Refresh operational state</button>
     <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || operationalBusy}
