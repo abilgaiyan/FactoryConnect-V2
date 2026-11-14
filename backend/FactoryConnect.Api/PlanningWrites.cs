@@ -9,6 +9,8 @@ internal static class PlanningWrites
 {
     internal sealed record CreateShiftRequest(string? DisplayName, int StartMinute, int EndMinute);
 
+    internal sealed record CreateStopReasonRequest(string? ReasonCode, string? DisplayName, string? Category, bool IsPlanned);
+
     internal sealed record CreateBreakRequest(string? DisplayName, int StartOffsetMinute, int DurationMinute, bool ExcludeFromPlannedProduction);
 
     // The local Vite dashboard is an explicitly configured development origin; production remains same-origin HTTPS.
@@ -156,6 +158,70 @@ internal static class PlanningWrites
             catch (Exception ex)
             {
                 return AuthorityDiagnostics.Unavailable(http, ex, "planning-break-create", "Break creation unavailable");
+            }
+            finally { CryptographicOperations.ZeroMemory(hash); }
+        }).RequireRateLimiting("security-boundary");
+
+        app.MapPost("/api/planning/v2/stop-reasons", async (
+            CreateStopReasonRequest request, HttpContext http, IConfiguration config, CancellationToken ct) =>
+        {
+            http.Response.Headers.CacheControl = "no-store";
+            if (!http.Request.IsHttps || !AllowedOrigin(http, config)) return Results.StatusCode(403);
+            if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
+                || !Guid.TryParse(config["Evidence:SiteId"], out var siteId)
+                || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
+                return Results.StatusCode(503);
+            var code = request.ReasonCode?.Trim().ToUpperInvariant();
+            var name = request.DisplayName?.Trim();
+            var category = request.Category?.Trim();
+            if (string.IsNullOrWhiteSpace(code) || code.Length > 40
+                || string.IsNullOrWhiteSpace(name) || name.Length > 150
+                || category is not ("Breakdown" or "Setup" or "Tooling" or "Material"
+                    or "Quality" or "Operator" or "Planned" or "Other"))
+                return Results.BadRequest(new { error = "Valid reason code, name and category required." });
+            var ticket = await http.AuthenticateAsync("operator-cookie");
+            var bearer = ticket.Principal?.FindFirst("fc2:session")?.Value;
+            if (!ticket.Succeeded || string.IsNullOrWhiteSpace(bearer)) return Results.Unauthorized();
+            byte[] token;
+            try { token = Convert.FromBase64String(bearer); }
+            catch (FormatException) { return Results.Unauthorized(); }
+            if (token.Length != 32) { CryptographicOperations.ZeroMemory(token); return Results.Unauthorized(); }
+            byte[] hash;
+            try { hash = SHA256.HashData(token); }
+            finally { CryptographicOperations.ZeroMemory(token); }
+            try
+            {
+                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .ValidateHumanSessionAsync(hash, ct);
+                var reasonId = Guid.NewGuid();
+                await using var connection = new SqlConnection(config.GetConnectionString("Evidence"));
+                await connection.OpenAsync(ct);
+                await using var command = new SqlCommand("""
+                    INSERT INTO planning.StopReason
+                        (StopReasonId, SiteId, ReasonCode, DisplayName, Category, IsPlanned)
+                    VALUES (@id, @site, @code, @name, @category, @planned)
+                    """, connection);
+                command.Parameters.Add("@id", System.Data.SqlDbType.UniqueIdentifier).Value = reasonId;
+                command.Parameters.Add("@site", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
+                command.Parameters.Add("@code", System.Data.SqlDbType.NVarChar, 40).Value = code;
+                command.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 150).Value = name;
+                command.Parameters.Add("@category", System.Data.SqlDbType.NVarChar, 40).Value = category;
+                command.Parameters.Add("@planned", System.Data.SqlDbType.Bit).Value = request.IsPlanned;
+                await command.ExecuteNonQueryAsync(ct);
+                return Results.Created("/api/planning/v2/stop-reasons", new {
+                    stopReasonId = reasonId, siteId, reasonCode = code, displayName = name,
+                    category, request.IsPlanned
+                });
+            }
+            catch (SecurityDeniedException) { return Results.Unauthorized(); }
+            catch (SqlException ex) when (ex.Number is 2601 or 2627)
+            {
+                return Results.Conflict(new { error = "This site already has a reason with that code." });
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                return AuthorityDiagnostics.Unavailable(http, ex, "planning-reason-create", "Reason creation unavailable");
             }
             finally { CryptographicOperations.ZeroMemory(hash); }
         }).RequireRateLimiting("security-boundary");
