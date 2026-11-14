@@ -1,6 +1,6 @@
 # FactoryConnect V2 local developer runtime helper. No security bootstrap or machine activation.
 [CmdletBinding()]
-param([ValidateSet('Check','Api','Simulator','Dashboard')][string]$Action='Check')
+param([ValidateSet('Check','Identity','Api','Simulator','Dashboard')][string]$Action='Check')
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $settings=Join-Path $PSScriptRoot 'local.settings.json'
@@ -10,11 +10,29 @@ if ($c.database -ne 'FactoryConnect_V2_Dev' -or $c.sqlServer -ne '.\FCINVENTORY'
 if ($c.installationId -ne 'AAE0C57A-BEA6-427F-8046-4E22DDFD63E9') { throw 'Unexpected development installation identity.' }
 $edge=Join-Path $PSScriptRoot 'edge.simulator.local.json'
 $issuer='https://localhost:8443/realms/factoryconnect-dev'
+function DockerContainers {
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI is not installed or not on PATH.' }
+  $null = docker info --format '{{.ServerVersion}}' 2>$null
+  if ($LASTEXITCODE -ne 0) { throw 'Docker engine is unavailable. Start Docker Desktop and retry.' }
+  $names = @(docker ps -a --format '{{.Names}}')
+  foreach ($name in @('dev-identity-identity-db-1','dev-identity-identity-1')) {
+    if ($names -notcontains $name) { throw "Expected existing development identity container not found: $name. Check Docker Desktop; this helper does not create containers." }
+  }
+}
 function Status($label,$ok) { Write-Host ("{0}: {1}" -f $label, $(if($ok){'OK'}else{'NOT READY'})) }
 if ($Action -eq 'Check') {
   Status 'Simulator config' (Test-Path $edge)
-  Status 'Identity secret in current shell' (-not [string]::IsNullOrWhiteSpace($env:Identity__ClientSecret))
-  Status 'Keycloak containers' ([bool](docker ps --format '{{.Names}}' | Select-String -SimpleMatch 'dev-identity-identity-1'))
+  Status 'Identity secret available' (-not [string]::IsNullOrWhiteSpace($env:Identity__ClientSecret) -or -not [string]::IsNullOrWhiteSpace($c.keycloakClientSecret))
+  try {
+    DockerContainers
+    $running = @(docker ps --format '{{.Names}}')
+    Status 'PostgreSQL container' ($running -contains 'dev-identity-identity-db-1')
+    Status 'Keycloak container' ($running -contains 'dev-identity-identity-1')
+  } catch { Write-Warning $_.Exception.Message; Status 'Identity containers' $false }
+  try {
+    $metadata = Invoke-RestMethod -Uri "$issuer/.well-known/openid-configuration" -TimeoutSec 5
+    Status 'Keycloak realm' ($metadata.issuer -eq $issuer)
+  } catch { Status 'Keycloak realm' $false }
   foreach($entry in @(@('Simulator','http://127.0.0.1:5055/health'),@('API','https://localhost:5081/health/live'),@('Dashboard','http://localhost:3000/dashboard/config'))) {
     try { $r=Invoke-WebRequest -Uri $entry[1] -UseBasicParsing -TimeoutSec 3; Status $entry[0] ($r.StatusCode -eq 200) }
     catch { Status $entry[0] $false }
@@ -24,10 +42,25 @@ if ($Action -eq 'Check') {
 Push-Location $root
 try {
   switch($Action) {
+    'Identity' {
+      DockerContainers
+      $running = @(docker ps --format '{{.Names}}')
+      foreach ($name in @('dev-identity-identity-db-1','dev-identity-identity-1')) {
+        if ($running -notcontains $name) {
+          docker start $name | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Failed to start $name" }
+        }
+      }
+      Write-Host 'Development PostgreSQL and Keycloak containers started. Use -Action Check to verify realm readiness.'
+    }
     'Simulator' { python .\scripts\dev\mtconnect_simulator.py --port 5055 --observations 120 }
     'Dashboard' { & (Join-Path $PSScriptRoot 'Start-Dashboard.ps1') -Mode Real }
     'Api' {
       if (-not (Test-Path $edge)) { throw "Missing $edge" }
+      if ([string]::IsNullOrWhiteSpace($env:Identity__ClientSecret) -and
+          -not [string]::IsNullOrWhiteSpace($c.keycloakClientSecret)) {
+        $env:Identity__ClientSecret = [string]$c.keycloakClientSecret
+      }
       if ([string]::IsNullOrWhiteSpace($env:Identity__ClientSecret)) {
         $secret=Read-Host 'Keycloak confidential client secret' -AsSecureString
         $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
