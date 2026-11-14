@@ -30,7 +30,18 @@ AcquisitionHealth:MaxAgeSeconds=60
 
 The API and acquisition host must be able to access the **same filesystem path**. This is a single-machine, collocated-host configuration; remote Edge-to-API snapshot transport is not implemented. Do not place credentials in dashboard code or query parameters.
 
-## 3. Run the acquisition host
+## 3. Validate acquisition configuration before starting
+
+On the local development machine, check the configuration file and provisioned certificate/key paths without opening an MTConnect connection or writing to SQL:
+
+```powershell
+dotnet run --project tools/FactoryConnect.AcquisitionHost -- --config "C:\\fc2-local\\machine.json" --check
+```
+
+A successful check reports `status: configuration-valid` and `acquisitionStarted: false`.
+It validates the configuration shape and local files only; it **does not** prove runtime authorization, MTConnect connectivity, certificate trust, SQL connectivity, or that the CNC is collecting. Exit code 20 means configuration validation failed. The command does not print the SQL connection string or certificate contents.
+
+## 4. Run the acquisition host
 
 From the repository root, with the disposable test database and approved test agent confirmed:
 
@@ -48,7 +59,7 @@ dotnet run --project tools/FactoryConnect.AcquisitionHost -- --health "C:\\fc2-l
 
 Exit code 0 means only that the latest snapshot is a recent `idle` or `committed` host event. Exit code 20 means missing, stale, malformed or non-operational status. It does **not** prove current CNC activity.
 
-## 4. Verify accepted evidence, processing and dashboard
+## 5. Verify accepted evidence, processing and dashboard
 
 1. With a valid existing machine-scoped commissioning session, use the host's `--config ... --read` command. Send the Base64-encoded 32-byte bearer **through redirected stdin**, not command-line arguments. Verify accepted observation source sequence and provenance. Do not log the bearer.
 2. Run the existing V2 activity-processing host for this commissioned machine using its own documented configuration and runtime authority. Confirm that published activity is based on accepted evidence; acquisition alone does not create activity periods.
@@ -56,10 +67,10 @@ Exit code 0 means only that the latest snapshot is a recent `idle` or `committed
 4. Open **Published activity history** for the exact machine. Confirm verified processed checkpoint and any published closed periods. Historical state is not a live machine-state claim.
 5. Select **Check acquisition health**. Verify the host event, snapshot age, last MTConnect source response and last durable SQL admission. Optionally enable visible-tab-only 30-second refresh. A 503 means health is not configured/available, not that a CNC is necessarily disconnected.
 
-## 5. Acceptance record
+## 6. Acceptance record
 
 Record the exact V2 commit, test database name, installation/site/machine IDs, stream key, approved package/acknowledgement IDs, agent endpoint identity (no credentials), source instance and retained sequence, first and last durable cursor, host health events, activity checkpoint, dashboard screenshots and any held reason. **PASS** requires verified durable evidence admission, corresponding processed activity, and authenticated dashboard visibility for the same machine. If any stage is absent, record **PARTIAL**, not PASS.
 
-## 6. Stop and recover safely
+## 7. Stop and recover safely
 
 Stop the acquisition host with Ctrl+C or `stop` on redirected stdin. Exit 0 means graceful stop; exit 20 means held/failure. Never delete SQL evidence, alter the durable cursor, reset a source generation, or bypass approval/activation to force progress. Investigate the held reason and preserve the snapshot and logs. No production activation, automatic Windows startup or unattended restart is authorized by this guide.
