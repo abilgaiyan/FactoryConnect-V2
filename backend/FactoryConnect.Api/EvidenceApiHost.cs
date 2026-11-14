@@ -252,6 +252,7 @@ app.MapActivityHistory();
 app.MapMasterRegistration();
 app.MapMachineActivationReadiness();
 app.MapMachineOperational();
+app.MapHumanAccessAdministration();
 app.MapMtConnectDiscovery();
 
 app.MapMethods("/api/{**path}", ["GET", "POST"], NotReady);
