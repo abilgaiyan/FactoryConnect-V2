@@ -1,6 +1,6 @@
 # FactoryConnect V2 local developer runtime helper. No security bootstrap or machine activation.
 [CmdletBinding()]
-param([ValidateSet('Check','Identity','Api','Simulator','Dashboard')][string]$Action='Check')
+param([ValidateSet('Check','StartAll','Identity','Api','Simulator','Dashboard')][string]$Action='Check')
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $settings=Join-Path $PSScriptRoot 'local.settings.json'
@@ -18,6 +18,16 @@ function DockerContainers {
   foreach ($name in @('dev-identity-identity-db-1','dev-identity-identity-1')) {
     if ($names -notcontains $name) { throw "Expected existing development identity container not found: $name. Check Docker Desktop; this helper does not create containers." }
   }
+}
+function IsReady($uri) {
+  try { return (Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200 }
+  catch { return $false }
+}
+function StartLocalWindow($action) {
+  $scriptPath = Join-Path $PSScriptRoot 'Start-Local.ps1'
+  $command = "& '" + $scriptPath.Replace("'","''") + "' -Action " + $action
+  Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-NoExit','-Command', $command) | Out-Null
+  Write-Host "Started $action in a separate PowerShell window."
 }
 function Status($label,$ok) { Write-Host ("{0}: {1}" -f $label, $(if($ok){'OK'}else{'NOT READY'})) }
 if ($Action -eq 'Check') {
@@ -42,6 +52,28 @@ if ($Action -eq 'Check') {
 Push-Location $root
 try {
   switch($Action) {
+    'StartAll' {
+      DockerContainers
+      $running = @(docker ps --format '{{.Names}}')
+      foreach ($name in @('dev-identity-identity-db-1','dev-identity-identity-1')) {
+        if ($running -notcontains $name) {
+          docker start $name | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Failed to start $name" }
+        }
+      }
+      if (-not (Test-Path $edge)) { throw "Missing $edge" }
+      if ([string]::IsNullOrWhiteSpace($env:Identity__ClientSecret) -and
+          [string]::IsNullOrWhiteSpace($c.keycloakClientSecret)) {
+        throw 'Set keycloakClientSecret in ignored local.settings.json before StartAll; never put secrets in command arguments.'
+      }
+      if (-not (IsReady 'http://127.0.0.1:5055/health')) { StartLocalWindow 'Simulator' }
+      else { Write-Host 'Simulator already responding.' }
+      if (-not (IsReady 'https://localhost:5081/health/live')) { StartLocalWindow 'Api' }
+      else { Write-Host 'API already responding.' }
+      if (-not (IsReady 'http://localhost:3000/dashboard/config')) { StartLocalWindow 'Dashboard' }
+      else { Write-Host 'Dashboard already responding.' }
+      Write-Host 'Startup requested. Wait for services, then run -Action Check. Acquisition is not started.'
+    }
     'Identity' {
       DockerContainers
       $running = @(docker ps --format '{{.Names}}')
