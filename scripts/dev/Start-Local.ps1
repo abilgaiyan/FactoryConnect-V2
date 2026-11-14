@@ -22,7 +22,7 @@ function DockerContainers {
 function Status($label,$ok) { Write-Host ("{0}: {1}" -f $label, $(if($ok){'OK'}else{'NOT READY'})) }
 if ($Action -eq 'Check') {
   Status 'Simulator config' (Test-Path $edge)
-  Status 'Identity secret in current shell' (-not [string]::IsNullOrWhiteSpace($env:Identity__ClientSecret))
+  Status 'Identity secret available' (-not [string]::IsNullOrWhiteSpace($env:Identity__ClientSecret) -or -not [string]::IsNullOrWhiteSpace($c.keycloakClientSecret))
   try {
     DockerContainers
     $running = @(docker ps --format '{{.Names}}')
@@ -57,6 +57,10 @@ try {
     'Dashboard' { & (Join-Path $PSScriptRoot 'Start-Dashboard.ps1') -Mode Real }
     'Api' {
       if (-not (Test-Path $edge)) { throw "Missing $edge" }
+      if ([string]::IsNullOrWhiteSpace($env:Identity__ClientSecret) -and
+          -not [string]::IsNullOrWhiteSpace($c.keycloakClientSecret)) {
+        $env:Identity__ClientSecret = [string]$c.keycloakClientSecret
+      }
       if ([string]::IsNullOrWhiteSpace($env:Identity__ClientSecret)) {
         $secret=Read-Host 'Keycloak confidential client secret' -AsSecureString
         $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
