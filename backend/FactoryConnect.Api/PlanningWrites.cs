@@ -60,26 +60,28 @@ internal static class PlanningWrites
             finally { CryptographicOperations.ZeroMemory(token); }
             try
             {
-                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
-                    .ValidateHumanSessionAsync(hash, ct);
+                // Authorization and mutation must be one transaction, not separate session validation and SQL writes.
+                return await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .WriteAsync(hash, "security.access.manage", AuthorizationScope.Site(siteId),
+                        async (connection, transaction, actor, token) =>
+                        {
                 var shiftId = Guid.NewGuid();
-                await using var connection = new SqlConnection(config.GetConnectionString("Evidence"));
-                await connection.OpenAsync(ct);
                 await using var command = new SqlCommand("""
                     INSERT INTO planning.ShiftDefinition
                         (ShiftId, SiteId, DisplayName, StartMinute, EndMinute)
                     VALUES (@shiftId, @siteId, @name, @start, @end)
-                    """, connection);
+                    """, connection, transaction);
                 command.Parameters.Add("@shiftId", System.Data.SqlDbType.UniqueIdentifier).Value = shiftId;
                 command.Parameters.Add("@siteId", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
                 command.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 100).Value = name;
                 command.Parameters.Add("@start", System.Data.SqlDbType.SmallInt).Value = request.StartMinute;
                 command.Parameters.Add("@end", System.Data.SqlDbType.SmallInt).Value = request.EndMinute;
-                await command.ExecuteNonQueryAsync(ct);
-                return Results.Created($"/api/planning/v2/shifts", new
+                await command.ExecuteNonQueryAsync(token);
+                return (IResult)Results.Created($"/api/planning/v2/shifts", new
                 {
                     shiftId, siteId, displayName = name, request.StartMinute, request.EndMinute
                 });
+                        }, ct);
             }
             catch (SecurityDeniedException) { return Results.Unauthorized(); }
             catch (SqlException ex) when (ex.Number == 51041)
@@ -122,11 +124,12 @@ internal static class PlanningWrites
             finally { CryptographicOperations.ZeroMemory(token); }
             try
             {
-                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
-                    .ValidateHumanSessionAsync(hash, ct);
+                // Authorization and mutation must be one transaction, not separate session validation and SQL writes.
+                return await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .WriteAsync(hash, "security.access.manage", AuthorizationScope.Site(siteId),
+                        async (connection, transaction, actor, token) =>
+                        {
                 var breakId = Guid.NewGuid();
-                await using var connection = new SqlConnection(config.GetConnectionString("Evidence"));
-                await connection.OpenAsync(ct);
                 await using var command = new SqlCommand("""
                     INSERT INTO planning.ShiftBreak
                         (BreakId, ShiftId, DisplayName, StartOffsetMinute, DurationMinute,
@@ -134,7 +137,7 @@ internal static class PlanningWrites
                     SELECT @breakId, ShiftId, @name, @start, @duration, @exclude
                     FROM planning.ShiftDefinition
                     WHERE ShiftId = @shiftId AND SiteId = @siteId AND IsRetired = 0
-                    """, connection);
+                    """, connection, transaction);
                 command.Parameters.Add("@breakId", System.Data.SqlDbType.UniqueIdentifier).Value = breakId;
                 command.Parameters.Add("@shiftId", System.Data.SqlDbType.UniqueIdentifier).Value = shiftId;
                 command.Parameters.Add("@siteId", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
@@ -142,12 +145,13 @@ internal static class PlanningWrites
                 command.Parameters.Add("@start", System.Data.SqlDbType.SmallInt).Value = request.StartOffsetMinute;
                 command.Parameters.Add("@duration", System.Data.SqlDbType.SmallInt).Value = request.DurationMinute;
                 command.Parameters.Add("@exclude", System.Data.SqlDbType.Bit).Value = request.ExcludeFromPlannedProduction;
-                if (await command.ExecuteNonQueryAsync(ct) == 0) return Results.NotFound();
-                return Results.Created($"/api/planning/v2/shifts/{shiftId}/breaks", new
+                if (await command.ExecuteNonQueryAsync(token) == 0) return (IResult)Results.NotFound();
+                return (IResult)Results.Created($"/api/planning/v2/shifts/{shiftId}/breaks", new
                 {
                     breakId, shiftId, displayName = name, request.StartOffsetMinute,
                     request.DurationMinute, request.ExcludeFromPlannedProduction
                 });
+                        }, ct);
             }
             catch (SecurityDeniedException) { return Results.Unauthorized(); }
             catch (SqlException ex) when (ex.Number is 51040 or 51043)
@@ -191,27 +195,29 @@ internal static class PlanningWrites
             finally { CryptographicOperations.ZeroMemory(token); }
             try
             {
-                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
-                    .ValidateHumanSessionAsync(hash, ct);
+                // Authorization and mutation must be one transaction, not separate session validation and SQL writes.
+                return await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .WriteAsync(hash, "security.access.manage", AuthorizationScope.Site(siteId),
+                        async (connection, transaction, actor, token) =>
+                        {
                 var reasonId = Guid.NewGuid();
-                await using var connection = new SqlConnection(config.GetConnectionString("Evidence"));
-                await connection.OpenAsync(ct);
                 await using var command = new SqlCommand("""
                     INSERT INTO planning.StopReason
                         (StopReasonId, SiteId, ReasonCode, DisplayName, Category, IsPlanned)
                     VALUES (@id, @site, @code, @name, @category, @planned)
-                    """, connection);
+                    """, connection, transaction);
                 command.Parameters.Add("@id", System.Data.SqlDbType.UniqueIdentifier).Value = reasonId;
                 command.Parameters.Add("@site", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
                 command.Parameters.Add("@code", System.Data.SqlDbType.NVarChar, 40).Value = code;
                 command.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 150).Value = name;
                 command.Parameters.Add("@category", System.Data.SqlDbType.NVarChar, 40).Value = category;
                 command.Parameters.Add("@planned", System.Data.SqlDbType.Bit).Value = request.IsPlanned;
-                await command.ExecuteNonQueryAsync(ct);
-                return Results.Created("/api/planning/v2/stop-reasons", new {
+                await command.ExecuteNonQueryAsync(token);
+                return (IResult)Results.Created("/api/planning/v2/stop-reasons", new {
                     stopReasonId = reasonId, siteId, reasonCode = code, displayName = name,
                     category, request.IsPlanned
                 });
+                        }, ct);
             }
             catch (SecurityDeniedException) { return Results.Unauthorized(); }
             catch (SqlException ex) when (ex.Number is 2601 or 2627)
