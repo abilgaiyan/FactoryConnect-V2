@@ -15,6 +15,10 @@ public static class HumanAccessAdministrationApi
 
     public static void MapHumanAccessAdministration(this WebApplication app)
     {
+        app.MapGet("/api/admin/v2/security/access-context", async (HttpContext http,
+            IConfiguration config, CancellationToken ct) =>
+            await Execute(http, config, (authority, hash) => authority.ReadAccessAdministrationAsync(hash, ct), ct))
+            .RequireRateLimiting("security-boundary");
         app.MapPost("/api/admin/v2/security/humans", async (EnrollInput input, HttpContext http,
             IConfiguration config, CancellationToken ct) =>
             await Execute(http, config, (authority, hash) => authority.EnrollHumanAsync(hash,
