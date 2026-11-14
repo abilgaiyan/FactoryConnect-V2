@@ -9,6 +9,8 @@ internal static class PlanningWrites
 {
     internal sealed record CreateShiftRequest(string? DisplayName, int StartMinute, int EndMinute);
 
+    internal sealed record RecordShiftTargetRequest(Guid ShiftId, DateOnly BusinessDate, decimal TargetQuantity, string? QuantityUnit, string? ProductionOrder, string? PartNumber, string? Operation, string? RevisionReason);
+
     internal sealed record CreateStopReasonRequest(string? ReasonCode, string? DisplayName, string? Category, bool IsPlanned);
 
     internal sealed record CreateBreakRequest(string? DisplayName, int StartOffsetMinute, int DurationMinute, bool ExcludeFromPlannedProduction);
@@ -229,6 +231,91 @@ internal static class PlanningWrites
             {
                 return AuthorityDiagnostics.Unavailable(http, ex, "planning-reason-create", "Reason creation unavailable");
             }
+            finally { CryptographicOperations.ZeroMemory(hash); }
+        }).RequireRateLimiting("security-boundary");
+
+        app.MapPost("/api/planning/v2/machines/{machineId:guid}/targets", async (
+            Guid machineId, RecordShiftTargetRequest request, HttpContext http, IConfiguration config, CancellationToken ct) =>
+        {
+            http.Response.Headers.CacheControl = "no-store";
+            if (!http.Request.IsHttps || !AllowedOrigin(http, config)) return Results.StatusCode(403);
+            if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
+                || !Guid.TryParse(config["Evidence:SiteId"], out var siteId)
+                || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
+                return Results.StatusCode(503);
+            var unit = request.QuantityUnit?.Trim();
+            var reason = request.RevisionReason?.Trim();
+            var order = request.ProductionOrder?.Trim();
+            var part = request.PartNumber?.Trim();
+            var operation = request.Operation?.Trim();
+            if (machineId == Guid.Empty || request.ShiftId == Guid.Empty
+                || request.BusinessDate.Year is < 2000 or > 2100
+                || request.TargetQuantity < 0 || request.TargetQuantity > 999999999999999m
+                || decimal.Round(request.TargetQuantity, 3) != request.TargetQuantity
+                || string.IsNullOrWhiteSpace(unit) || unit.Length > 50
+                || string.IsNullOrWhiteSpace(reason) || reason.Length > 1000
+                || order?.Length > 100 || part?.Length > 100 || operation?.Length > 100)
+                return Results.BadRequest(new { error = "Valid machine, shift, business date, nonnegative target, unit and revision reason required." });
+            var ticket = await http.AuthenticateAsync("operator-cookie");
+            var bearer = ticket.Principal?.FindFirst("fc2:session")?.Value;
+            if (!ticket.Succeeded || string.IsNullOrWhiteSpace(bearer)) return Results.Unauthorized();
+            byte[] token;
+            try { token = Convert.FromBase64String(bearer); }
+            catch (FormatException) { return Results.Unauthorized(); }
+            if (token.Length != 32) { CryptographicOperations.ZeroMemory(token); return Results.Unauthorized(); }
+            byte[] hash;
+            try { hash = SHA256.HashData(token); }
+            finally { CryptographicOperations.ZeroMemory(token); }
+            try
+            {
+                return await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .WriteAsync(hash, "security.access.manage", AuthorizationScope.Machine(siteId, machineId),
+                        async (connection, transaction, actor, cancellation) =>
+                        {
+                            // Serializes revisions per machine/shift/date under the installation write gate.
+                            // The FK constraints reject a shift or machine outside the configured site.
+                            var revisionId = Guid.NewGuid();
+                            await using var command = new SqlCommand("""
+                                INSERT INTO planning.ShiftTargetRevision
+                                    (TargetRevisionId, SiteId, MachineId, ShiftId, BusinessDate, Revision,
+                                     TargetQuantity, QuantityUnit, ProductionOrder, PartNumber, Operation,
+                                     RevisionReason, RecordedByPrincipalId)
+                                SELECT @id, @site, m.MachineId, s.ShiftId, @date,
+                                       COALESCE((SELECT MAX(t.Revision) FROM planning.ShiftTargetRevision t
+                                           WHERE t.MachineId=@machine AND t.ShiftId=@shift AND t.BusinessDate=@date),0)+1,
+                                       @quantity, @unit, @order, @part, @operation, @reason, @actor
+                                FROM master.Machine m CROSS JOIN planning.ShiftDefinition s
+                                WHERE m.MachineId=@machine AND m.SiteId=@site
+                                  AND s.ShiftId=@shift AND s.SiteId=@site AND s.IsRetired=0;
+                                SELECT Revision FROM planning.ShiftTargetRevision WHERE TargetRevisionId=@id;
+                                """, connection, transaction);
+                            command.Parameters.Add("@id", System.Data.SqlDbType.UniqueIdentifier).Value = revisionId;
+                            command.Parameters.Add("@site", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
+                            command.Parameters.Add("@machine", System.Data.SqlDbType.UniqueIdentifier).Value = machineId;
+                            command.Parameters.Add("@shift", System.Data.SqlDbType.UniqueIdentifier).Value = request.ShiftId;
+                            command.Parameters.Add("@date", System.Data.SqlDbType.Date).Value = request.BusinessDate.ToDateTime(TimeOnly.MinValue);
+                            var quantity = command.Parameters.Add("@quantity", System.Data.SqlDbType.Decimal);
+                            quantity.Precision = 18; quantity.Scale = 3; quantity.Value = request.TargetQuantity;
+                            command.Parameters.Add("@unit", System.Data.SqlDbType.NVarChar, 50).Value = unit;
+                            command.Parameters.Add("@order", System.Data.SqlDbType.NVarChar, 100).Value = (object?)order ?? DBNull.Value;
+                            command.Parameters.Add("@part", System.Data.SqlDbType.NVarChar, 100).Value = (object?)part ?? DBNull.Value;
+                            command.Parameters.Add("@operation", System.Data.SqlDbType.NVarChar, 100).Value = (object?)operation ?? DBNull.Value;
+                            command.Parameters.Add("@reason", System.Data.SqlDbType.NVarChar, 1000).Value = reason;
+                            command.Parameters.Add("@actor", System.Data.SqlDbType.UniqueIdentifier).Value = actor;
+                            var revision = await command.ExecuteScalarAsync(cancellation);
+                            if (revision is null) return (IResult)Results.NotFound();
+                            return (IResult)Results.Created($"/api/planning/v2/machines/{machineId}/targets?businessDate={request.BusinessDate:yyyy-MM-dd}",
+                                new { targetRevisionId = revisionId, siteId, machineId, request.ShiftId,
+                                      request.BusinessDate, revision = (int)revision, request.TargetQuantity,
+                                      quantityUnit = unit, revisionReason = reason, recordedByPrincipalId = actor });
+                        }, ct);
+            }
+            catch (SecurityDeniedException) { return Results.StatusCode(403); }
+            catch (SqlException ex) when (ex.Number is 2601 or 2627)
+            { return Results.Conflict(new { error = "Concurrent target revision conflict. Reload and retry." }); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            { return AuthorityDiagnostics.Unavailable(http, ex, "planning-target-write", "Target revision unavailable"); }
             finally { CryptographicOperations.ZeroMemory(hash); }
         }).RequireRateLimiting("security-boundary");
     }
