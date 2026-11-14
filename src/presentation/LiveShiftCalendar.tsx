@@ -1,3 +1,4 @@
+import LiveStopReasonMaster from "./LiveStopReasonMaster.tsx";
 import { useEffect, useState } from "react";
 
 interface Shift {
@@ -28,6 +29,7 @@ export default function LiveShiftCalendar() {
   const [breakDuration, setBreakDuration] = useState("30");
   const [excludeBreak, setExcludeBreak] = useState(true);
   const [breakReload, setBreakReload] = useState(0);
+  const [reasonOpen, setReasonOpen] = useState(false);
   async function createBreak(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setNotice("");
     const shift = shifts?.find(s => s.shiftId === selected);
@@ -44,7 +46,7 @@ export default function LiveShiftCalendar() {
       setNotice("Planned break saved to SQL."); setBreakReload(v => v + 1); setRetry(v => v + 1);
     } catch (e) { setError(String(e)); } finally { setSaving(false); }
   }
-  function minute(value: string): number { const parts = /^(\\d{2}):(\\d{2})$/.exec(value); return parts ? Number(parts[1]) * 60 + Number(parts[2]) : -1; }
+  function minute(value: string): number { const parts = /^(\d{2}):(\d{2})$/.exec(value); return parts ? Number(parts[1]) * 60 + Number(parts[2]) : -1; }
   async function createShift(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setNotice("");
     if (!name.trim() || minute(start) < 0 || minute(end) < 0 || start === end) { setError("Provide a name and distinct valid start/end times."); return; }
@@ -122,5 +124,10 @@ export default function LiveShiftCalendar() {
       </>}
     </>}
     </>}
+    <section aria-label="Stop reason administration">
+      <h2>Stop Reason Master</h2>
+      <button type="button" aria-expanded={reasonOpen} onClick={() => setReasonOpen(v => !v)}>{reasonOpen ? "Close reason master" : "Open reason master"}</button>
+      {reasonOpen && <LiveStopReasonMaster />}
+    </section>
   </section>;
 }
