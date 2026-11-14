@@ -12,6 +12,7 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
   const [targets, setTargets] = useState<Target[] | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [selectedShift, setSelectedShift] = useState("");
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -37,12 +38,14 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
       <button type="button" onClick={() => setRetry(value => value + 1)}>Retry targets</button></>
       : targets === null ? <p role="status">Loading recorded targets…</p>
       : targets.length === 0 ? <p>No targets recorded for this machine and business date. This is not a zero target.</p>
-      : <table><thead><tr><th>Shift</th><th>Target</th><th>Job / part / operation</th><th>Revision</th><th>Reason</th></tr></thead>
+      : <><label>Inspect target revision <select value={selectedShift} onChange={e => setSelectedShift(e.target.value)}><option value="">Select a recorded shift</option>{targets.map(t => <option key={t.shiftId} value={t.shiftId}>Shift {t.shiftId} · revision {t.revision}</option>)}</select></label>
+      {selectedShift && (() => { const target = targets.find(t => t.shiftId === selectedShift); return target ? <p>Recorded at {target.recordedAtUtc} · revision {target.revision} · target {target.targetQuantity} {target.quantityUnit}. Revision reason: {target.revisionReason}</p> : null; })()}
+      <table><thead><tr><th>Shift</th><th>Target</th><th>Job / part / operation</th><th>Revision</th><th>Reason</th></tr></thead>
         <tbody>{targets.map(target => <tr key={target.targetRevisionId}>
           <td>{target.shiftId}</td><td>{target.targetQuantity} {target.quantityUnit}</td>
           <td>{[target.productionOrder, target.partNumber, target.operation].filter(Boolean).join(" · ") || "Not specified"}</td>
           <td>{target.revision}</td><td>{target.revisionReason}</td>
-        </tr>)}</tbody></table>)}
+        </tr>)}</tbody></table></>)}
     <p>Targets are administrative plans, not measured production or OEE.</p>
   </section>;
 }
