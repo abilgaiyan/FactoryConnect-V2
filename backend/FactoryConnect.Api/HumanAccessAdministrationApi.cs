@@ -27,11 +27,19 @@ public static class HumanAccessAdministrationApi
             await Execute(http, config, (authority, hash) => authority.GrantPermissionAsync(hash,
                 new PermissionGrantRequest(input.OperationId, input.GrantId, input.GranteeId,
                     input.ParentGrantId, input.Permission,
-                    new AuthorizationScope(input.ScopeKind, input.SiteId, input.MachineId),
+                    Scope(input.ScopeKind, input.SiteId, input.MachineId),
                     input.UseAllowed, input.CanDelegate, input.EffectiveFrom, input.ExpiresAt,
                     input.ExpectedEpoch, input.Reason), ct), ct))
             .RequireRateLimiting("security-boundary");
     }
+
+    private static AuthorizationScope Scope(string kind, Guid? site, Guid? machine) => kind switch
+    {
+        "I" when site is null && machine is null => AuthorizationScope.Installation,
+        "S" when site is { } s && machine is null => AuthorizationScope.Site(s),
+        "M" when site is { } s && machine is { } m => AuthorizationScope.Machine(s, m),
+        _ => throw new ArgumentException("Invalid permission scope.")
+    };
 
     private static async Task<IResult> Execute(HttpContext http, IConfiguration config,
         Func<SqlSecurityAuthority, byte[], Task<byte[]>> action, CancellationToken ct)
