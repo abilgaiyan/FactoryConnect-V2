@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HumanAccessAdministration } from "./HumanAccessAdministration.tsx";
 import { readAllOperatorEvidenceMachines, type OperatorEvidenceMachine } from "../api/evidence/operator-evidence-machines-client.ts";
 
 /** Human-readable next action derived from the authoritative commissioning reason. */
@@ -806,6 +807,7 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
 
   return <section aria-labelledby="machine-administration-title">
     <h1 id="machine-administration-title">Machine administration</h1>
+    <HumanAccessAdministration sessionBearer={sessionBearer} baseAddress={baseAddress} />
     <p>Authorized machine discovery — read only. This list includes only machines for which your session has
       commissioning evidence access. It is not the complete registered machine inventory or proof of live connectivity.</p>
 
