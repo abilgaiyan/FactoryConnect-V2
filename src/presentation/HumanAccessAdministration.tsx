@@ -34,8 +34,11 @@ export function HumanAccessAdministration({ sessionBearer, baseAddress }: {
     const fingerprint = JSON.stringify({ kind, subject, issuer, principalId, epoch, reason,
       parentGrantId, siteId, permission, effectiveUntil });
     if (pending.current?.fingerprint !== fingerprint)
-      pending.current = { fingerprint, operationId: crypto.randomUUID(), grantId: kind === "grant" ? crypto.randomUUID() : undefined };
+      pending.current = kind === "grant"
+        ? { fingerprint, operationId: crypto.randomUUID(), grantId: crypto.randomUUID() }
+        : { fingerprint, operationId: crypto.randomUUID() };
     const operation = pending.current;
+    if (!operation) return;
     const body = kind === "enroll"
       ? { operationId: operation.operationId, principalId, issuer, subject, expectedEpoch, reason }
       : { operationId: operation.operationId, grantId: operation.grantId, granteeId: principalId,
