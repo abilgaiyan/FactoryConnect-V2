@@ -1084,11 +1084,21 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       {inventory.length > 0 && visibleInventory.length === 0 && <p>No machines match the current filters.</p>}
     </div>}
     <h3>Machine operational controls</h3>
+    <p>Commissioning status: {selectedOperationalMachine ?
+      (activationReadiness[selectedOperationalMachine.toLowerCase()]?.status ?? "Not available") :
+      "Select a machine"}. Activation acknowledgement: {selectedOperationalMachine &&
+      activationReadiness[selectedOperationalMachine.toLowerCase()]?.acknowledgesRequestedActivation ?
+      "Received" : "Not received"}. Refresh readiness after each operation.</p>
     <p>Enablement requires two different authorized administrators. Proposing does not enable the machine;
       approval does not activate MTConnect acquisition. Use the same proposal ID when the second administrator signs in.</p>
     <label htmlFor="operational-machine">Select machine</label>
     <select id="operational-machine" value={selectedOperationalMachine}
-      onChange={event => { setSelectedOperationalMachine(event.currentTarget.value); setOperationalMessage(""); }}>
+      onChange={event => { setSelectedOperationalMachine(event.currentTarget.value); setOperationalMessage("");
+        setRuntimeAssignmentMessage(""); setActivationMessage(""); setRuntimeIdentityId("");
+        setCredentialGeneration(""); setAssignmentGeneration(""); setPriorAssignmentId("");
+        setActivationFields({ packageRevisionId: "", contentHash: "", approvalReviewId: "",
+          runtimeIdentityId: "", assignmentId: "", assignmentGeneration: "", credentialGeneration: "",
+          expectedActivationGeneration: "0", supersedesActivationId: "" }); }}>
       <option value="">Choose a registered machine</option>
       {(inventory ?? []).filter(machine => !machine.isRetired).map(machine =>
         <option key={machine.machineId} value={machine.machineId}>{machine.displayName}</option>)}
