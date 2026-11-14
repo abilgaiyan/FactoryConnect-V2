@@ -6,6 +6,7 @@ import { formatActivityDuration, loadActivityReport, type ActivityReport } from 
 import { ShiftPerformancePageStateView } from "./ShiftPerformancePageStateView.tsx";
 import { ShiftPerformanceOverviewView } from "./ShiftPerformanceOverviewView.tsx";
 import type { ShiftPerformanceMachine, ShiftPerformanceOverview, ShiftPerformanceShift } from "./shift-performance-model.ts";
+import LiveMachineShiftTargets from "./LiveMachineShiftTargets.tsx";
 import { MachineActivityEvidence } from "./MachineActivityEvidence.tsx";
 
 export function occurrenceKey(machine: ShiftPerformanceMachine, occurrence: ShiftPerformanceShift): string {
@@ -66,6 +67,7 @@ function OccurrenceRead({ overview, runtime }: { readonly overview: ShiftPerform
       <p>Production business date {overview.productionDay} · Site {selected.machine.siteId} · Line {selected.machine.productionLineId}</p>
       <p>Machine {selected.machine.machineId} · Reporting processor {selected.machine.processorId}<br />Assignment {selected.occurrence.shift.shiftScheduleAssignmentId} · Shift {selected.occurrence.shift.shiftId}<br />Exact UTC {selected.occurrence.shift.startsAtUtc} – {selected.occurrence.shift.endsAtUtc}</p>
       <p>Metric evidence read time: not returned by this presentation contract. Reporting source revision: <code>{selected.occurrence.sourceRevision === null ? "Not returned" : JSON.stringify(selected.occurrence.sourceRevision)}</code></p>
+      <LiveMachineShiftTargets key={`targets:${selectedKey}`} machineId={selected.machine.machineId} businessDate={overview.productionDay} />
       <ShiftPerformanceOverviewView key={`metrics:${selectedKey}`} showFilters={false} overview={{ productionDay: overview.productionDay, groups: [{ groupName: null, machines: [{ ...selected.machine, shifts: [selected.occurrence] }] }] }} />
       <p>Metrics and activity use the same machine and UTC occurrence scope, but are independent reads and revision domains. No common atomic snapshot or metric/activity convergence is claimed.</p>
       <ExactActivity key={`activity:${selectedKey}`} machine={selected.machine} occurrence={selected.occurrence} timeoutMilliseconds={runtime.configuration.requestTimeoutMilliseconds} />
