@@ -6,6 +6,7 @@ import { formatActivityDuration, loadActivityReport, type ActivityReport } from 
 import { ShiftPerformancePageStateView } from "./ShiftPerformancePageStateView.tsx";
 import { ShiftPerformanceOverviewView } from "./ShiftPerformanceOverviewView.tsx";
 import type { ShiftPerformanceMachine, ShiftPerformanceOverview, ShiftPerformanceShift } from "./shift-performance-model.ts";
+import LiveStopReasonPicker from "./LiveStopReasonPicker.tsx";
 import LiveMachineShiftTargets from "./LiveMachineShiftTargets.tsx";
 import { MachineActivityEvidence } from "./MachineActivityEvidence.tsx";
 
@@ -70,6 +71,7 @@ function OccurrenceRead({ overview, runtime }: { readonly overview: ShiftPerform
       <LiveMachineShiftTargets key={`targets:${selectedKey}`} machineId={selected.machine.machineId} businessDate={overview.productionDay} />
       <ShiftPerformanceOverviewView key={`metrics:${selectedKey}`} showFilters={false} overview={{ productionDay: overview.productionDay, groups: [{ groupName: null, machines: [{ ...selected.machine, shifts: [selected.occurrence] }] }] }} />
       <p>Metrics and activity use the same machine and UTC occurrence scope, but are independent reads and revision domains. No common atomic snapshot or metric/activity convergence is claimed.</p>
+      <LiveStopReasonPicker key={`reasons:${selectedKey}`} machineId={selected.machine.machineId} />
       <ExactActivity key={`activity:${selectedKey}`} machine={selected.machine} occurrence={selected.occurrence} timeoutMilliseconds={runtime.configuration.requestTimeoutMilliseconds} />
     </>}
   </>;
