@@ -12,12 +12,14 @@ function clock(minute: number): string {
   return `${String(Math.floor((minute % 1440) / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 }
 export default function LiveShiftCalendar() {
+  const [open, setOpen] = useState(false);
   const [shifts, setShifts] = useState<Shift[] | null>(null);
   const [breaks, setBreaks] = useState<ShiftBreak[] | null>(null);
   const [selected, setSelected] = useState("");
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   useEffect(() => {
+    if (!open) return;
     const controller = new AbortController();
     setShifts(null); setError("");
     void fetch("/api/planning/v2/shifts", { credentials: "include", signal: controller.signal })
@@ -28,7 +30,7 @@ export default function LiveShiftCalendar() {
         setShifts(payload.shifts);
       }).catch(e => { if (!controller.signal.aborted) setError(String(e)); });
     return () => controller.abort();
-  }, [retry]);
+  }, [retry, open]);
   useEffect(() => {
     if (!selected) { setBreaks(null); return; }
     const controller = new AbortController();
@@ -45,6 +47,8 @@ export default function LiveShiftCalendar() {
   }, [selected]);
   return <section aria-label="Live shift calendar">
     <h2>Shift calendar · live SQL planning</h2>
+    <button type="button" aria-expanded={open} onClick={() => { setOpen(v => !v); setSelected(""); setError(""); }}> {open ? "Close shift calendar" : "Open shift calendar"} </button>
+    {open && <>
     <p>Configured shifts and excluded breaks. This is planning data, not machine evidence or calculated OEE.</p>
     {error && <><p role="alert">{error}. No sample fallback.</p><button type="button" onClick={() => { setSelected(""); setRetry(v => v + 1); }}>Retry shift calendar</button></>}
     {!error && shifts === null && <p role="status">Loading shift definitions…</p>}
@@ -63,6 +67,7 @@ export default function LiveShiftCalendar() {
           : <ul>{breaks.map(b => <li key={b.breakId}>{b.displayName}: +{b.startOffsetMinute} min, {b.durationMinutes} min
             {b.excludeFromPlannedProduction ? " · excluded from planned production" : " · included in planned production"}</li>)}</ul>}
       </>}
+    </>}
     </>}
   </section>;
 }
