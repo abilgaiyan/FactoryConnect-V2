@@ -38,7 +38,18 @@ public static class MachineActivationReadinessApi
                     .ReadCommissioningSiteAsync(hash, siteId, ct);
                 return Results.Ok(readiness);
             }
-            catch (SecurityDeniedException) { return Results.Unauthorized(); }
+            catch (SecurityDeniedException)
+            {
+                // Never log bearer material or session hashes.
+                http.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("FactoryConnect.Api.Commissioning")
+                    .LogWarning("Commissioning authority denied readiness; TraceId={TraceId}; SiteId={SiteId}; Permission={Permission}",
+                        http.TraceIdentifier, siteId, "commissioning.read");
+                return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
+                    title: "Commissioning access denied",
+                    detail: "The session cannot read readiness for this site. Verify the commissioning.read site grant and sign in again.",
+                    extensions: new Dictionary<string, object?> { ["traceId"] = http.TraceIdentifier });
+            }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
