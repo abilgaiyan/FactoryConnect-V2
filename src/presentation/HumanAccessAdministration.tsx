@@ -6,7 +6,7 @@ export function HumanAccessAdministration({ sessionBearer, baseAddress }: {
   readonly baseAddress: string;
 }) {
   const [subject, setSubject] = useState("");
-  const [issuer, setIssuer] = useState("https://localhost:8443/realms/factoryconnect-dev");
+  const [issuer, setIssuer] = useState("");
   const [principalId, setPrincipalId] = useState("");
   const [epoch, setEpoch] = useState("");
   const [reason, setReason] = useState("");
@@ -26,6 +26,10 @@ export function HumanAccessAdministration({ sessionBearer, baseAddress }: {
       return;
     }
     if (!principalId.trim()) { setMessage("Enter the new human principal ID."); return; }
+    if (kind === "grant" && (!Number.isFinite(Date.parse(effectiveUntil)) ||
+        Date.parse(effectiveUntil) <= Date.now())) {
+      setMessage("Enter a future grant expiry."); return;
+    }
     const path = kind === "enroll" ? "/api/admin/v2/security/humans" : "/api/admin/v2/security/permission-grants";
     const fingerprint = JSON.stringify({ kind, subject, issuer, principalId, epoch, reason,
       parentGrantId, siteId, permission, effectiveUntil });
