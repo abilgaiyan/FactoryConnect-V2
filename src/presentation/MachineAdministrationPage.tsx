@@ -429,6 +429,12 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
   const [operationalReason, setOperationalReason] = useState("Local machine commissioning");
   const [operationalBusy, setOperationalBusy] = useState(false);
   const [operationalMessage, setOperationalMessage] = useState("");
+  const [runtimeIdentityId, setRuntimeIdentityId] = useState("");
+  const [credentialGeneration, setCredentialGeneration] = useState("");
+  const [assignmentGeneration, setAssignmentGeneration] = useState("");
+  const [priorAssignmentId, setPriorAssignmentId] = useState("");
+  const [runtimeAssignmentBusy, setRuntimeAssignmentBusy] = useState(false);
+  const [runtimeAssignmentMessage, setRuntimeAssignmentMessage] = useState("");
   const [activationReadinessError, setActivationReadinessError] = useState("");
   const [activationRevision, setActivationRevision] = useState(0);
   useEffect(() => {
@@ -520,6 +526,45 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
       setOperationalMessage(error instanceof Error ? error.message : "Machine operation failed.");
     } finally {
       setOperationalBusy(false);
+    }
+  }
+
+  async function assignRuntimeIdentity() {
+    const machine = inventory?.find(item => item.machineId === selectedOperationalMachine);
+    if (!machine || !sessionBearer || runtimeAssignmentBusy) return;
+    setRuntimeAssignmentBusy(true);
+    setRuntimeAssignmentMessage("");
+    try {
+      const epoch = operationalEpoch[machine.siteId];
+      const credential = Number(credentialGeneration);
+      const generation = Number(assignmentGeneration);
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuid.test(runtimeIdentityId.trim()) || !Number.isSafeInteger(credential) || credential <= 0 ||
+          !Number.isSafeInteger(generation) || generation < 0 ||
+          (generation > 0 && !uuid.test(priorAssignmentId.trim())) ||
+          (generation === 0 && !!priorAssignmentId.trim()) || !Number.isSafeInteger(epoch))
+        throw new Error("Enter a valid runtime identity, credential generation and exact prior assignment version. Refresh readiness first.");
+      const response = await fetch(new URL("/api/admin/v2/sites/" + machine.siteId +
+        "/machines/" + machine.machineId + "/runtime-assignments", baseAddress), {
+        method: "POST",
+        headers: { Authorization: "Bearer " + sessionBearer, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operationId: crypto.randomUUID(), assignmentId: crypto.randomUUID(),
+          runtimeIdentityId: runtimeIdentityId.trim(), expectedCredentialGeneration: credential,
+          effectiveFrom: new Date().toISOString(), effectiveTo: null,
+          expectedAssignmentGeneration: generation,
+          supersedesAssignmentId: priorAssignmentId.trim() || null,
+          expectedSecurityEpoch: epoch, reason: operationalReason.trim()
+        })
+      });
+      if (!response.ok) throw new Error("Runtime assignment rejected (HTTP " + response.status +
+        "). Check that the runtime credential is already registered and the assignment generation is current.");
+      setRuntimeAssignmentMessage("Runtime identity assigned. This does not activate acquisition.");
+      setActivationRevision(value => value + 1);
+    } catch (error) {
+      setRuntimeAssignmentMessage(error instanceof Error ? error.message : "Runtime assignment failed.");
+    } finally {
+      setRuntimeAssignmentBusy(false);
     }
   }
 
@@ -988,6 +1033,26 @@ export function MachineAdministrationPage({ sessionBearer, baseAddress }: {
     <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || operationalBusy}
       onClick={() => { void changeMachineOperation("suspend"); }}>Suspend machine</button>
     {operationalMessage && <p role="status">{operationalMessage}</p>}
+    <h3>Runtime identity assignment</h3>
+    <p>Assign an existing, credentialed runtime identity to the selected machine. The runtime identity and
+      credential must already be provisioned. This does not activate the machine or start acquisition.</p>
+    <label htmlFor="runtime-identity">Runtime identity ID</label>
+    <input id="runtime-identity" value={runtimeIdentityId}
+      onChange={event => setRuntimeIdentityId(event.currentTarget.value)} placeholder="Runtime identity GUID" />
+    <label htmlFor="credential-generation">Current credential generation</label>
+    <input id="credential-generation" type="number" min="1" step="1" value={credentialGeneration}
+      onChange={event => setCredentialGeneration(event.currentTarget.value)} />
+    <label htmlFor="assignment-generation">Expected assignment generation (0 for first assignment)</label>
+    <input id="assignment-generation" type="number" min="0" step="1" value={assignmentGeneration}
+      onChange={event => setAssignmentGeneration(event.currentTarget.value)} />
+    <label htmlFor="prior-assignment">Previous assignment ID (required when replacing an assignment)</label>
+    <input id="prior-assignment" value={priorAssignmentId}
+      onChange={event => setPriorAssignmentId(event.currentTarget.value)} />
+    <button type="button" disabled={!sessionBearer || !selectedOperationalMachine || runtimeAssignmentBusy ||
+      !runtimeIdentityId.trim() || !credentialGeneration || !assignmentGeneration || !operationalReason.trim()}
+      onClick={() => { void assignRuntimeIdentity(); }}>
+      {runtimeAssignmentBusy ? "Assigning…" : "Assign runtime identity"}</button>
+    {runtimeAssignmentMessage && <p role="status">{runtimeAssignmentMessage}</p>}
     <button type="button" disabled={!sessionBearer || current.kind === "loading"}
       onClick={() => setRevision(value => value + 1)}>Refresh authorized machines</button>
     {current.kind === "loading" && <p role="status">Checking authorized machines…</p>}
