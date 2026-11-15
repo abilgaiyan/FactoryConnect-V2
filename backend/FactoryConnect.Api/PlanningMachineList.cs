@@ -5,7 +5,7 @@ using Microsoft.Data.SqlClient;
 namespace FactoryConnect.Api;
 internal static class PlanningMachineList {
  internal static void MapPlanningMachines(this WebApplication app) {
- app.MapGet("/api/planning/v2/machines", async (HttpContext http, IConfiguration config, CancellationToken ct) => {
+ async Task<IResult> ReadMachines(HttpContext http, IConfiguration config, CancellationToken ct) {
  http.Response.Headers.CacheControl = "no-store";
  if (!http.Request.IsHttps) return Results.StatusCode(403);
  if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId) || !Guid.TryParse(config["Evidence:SiteId"], out var siteId) || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence"))) return Results.StatusCode(503);
@@ -31,6 +31,10 @@ internal static class PlanningMachineList {
  catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
  catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "planning-machine-list", "Planning machines unavailable"); }
  finally { CryptographicOperations.ZeroMemory(hash); }
- }).RequireRateLimiting("security-boundary");
+ }
+ app.MapGet("/api/planning/v2/machines", ReadMachines).RequireRateLimiting("security-boundary");
+ // Reporting discovery uses the same authenticated, site-scoped SQL machine inventory.
+ // Registration alone does not establish activity evidence or an OEE processor.
+ app.MapGet("/api/reporting/v2/machines", ReadMachines).RequireRateLimiting("security-boundary");
  }
 }
