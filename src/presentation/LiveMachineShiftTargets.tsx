@@ -57,6 +57,16 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
       }).catch(e => { if (!controller.signal.aborted) setError(String(e)); });
     return () => controller.abort();
   }, [open, retry]);
+  function prepareRevision(target: Target) {
+    setWriteShift(target.shiftId);
+    setQuantity(String(target.targetQuantity));
+    setUnit(target.quantityUnit);
+    setOrder(target.productionOrder ?? "");
+    setPart(target.partNumber ?? "");
+    setOperation(target.operation ?? "");
+    setReason("");
+    setNotice("Target fields copied from revision " + target.revision + ". Enter a new reason before saving a new revision.");
+  }
   async function saveTarget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setNotice("");
     const targetQuantity = Number(quantity);
@@ -140,11 +150,11 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
               <td>{item.revisionReason}</td><td>{item.recordedAtUtc}</td>
             </tr>)}</tbody></table>}
       </section>}
-      <table><thead><tr><th>Shift</th><th>Target</th><th>Job / part / operation</th><th>Revision</th><th>Reason</th></tr></thead>
+      <table><thead><tr><th>Shift</th><th>Target</th><th>Job / part / operation</th><th>Revision</th><th>Reason</th><th>Action</th></tr></thead>
         <tbody>{targets.map(target => <tr key={target.targetRevisionId}>
           <td>{target.shiftId}</td><td>{target.targetQuantity} {target.quantityUnit}</td>
           <td>{[target.productionOrder, target.partNumber, target.operation].filter(Boolean).join(" · ") || "Not specified"}</td>
-          <td>{target.revision}</td><td>{target.revisionReason}</td>
+          <td>{target.revision}</td><td>{target.revisionReason}</td><td><button type="button" onClick={() => prepareRevision(target)}>Revise target</button></td>
         </tr>)}</tbody></table></>)}
     <p>Targets are administrative plans, not measured production or OEE.</p>
   </section>;
