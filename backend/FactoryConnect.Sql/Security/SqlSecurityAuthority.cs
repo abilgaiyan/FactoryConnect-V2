@@ -33,6 +33,23 @@ public sealed partial class SqlSecurityAuthority(string connectionString, Guid i
         },ct);
     }
 
+    /// <summary>Execute a site- or machine-scoped mutation only after validating the human session
+    /// and its current permission. The authorization check and mutation share one SQL transaction.</summary>
+    public Task<T> WriteAsync<T>(byte[] sessionHash, string permission, AuthorizationScope scope,
+        Func<SqlConnection,SqlTransaction,Guid,CancellationToken,Task<T>> handler, CancellationToken ct=default)
+    {
+        if(sessionHash is null || sessionHash.Length!=32)
+            throw new ArgumentException("A session hash is required.",nameof(sessionHash));
+        var token=sessionHash.ToArray();
+        return Transaction(null,true,async(c,t)=>
+        {
+            var state=await State(c,t,ct);
+            var actor=await Session(c,t,token,state.Now,ct);
+            await Authorize(c,t,actor,permission,scope,state.Now,ct);
+            return await handler(c,t,actor,ct);
+        },ct);
+    }
+
     /// <summary>Validate a live human session without granting access to any protected resource.</summary>
     public Task ValidateHumanSessionAsync(byte[] sessionHash, CancellationToken ct = default)
     {
