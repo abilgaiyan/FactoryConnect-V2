@@ -122,7 +122,7 @@ test('reporting failure never substitutes sample data and keeps live workspace a
   const h=await mountInDom(React.createElement(Workspace,{runtime:r.value}));t.after(()=>h.dispose());
   await load(h);assert.match(text(h),/reporting is unavailable/);
   assert.doesNotMatch(text(h),/Sample operator|Sample preview|Real read-only/);
-  assert.ok(button(h,'Open shift calendar'));
+  assert.equal(button(h,'Open shift calendar'),undefined);
   assert.equal(h.window.localStorage.length,0);
 });
 
@@ -140,7 +140,7 @@ test('missing config fails closed without any sample-mode switch',async t=>{
   const h=await mountInDom(React.createElement(Workspace));t.after(()=>h.dispose());
   assert.match(text(h),/Reporting configuration is unavailable/);assert.doesNotMatch(text(h),/Sample operator/);
   assert.equal(button(h,'Sample preview'),undefined);
-  assert.ok(button(h,'Open shift calendar'));
+  assert.equal(button(h,'Open shift calendar'),undefined);
 });
 
 test('dashboard route passes runtime to workspace without starting sample-mode requests',async t=>{
