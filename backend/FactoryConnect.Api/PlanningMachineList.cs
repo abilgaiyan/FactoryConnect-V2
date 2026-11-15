@@ -5,7 +5,7 @@ using Microsoft.Data.SqlClient;
 namespace FactoryConnect.Api;
 internal static class PlanningMachineList {
  internal static void MapPlanningMachines(this WebApplication app) {
- app.MapGet("/api/planning/v2/machines", async (HttpContext http, IConfiguration config, CancellationToken ct) => {
+ async Task<IResult> ReadMachines(HttpContext http, IConfiguration config, CancellationToken ct) {
  http.Response.Headers.CacheControl = "no-store";
  if (!http.Request.IsHttps) return Results.StatusCode(403);
  if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId) || !Guid.TryParse(config["Evidence:SiteId"], out var siteId) || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence"))) return Results.StatusCode(503);
@@ -26,11 +26,18 @@ internal static class PlanningMachineList {
  command.Parameters.Add("@site", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
  await using var reader = await command.ExecuteReaderAsync(ct);
  while (await reader.ReadAsync(ct)) machines.Add(new { machineId = reader.GetGuid(0), displayName = reader.GetString(1) });
+ if (http.Request.Path.StartsWithSegments("/api/reporting/v2/machines"))
+     return Results.Ok(new { siteId, machines, source = "sql-master", isSample = false,
+       reportingEvidenceStatus = "not-verified", reportingProcessorConfigured = false });
  return Results.Ok(new { siteId, machines, source = "sql-master", isSample = false });
  } catch (SecurityDeniedException) { return Results.Unauthorized(); }
  catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
  catch (Exception ex) { return AuthorityDiagnostics.Unavailable(http, ex, "planning-machine-list", "Planning machines unavailable"); }
  finally { CryptographicOperations.ZeroMemory(hash); }
- }).RequireRateLimiting("security-boundary");
+ }
+ app.MapGet("/api/planning/v2/machines", ReadMachines).RequireRateLimiting("security-boundary");
+ // Reporting discovery uses the same authenticated, site-scoped SQL machine inventory.
+ // Registration alone does not establish activity evidence or an OEE processor.
+ app.MapGet("/api/reporting/v2/machines", ReadMachines).RequireRateLimiting("security-boundary");
  }
 }
