@@ -29,6 +29,11 @@ export function SupervisorReadOnly({ runtime }: { readonly runtime: DashboardApp
     setError(""); setGeneration(value => value + 1);
     setRequest({ sourceIndex: Number(sourceIndex), day, generation: generation + 1 });
   }
+  if (!runtime.configuration.sources.length) return <section aria-label="Machine reporting availability">
+    <h2>Machine reporting · not configured</h2>
+    <p>Registered machines are available under Production targets, but this API host has not published any operational-metrics reporting sources. Shift occurrence and OEE reporting cannot be loaded until a real reporting processor is connected.</p>
+    <p>No sample machines or calculated metrics have been substituted.</p>
+  </section>;
   return <>
     <form onSubmit={submit} className="supervisor-controls">
       <label>Machine / reporting processor<select value={sourceIndex} onChange={event => { setSourceIndex(event.target.value); setRequest(null); setError(""); }}>
@@ -38,7 +43,6 @@ export function SupervisorReadOnly({ runtime }: { readonly runtime: DashboardApp
       <label>Production business date<input type="date" value={day} onChange={event => { setDay(event.target.value); setRequest(null); setError(""); }} /></label>
       <button type="submit">Load shift occurrences</button>
     </form>
-    {!runtime.configuration.sources.length && <p>No configured reporting sources. No sample machines have been substituted.</p>}
     {error && <p role="alert">{error}</p>}
     {request && <ShiftRead key={`${request.sourceIndex}:${request.day}:${request.generation}`} runtime={runtime} sourceIndex={request.sourceIndex} day={request.day} />}
   </>;
