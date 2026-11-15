@@ -12,7 +12,7 @@ export default function SupervisorWorkspace({ runtime }: { readonly runtime?: Da
     <h1>Supervisor Desk · Management reporting</h1>
     <p>Live site shift planning and target revisions are saved to SQL Server. Machine activity reporting remains evidence-based and read-only; downtime reason assignment is not yet enabled.</p>
     <LiveShiftCalendar />
-    <SupervisorMachineActivity />
+    {(!runtime || runtime.configuration.sources.length === 0) && <SupervisorMachineActivity />}
     <RuntimeReadOnly {...(runtime ? { runtime } : {})} />
     <SupervisorTargetEntry />
   </section>;
