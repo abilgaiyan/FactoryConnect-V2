@@ -185,6 +185,67 @@ internal static class PlanningEndpoints
             finally { CryptographicOperations.ZeroMemory(hash); }
         }).RequireRateLimiting("security-boundary");
 
+        // Full append-only target history for supervisor review; never conflated with measured production.
+        app.MapGet("/api/planning/v2/machines/{machineId:guid}/targets/history", async (
+            Guid machineId, DateOnly businessDate, Guid shiftId, HttpContext http, IConfiguration config, CancellationToken ct) =>
+        {
+            http.Response.Headers.CacheControl = "no-store";
+            if (!http.Request.IsHttps) return Results.StatusCode(403);
+            if (!Guid.TryParse(config["Evidence:InstallationId"], out var installationId)
+                || !Guid.TryParse(config["Evidence:SiteId"], out var siteId)
+                || string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")))
+                return Results.StatusCode(503);
+            if (machineId == Guid.Empty || shiftId == Guid.Empty) return Results.BadRequest();
+            var ticket = await http.AuthenticateAsync("operator-cookie");
+            var bearer = ticket.Principal?.FindFirst("fc2:session")?.Value;
+            if (!ticket.Succeeded || string.IsNullOrWhiteSpace(bearer)) return Results.Unauthorized();
+            byte[] token;
+            try { token = Convert.FromBase64String(bearer); }
+            catch (FormatException) { return Results.Unauthorized(); }
+            if (token.Length != 32) { CryptographicOperations.ZeroMemory(token); return Results.Unauthorized(); }
+            byte[] hash;
+            try { hash = SHA256.HashData(token); }
+            finally { CryptographicOperations.ZeroMemory(token); }
+            try
+            {
+                await new SqlSecurityAuthority(config.GetConnectionString("Evidence")!, installationId)
+                    .ValidateHumanSessionAsync(hash, ct);
+                var revisions = new List<object>();
+                await using var connection = new SqlConnection(config.GetConnectionString("Evidence"));
+                await connection.OpenAsync(ct);
+                await using var command = new SqlCommand("""
+                    SELECT TargetRevisionId, Revision, TargetQuantity, QuantityUnit,
+                           ProductionOrder, PartNumber, Operation, RevisionReason,
+                           RecordedAtUtc, RecordedByPrincipalId
+                    FROM planning.ShiftTargetRevision
+                    WHERE SiteId=@site AND MachineId=@machine AND ShiftId=@shift AND BusinessDate=@date
+                    ORDER BY Revision DESC
+                    """, connection);
+                command.Parameters.Add("@site", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
+                command.Parameters.Add("@machine", System.Data.SqlDbType.UniqueIdentifier).Value = machineId;
+                command.Parameters.Add("@shift", System.Data.SqlDbType.UniqueIdentifier).Value = shiftId;
+                command.Parameters.Add("@date", System.Data.SqlDbType.Date).Value = businessDate.ToDateTime(TimeOnly.MinValue);
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    revisions.Add(new {
+                        targetRevisionId = reader.GetGuid(0), revision = reader.GetInt32(1),
+                        targetQuantity = reader.GetDecimal(2), quantityUnit = reader.GetString(3),
+                        productionOrder = reader.IsDBNull(4) ? null : reader.GetString(4),
+                        partNumber = reader.IsDBNull(5) ? null : reader.GetString(5),
+                        operation = reader.IsDBNull(6) ? null : reader.GetString(6),
+                        revisionReason = reader.GetString(7), recordedAtUtc = reader.GetDateTime(8),
+                        recordedByPrincipalId = reader.GetGuid(9)
+                    });
+                return Results.Ok(new { siteId, machineId, shiftId, businessDate, revisions,
+                    source = "sql-planning", isSample = false });
+            }
+            catch (SecurityDeniedException) { return Results.Unauthorized(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            { return AuthorityDiagnostics.Unavailable(http, ex, "planning-target-history", "Target history unavailable"); }
+            finally { CryptographicOperations.ZeroMemory(hash); }
+        }).RequireRateLimiting("security-boundary");
+
         app.MapGet("/api/planning/v2/stop-reasons", async (
             HttpContext http, IConfiguration config, CancellationToken ct) =>
         {
