@@ -26,6 +26,9 @@ internal static class PlanningMachineList {
  command.Parameters.Add("@site", System.Data.SqlDbType.UniqueIdentifier).Value = siteId;
  await using var reader = await command.ExecuteReaderAsync(ct);
  while (await reader.ReadAsync(ct)) machines.Add(new { machineId = reader.GetGuid(0), displayName = reader.GetString(1) });
+ if (http.Request.Path.StartsWithSegments("/api/reporting/v2/machines"))
+     return Results.Ok(new { siteId, machines, source = "sql-master", isSample = false,
+       reportingEvidenceStatus = "not-verified", reportingProcessorConfigured = false });
  return Results.Ok(new { siteId, machines, source = "sql-master", isSample = false });
  } catch (SecurityDeniedException) { return Results.Unauthorized(); }
  catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
