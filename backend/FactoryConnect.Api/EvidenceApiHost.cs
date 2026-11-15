@@ -256,6 +256,7 @@ app.MapHumanAccessAdministration();
 app.MapMtConnectDiscovery();
 app.MapPlanning();
 app.MapPlanningWrites();
+app.MapPlanningMachines();
 
 app.MapMethods("/api/{**path}", ["GET", "POST"], NotReady);
 app.MapFallbackToFile("index.html");
