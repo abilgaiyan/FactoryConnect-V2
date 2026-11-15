@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import LiveMachineShiftTargets from "./LiveMachineShiftTargets.tsx";
+import LiveMachineActivityCoverage from "./LiveMachineActivityCoverage.tsx";
 interface Machine { machineId: string; displayName: string }
 export default function SupervisorTargetEntry() {
  const [open,setOpen]=useState(false),[machines,setMachines]=useState<Machine[]|null>(null),[machineId,setMachineId]=useState(""),[businessDate,setBusinessDate]=useState(""),[error,setError]=useState(""),[retry,setRetry]=useState(0);
@@ -19,6 +20,6 @@ export default function SupervisorTargetEntry() {
  {machines?.length===0&&<p>No registered machines for this site.</p>}
  {machines&&machines.length>0&&<><label>Machine <select value={machineId} onChange={e=>setMachineId(e.target.value)}><option value="">Select a registered machine</option>{machines.map(m=><option key={m.machineId} value={m.machineId}>{m.displayName}</option>)}</select></label>
  <label>Business date <input type="date" value={businessDate} onChange={e=>setBusinessDate(e.target.value)}/></label>
- {machineId&&/^\d{4}-\d{2}-\d{2}$/.test(businessDate)&&<LiveMachineShiftTargets key={machineId+":"+businessDate} machineId={machineId} businessDate={businessDate}/>}</>}
+ {machineId&&/^\d{4}-\d{2}-\d{2}$/.test(businessDate)&&<><LiveMachineShiftTargets key={machineId+":"+businessDate} machineId={machineId} businessDate={businessDate}/><LiveMachineActivityCoverage key={"activity:"+machineId+":"+businessDate} machineId={machineId} date={businessDate}/></>}</>}
  </>}</section>;
 }
