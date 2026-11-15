@@ -5,6 +5,7 @@ import "./supervisor-preview.css";
 import LiveShiftCalendar from "./LiveShiftCalendar.tsx";
 import SupervisorTargetEntry from "./SupervisorTargetEntry.tsx";
 import SupervisorMachineActivity from "./SupervisorMachineActivity.tsx";
+import SupervisorShiftTime from "./SupervisorShiftTime.tsx";
 
 // Imported only by development entry points. Sample editors never mount in real-data mode.
 export default function SupervisorWorkspace({ runtime }: { readonly runtime?: DashboardApplicationRuntime }) {
@@ -12,6 +13,7 @@ export default function SupervisorWorkspace({ runtime }: { readonly runtime?: Da
     <h1>Supervisor Desk · Management reporting</h1>
     <p>Live site shift planning and target revisions are saved to SQL Server. Machine activity reporting remains evidence-based and read-only; downtime reason assignment is not yet enabled.</p>
     <LiveShiftCalendar />
+    <SupervisorShiftTime />
     {(!runtime || runtime.configuration.sources.length === 0) && <SupervisorMachineActivity />}
     <RuntimeReadOnly {...(runtime ? { runtime } : {})} />
     <SupervisorTargetEntry />
