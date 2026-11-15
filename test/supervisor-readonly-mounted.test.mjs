@@ -173,6 +173,6 @@ test('mismatched activity machine never discloses its returned evidence in the s
 test('no configured sources does not create synthetic machines or reporting requests',async t=>{
   const r=runtime(undefined,[]);mockFetch(t,async()=>{throw Error('No request expected');});
   const h=await mountInDom(React.createElement(Workspace,{runtime:r.value}));t.after(()=>h.dispose());
-  assert.match(text(h),/No configured reporting sources/);assert.doesNotMatch(text(h),/Configured CNC|Sample operator/);
+  assert.match(text(h),/Machine reporting · not configured/);assert.doesNotMatch(text(h),/Configured CNC|Sample operator/);
   await h.click(button(h,'Load shift occurrences'));assert.equal(r.calls.length,0);
 });
