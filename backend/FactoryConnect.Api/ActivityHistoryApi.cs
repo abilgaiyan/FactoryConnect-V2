@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authentication;
 using System.Security.Cryptography;
 using FactoryConnect.Sql.Security;
 using Microsoft.Data.SqlClient;
@@ -52,6 +53,19 @@ internal static class ActivityHistoryApi
                     verification="immutable-publication-receipts",continuity="same-batch-only-not-physical-completeness",
                     status=series.Count==0?"no-published-history":"published-history",series });
             }));
+        // Browser reporting uses the existing operator cookie and its SQL-backed human session.
+        // No browser-supplied machine claims or fabricated activity durations are accepted.
+        app.MapGet("/api/reporting/v2/machines/{machineId:guid}/activity", async (
+            Guid machineId, HttpContext http, IConfiguration config, ILoggerFactory loggerFactory, CancellationToken ct) =>
+            await Read(http, config, loggerFactory.CreateLogger("FactoryConnect.ReportingActivity.Integrity"),
+                async (authority, token, site, stream) => {
+                    var series = await authority.ReadActivitySeriesAsync(token, site, machineId, stream, ct);
+                    return Results.Ok(new { machineId, siteId = site, streamKey = stream,
+                        evidenceKind = "historical-derived-activity", currentConnectivity = (string?)null,
+                        verification = "immutable-publication-receipts",
+                        continuity = "same-batch-only-not-physical-completeness",
+                        status = series.Count == 0 ? "no-published-history" : "published-history", series });
+                }, allowOperatorCookie: true)).RequireRateLimiting("security-boundary");
         app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/activity/{mappingId:guid}",async(
             Guid machineId,Guid mappingId,HttpContext http,IConfiguration config,ILoggerFactory loggerFactory,CancellationToken ct)=>
             await Read(http,config,loggerFactory.CreateLogger("FactoryConnect.ActivityHistory.Integrity"),async(authority,token,site,stream)=> {
@@ -73,7 +87,7 @@ internal static class ActivityHistoryApi
             }));
     }
     private static async Task<IResult> Read(HttpContext http,IConfiguration config,ILogger logger,
-        Func<SqlSecurityAuthority,byte[],Guid,string,Task<IResult>> read)
+        Func<SqlSecurityAuthority,byte[],Guid,string,Task<IResult>> read, bool allowOperatorCookie = false)
     {
         http.Response.Headers.CacheControl="no-store";
         if(!http.Request.IsHttps)return Results.Problem(statusCode:403,title:"HTTPS required");
@@ -82,13 +96,25 @@ internal static class ActivityHistoryApi
             string.IsNullOrWhiteSpace(config.GetConnectionString("Evidence")) ||
             string.IsNullOrWhiteSpace(config["Evidence:StreamKey"]))
             return Results.Problem(statusCode:503,title:"Activity history authority is unavailable");
-        if(!http.Request.Headers.TryGetValue("Authorization",out var authorization) || authorization.Count!=1 ||
-            authorization[0]?.StartsWith("Bearer ",StringComparison.Ordinal)!=true || authorization[0]!.Length>192)
-            return Results.Unauthorized();
         byte[] secret;
-        try { secret=Convert.FromBase64String(authorization[0]![7..]); }
-        catch(FormatException){return Results.Unauthorized();}
-        if(secret.Length!=32){CryptographicOperations.ZeroMemory(secret);return Results.Unauthorized();}
+        if (allowOperatorCookie)
+        {
+            var ticket = await http.AuthenticateAsync("operator-cookie");
+            var session = ticket.Principal?.FindFirst("fc2:session")?.Value;
+            if (!ticket.Succeeded || string.IsNullOrWhiteSpace(session)) return Results.Unauthorized();
+            try { secret = Convert.FromBase64String(session); }
+            catch (FormatException) { return Results.Unauthorized(); }
+        }
+        else
+        {
+            if (!http.Request.Headers.TryGetValue("Authorization", out var authorization) ||
+                authorization.Count != 1 ||
+                authorization[0]?.StartsWith("Bearer ", StringComparison.Ordinal) != true ||
+                authorization[0]!.Length > 192) return Results.Unauthorized();
+            try { secret = Convert.FromBase64String(authorization[0]![7..]); }
+            catch (FormatException) { return Results.Unauthorized(); }
+        }
+        if (secret.Length != 32) { CryptographicOperations.ZeroMemory(secret); return Results.Unauthorized(); }
         var hash=SHA256.HashData(secret);CryptographicOperations.ZeroMemory(secret);
         try { return await read(new SqlSecurityAuthority(config.GetConnectionString("Evidence")!,installation),hash,site,config["Evidence:StreamKey"]!); }
         catch(SecurityDeniedException){return Results.Unauthorized();}
