@@ -51,7 +51,7 @@ test('real mode reuses canonical reporting and exact overnight activity; inspect
   const r = runtime(); const requests = [];
   mockFetch(t, async (url, options) => { requests.push({url,options}); return Response.json(activity(JSON.parse(options.body))); });
   const h = await mountInDom(React.createElement(Workspace,{runtime:r.value})); t.after(() => h.dispose());
-  assert.match(text(h), /Real read-only mode/); assert.doesNotMatch(text(h), /Sample operator|sample-event/);
+  assert.match(text(h), /Live site shift planning/); assert.doesNotMatch(text(h), /Sample operator|sample-event/);
   await load(h); assert.equal(r.calls.length,1);
   assert.deepEqual(r.calls[0].request.sources,[{machineId:source.machineId,processorId:source.processorId,siteId:'SITE',businessDate:day}]);
   assert.equal(r.calls[0].request.metrics.length,5); assert.equal(r.calls[0].request.context.unpartitionedOnly,true);
@@ -87,7 +87,7 @@ test('above-100 availability stays conflicting and source context mismatch fails
 });
 function controlSafe(h,label) { return [...h.document.querySelectorAll('label')].find(l=>l.textContent.startsWith(label))??null; }
 
-test('late activity responses cannot cross occurrence, machine, day or mode changes', async t => {
+test('late activity responses cannot cross occurrence, machine or day changes', async t => {
   const r=runtime(); const pending=[];
   mockFetch(t,(url,options)=>{const d=deferred();pending.push({url,options,...d});return d.promise;});
   const h=await mountInDom(React.createElement(Workspace,{runtime:r.value}));t.after(()=>h.dispose());
@@ -101,9 +101,9 @@ test('late activity responses cannot cross occurrence, machine, day or mode chan
   assert.match(pending[2].url,new RegExp(moxa.machineId));
   await h.changeInput(control(h,'Production business date','input'),'2026-10-29');assert.equal(pending[2].options.signal.aborted,true);
   await h.click(button(h,'Load shift occurrences'));await selectOccurrence(h);
-  await h.click(button(h,'Sample preview'));assert.equal(pending[3].options.signal.aborted,true);
+  await choose(h,'Machine / reporting processor','0');assert.equal(pending[3].options.signal.aborted,true);
   await act(async()=>pending[3].resolve(Response.json(activity(JSON.parse(pending[3].options.body),moxa.machineId))));
-  assert.match(text(h),/Sample preview — synthetic/);assert.doesNotMatch(text(h),/mtconnect:factory-source/);
+  assert.doesNotMatch(text(h),/mtconnect:factory-source/);
 });
 
 test('late reporting response is cancelled on source change and never restores old selectors', async t=>{
@@ -116,16 +116,13 @@ test('late reporting response is cancelled on source change and never restores o
   assert.match(text(h),/No authoritative shift occurrences/);assert.equal(control(h,'Exact shift occurrence').options.length,1);
 });
 
-test('reporting failure never substitutes samples; sample mode is explicit and resets on exit',async t=>{
+test('reporting failure never substitutes sample data and keeps live workspace available',async t=>{
   const r=runtime(async()=>{throw new ReportingNetworkFailure(Error('unavailable'));});
   mockFetch(t,async()=>{throw Error('No activity expected');});
   const h=await mountInDom(React.createElement(Workspace,{runtime:r.value}));t.after(()=>h.dispose());
-  await load(h);assert.match(text(h),/reporting is unavailable/);assert.doesNotMatch(text(h),/Sample operator/);
-  await h.click(button(h,'Sample preview'));assert.match(text(h),/Sample operator/);
-  await h.click(button(h,'Event explanations'));await h.click(button(h,'Inspect event 1'));await h.click(button(h,'Create independent preview thread'));
-  assert.match(text(h),/preview-thread-4/);
-  await h.click(button(h,'Real read-only'));assert.equal(h.document.querySelector('textarea'),null);assert.equal(control(h,'Production business date','input').value,'');
-  await h.click(button(h,'Sample preview'));assert.doesNotMatch(text(h),/preview-thread-4/);
+  await load(h);assert.match(text(h),/reporting is unavailable/);
+  assert.doesNotMatch(text(h),/Sample operator|Sample preview|Real read-only/);
+  assert.ok(button(h,'Open shift calendar'));
   assert.equal(h.window.localStorage.length,0);
 });
 
@@ -138,11 +135,12 @@ test('activity failure clears old evidence and retry never fabricates samples',a
   await h.click(button(h,'Retry activity'));assert.match(text(h),/No sample fallback/);assert.doesNotMatch(text(h),/Sample operator/);
 });
 
-test('missing config has no implicit sample mode, and an explicit sample switch works offline',async t=>{
+test('missing config fails closed without any sample-mode switch',async t=>{
   mockFetch(t,async()=>new Response('',{status:503}));
   const h=await mountInDom(React.createElement(Workspace));t.after(()=>h.dispose());
   assert.match(text(h),/Reporting configuration is unavailable/);assert.doesNotMatch(text(h),/Sample operator/);
-  await h.click(button(h,'Sample preview'));assert.match(text(h),/Sample operator/);
+  assert.equal(button(h,'Sample preview'),undefined);
+  assert.ok(button(h,'Open shift calendar'));
 });
 
 test('dashboard route passes runtime to workspace without starting sample-mode requests',async t=>{
@@ -150,7 +148,7 @@ test('dashboard route passes runtime to workspace without starting sample-mode r
   const h=await mountInDom(React.createElement(App,{runtime:r.value}),'http://factory-dashboard/supervisor-preview');t.after(()=>h.dispose());
   // React.lazy may need a turn to resolve the development module.
   await act(async()=>{await new Promise(resolve=>setImmediate(resolve));});
-  assert.match(text(h),/Real read-only mode/);assert.match(text(h),/Configured CNC/);
+  assert.match(text(h),/Live site shift planning/);assert.match(text(h),/Configured CNC/);
   assert.equal(r.calls.length,0);
 });
 
