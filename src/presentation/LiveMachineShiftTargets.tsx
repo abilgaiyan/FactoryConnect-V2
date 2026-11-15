@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 interface Target {
   shiftId: string; targetRevisionId: string; revision: number; targetQuantity: number;
@@ -13,6 +13,55 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const [selectedShift, setSelectedShift] = useState("");
+  const [shifts, setShifts] = useState<{ shiftId: string; displayName: string }[] | null>(null);
+  const [writeShift, setWriteShift] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [unit, setUnit] = useState("pieces");
+  const [order, setOrder] = useState("");
+  const [part, setPart] = useState("");
+  const [operation, setOperation] = useState("");
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    setShifts(null);
+    void fetch("/api/planning/v2/shifts", { credentials: "include", signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Configured shifts unavailable (HTTP ${response.status})`);
+        const data: { shifts: { shiftId: string; displayName: string }[]; isSample: boolean } = await response.json();
+        if (data.isSample || !Array.isArray(data.shifts)) throw new Error("Invalid configured shifts response");
+        setShifts(data.shifts);
+      }).catch(e => { if (!controller.signal.aborted) setError(String(e)); });
+    return () => controller.abort();
+  }, [open, retry]);
+  async function saveTarget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setError(""); setNotice("");
+    const targetQuantity = Number(quantity);
+    if (!writeShift || !Number.isFinite(targetQuantity) || targetQuantity < 0
+        || !/^\d+(?:\.\d{1,3})?$/.test(quantity.trim())
+        || !unit.trim() || !reason.trim()) {
+      setError("Choose a configured shift, nonnegative quantity (up to 3 decimals), unit and revision reason.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/planning/v2/machines/${encodeURIComponent(machineId)}/targets`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shiftId: writeShift, businessDate, targetQuantity,
+          quantityUnit: unit.trim(), productionOrder: order.trim() || null,
+          partNumber: part.trim() || null, operation: operation.trim() || null,
+          revisionReason: reason.trim() })
+      });
+      if (!response.ok) {
+        const payload: { error?: string } = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? `Target save failed (HTTP ${response.status}). Check site permissions.`);
+      }
+      setNotice("New target revision saved to SQL."); setReason(""); setRetry(value => value + 1);
+    } catch (e) { setError(String(e)); } finally { setSaving(false); }
+  }
+
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -34,6 +83,24 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
     <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       {open ? "Hide targets" : "Load machine shift targets"}
     </button>
+
+    {open && <form onSubmit={saveTarget}>
+      <fieldset disabled={saving}><legend>Record machine shift target revision</legend>
+        <p>Machine {machineId} · business date {businessDate}</p>
+        <label>Configured shift <select required value={writeShift} onChange={e => setWriteShift(e.target.value)}>
+          <option value="">Select shift</option>
+          {shifts?.map(shift => <option key={shift.shiftId} value={shift.shiftId}>{shift.displayName}</option>)}
+        </select></label>
+        <label>Target quantity <input type="number" min="0" step="0.001" required value={quantity} onChange={e => setQuantity(e.target.value)} /></label>
+        <label>Unit <input required maxLength={50} value={unit} onChange={e => setUnit(e.target.value)} /></label>
+        <label>Production order <input maxLength={100} value={order} onChange={e => setOrder(e.target.value)} /></label>
+        <label>Part number <input maxLength={100} value={part} onChange={e => setPart(e.target.value)} /></label>
+        <label>Operation <input maxLength={100} value={operation} onChange={e => setOperation(e.target.value)} /></label>
+        <label>Revision reason <input required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} /></label>
+        <button type="submit">{saving ? "Saving…" : "Save target revision"}</button>
+      </fieldset>
+    </form>}
+    {notice && <p role="status">{notice}</p>}
     {open && (error ? <><p role="alert">{error}. No sample fallback.</p>
       <button type="button" onClick={() => setRetry(value => value + 1)}>Retry targets</button></>
       : targets === null ? <p role="status">Loading recorded targets…</p>
