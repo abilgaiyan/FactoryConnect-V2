@@ -272,7 +272,25 @@ internal static class PlanningWrites
                     .WriteAsync(hash, "security.access.manage", AuthorizationScope.Machine(siteId, machineId),
                         async (connection, transaction, actor, cancellation) =>
                         {
-                            // Serializes revisions per machine/shift/date under the installation write gate.
+                            // Serialize revision numbering for this exact machine/shift/business date.
+                            // The lock is transaction-owned and released on commit or rollback.
+                            await using (var lockCommand = new SqlCommand("""
+                                DECLARE @result int;
+                                EXEC @result = sys.sp_getapplock
+                                    @Resource = @resource,
+                                    @LockMode = 'Exclusive',
+                                    @LockOwner = 'Transaction',
+                                    @LockTimeout = 10000;
+                                SELECT @result;
+                                """, connection, transaction))
+                            {
+                                lockCommand.Parameters.Add("@resource", System.Data.SqlDbType.NVarChar, 255).Value =
+                                    $"planning-target:{siteId:N}:{machineId:N}:{request.ShiftId:N}:{request.BusinessDate:yyyyMMdd}";
+                                var lockResult = (int)(await lockCommand.ExecuteScalarAsync(cancellation)
+                                    ?? throw new InvalidOperationException("Target revision lock returned no status."));
+                                if (lockResult < 0)
+                                    return (IResult)Results.Conflict(new { error = "Target is being revised concurrently. Retry." });
+                            }
                             // The FK constraints reject a shift or machine outside the configured site.
                             var revisionId = Guid.NewGuid();
                             await using var command = new SqlCommand("""
