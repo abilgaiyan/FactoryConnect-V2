@@ -10,6 +10,7 @@ export default function SupervisorWorkspace({ runtime }: { readonly runtime?: Da
   return <section className="supervisor-preview" aria-label="Supervisor workspace">
     <h1>Supervisor Desk · Management reporting</h1>
     <p>Live site shift planning and target revisions are saved to SQL Server. Machine activity reporting remains evidence-based and read-only; downtime reason assignment is not yet enabled.</p>
+    <LiveShiftCalendar />
     <RuntimeReadOnly {...(runtime ? { runtime } : {})} />
     <SupervisorTargetEntry />
   </section>;
@@ -31,6 +32,6 @@ function RuntimeReadOnly({ runtime }: { readonly runtime?: DashboardApplicationR
   return <>
 
     {error ? <><p role="alert">Reporting configuration is unavailable. No factory evidence established; no sample fallback.</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry configuration</button></>
-      : loaded ? <><LiveShiftCalendar /><SupervisorReadOnly runtime={loaded} /></> : <p role="status">Loading reporting configuration…</p>}
+      : loaded ? <SupervisorReadOnly runtime={loaded} /> : <p role="status">Loading reporting configuration…</p>}
   </>;
 }
