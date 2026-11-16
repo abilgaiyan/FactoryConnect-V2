@@ -156,22 +156,29 @@ export default function HistoricalReportingPage() {
     {!valid && machineId && <p role="alert">Select an inclusive range of at most 31 days.</p>}
     {loaded && <><p>Imported source: {expectedSource}. {metrics.length} metric projections; {periods.length} raw activity periods.</p>
       <Trend rows={daily} name="Availability" /><Trend rows={daily} name="Utilization" />
-      <h2>Historical metric results</h2>
+      <div style={{display:"flex", flexWrap:"wrap", gap:12, margin:"20px 0"}} aria-label="Historical report coverage">
+        {[["Historical projections",metrics.length],["Valid daily A/U points",daily.length],["Imported shift inputs",shiftAggregates.length],["Completed activity intervals",periods.length]].map(([label,value]) => <div key={label} style={{flex:"1 1 165px",padding:16,border:"1px solid #cbd5e1",borderRadius:8}}><div style={{fontSize:24,fontWeight:700}}>{value}</div><div>{label}</div></div>)}
+      </div>
+      <p>Performance, Quality and OEE: unavailable where V1 did not record valid source values. These counts are evidence coverage, not production KPIs.</p>
+      <details><summary><strong>Historical metric results ({metrics.filter(m => oeeMetric.test(m.metricKey)).length} rows)</strong> · expand source details</summary>
       <table><thead><tr><th>Date</th><th>Shift</th><th>Metric</th><th>Value or source status</th></tr></thead>
         <tbody>{metrics.filter(m => oeeMetric.test(m.metricKey)).map(m => <tr key={m.sourceRowId}><td>{m.productionBusinessDate ?? "—"}</td><td>{m.shiftId ?? m.shiftStartsAtUtc ?? "Daily"}</td><td>{m.metricKey}</td><td>{formatMetric(m)}</td></tr>)}</tbody>
       </table>
-      <h2>Historical shift inputs</h2>
+      </details>
+      <details><summary><strong>Historical shift inputs ({shiftAggregates.length} rows)</strong> · expand source details</summary>
       <p>These are the original V1 shift aggregate values, not recalculated targets or OEE. Historical shift definitions and break exclusions remain as recorded in V1.</p>
       <table><thead><tr><th>Shift</th><th>Shift start UTC</th><th>Input</th><th>Source value</th><th>Input count</th></tr></thead><tbody>
         {shiftAggregates.map(row => <tr key={row.sourceRowId}><td>{row.shiftId ?? "Unspecified"}</td><td>{row.shiftStartsAtUtc ?? "Unspecified"}</td><td>{row.metricInputKey}</td><td>{row.aggregateValue === null ? "Unavailable" : row.aggregateValue + " " + (row.unit ?? "")}</td><td>{row.inputCount ?? "—"}</td></tr>)}
       </tbody></table>
       {!shiftAggregates.length && <p>No historical shift aggregates in the selected range.</p>}
-      <h2>Activity duration by India calendar day</h2>
+      </details>
+      <details><summary><strong>Activity duration by India calendar day ({activity.length} rows)</strong> · expand source details</summary>
       <p>Completed source intervals split at local midnight. State codes are preserved until V1 state definitions are verified. These are not shift-adjusted production durations.</p>
       <table><thead><tr><th>Day</th><th>V1 state code</th><th>Hours</th></tr></thead><tbody>
         {activity.map(row => <tr key={row.date + ":" + row.state}><td>{row.date}</td><td>{row.state}</td><td>{(row.seconds / 3600).toFixed(2)}</td></tr>)}
       </tbody></table>
       {!activityDates.length && <p>No completed activity intervals in this range.</p>}
+      </details>
     </>}
   </section>;
 }
