@@ -42,6 +42,25 @@ export function ShiftPerformanceOverviewView({ overview, showFilters = true }: S
       </div>}
       {showFilters && <p id="shift-filter-scope" className="report-scope-note">The shift filter includes every occurrence with that identifier. KPI cards appear only when exactly one machine and shift occurrence remains.</p>}
       <p className="report-scope-note">Each result belongs to one machine and exact shift interval. Group totals are not calculated.</p>
+      <section aria-label="Management OEE evidence readiness">
+        <h3>OEE reporting readiness · selected shift occurrences</h3>
+        <p>Across {selected.length} selected machine-shift occurrences. This chart counts reported metric evidence, not production performance or a blended OEE score.</p>
+        {(["availability", "performance", "quality", "oee"] as const).map(metricKey => {
+          const metrics = selected.map(({ shift }) => shift[metricKey]);
+          const calculated = metrics.filter(metric => metric.state === "calculated").length;
+          const unavailable = metrics.filter(metric => metric.state === "unavailable").length;
+          const insufficient = metrics.filter(metric => metric.state === "insufficient-evidence").length;
+          const missing = metrics.filter(metric => metric.state === "missing").length;
+          return <div key={metricKey}>
+            <p><strong>{metricLabel(metricKey)}</strong> · {calculated} calculated, {unavailable} unavailable, {insufficient} insufficient evidence, {missing} missing</p>
+            <div role="img" aria-label={metricLabel(metricKey) + ": " + calculated + " calculated of " + metrics.length + " selected occurrences"}
+              style={{ width: "100%", maxWidth: "30rem", height: "0.8rem", borderRadius: "0.25rem", background: "#e5e7eb", overflow: "hidden" }}>
+              {metrics.length > 0 && <div style={{ height: "100%", width: (calculated / metrics.length * 100) + "%", background: "#16855c" }} />}
+            </div>
+          </div>;
+        })}
+        <p>Green represents occurrences with a reported calculated metric; grey includes unavailable, insufficient and missing metrics. Calculated values are not independently certified here.</p>
+      </section>
       {selected.length === 1 && <p className="report-scope-note">Selected: {selected[0]!.machine.displayName} · {selected[0]!.shift.shift.shiftId} · {formatReportTimestamp(selected[0]!.shift.shift.startsAtUtc)} – {formatReportTimestamp(selected[0]!.shift.shift.endsAtUtc)}</p>}
       {selected.length === 1 && <section className="performance-kpis" aria-label="Selected shift metrics">
         {[selected[0]!.shift.availability, selected[0]!.shift.utilization, selected[0]!.shift.performance, selected[0]!.shift.quality, selected[0]!.shift.oee].map(metric => {
