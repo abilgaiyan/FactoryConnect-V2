@@ -71,6 +71,23 @@ export function ShiftPerformanceOverviewView({ overview, showFilters = true }: S
         <p>Green represents occurrences with a reported calculated metric; grey includes unavailable, insufficient and missing metrics. Calculated values are not independently certified here.</p>
       </section>}
       {selected.length > 0 && <p><a download="factoryconnect-management-shift-metrics.csv" href={"data:text/csv;charset=utf-8," + encodeURIComponent("\uFEFF" + csvText)}>Export selected shift metrics CSV</a></p>}
+      {selected.length > 0 && <section aria-label="Management machine-shift OEE chart">
+        <h3>OEE by machine and shift</h3>
+        <p>Each bar is one reported machine-shift OEE value. Missing or non-calculated metrics are shown as unavailable, not zero; no cross-machine averaging.</p>
+        {selected.map(({ machine, shift }) => {
+          const metric = shift.oee;
+          const raw = metric.state === "calculated" && metric.unit.toLowerCase() === "ratio" ? Number(metric.value) : NaN;
+          const valid = Number.isFinite(raw) && raw >= 0 && raw <= 1;
+          const label = machine.displayName + " · " + shift.shift.shiftId + " · " + shift.shift.startsAtUtc;
+          return <div key={JSON.stringify([machine.machineId, machine.processorId, shift.shift.shiftScheduleAssignmentId, shift.shift.startsAtUtc])}>
+            <p><strong>{label}</strong> · {valid ? (raw * 100).toFixed(1) + "%" : metric.state === "calculated" ? "Reported metric cannot be plotted as a 0–100% ratio" : formatPresentedMetric(metric).primary}</p>
+            {valid && <div role="img" aria-label={label + " OEE " + (raw * 100).toFixed(1) + " percent"}
+              style={{ width: "100%", maxWidth: "30rem", height: "0.9rem", borderRadius: "0.25rem", background: "#e5e7eb", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: (raw * 100) + "%", background: "#16855c" }} />
+            </div>}
+          </div>;
+        })}
+      </section>}
       {selected.length === 1 && <p className="report-scope-note">Selected: {selected[0]!.machine.displayName} · {selected[0]!.shift.shift.shiftId} · {formatReportTimestamp(selected[0]!.shift.shift.startsAtUtc)} – {formatReportTimestamp(selected[0]!.shift.shift.endsAtUtc)}</p>}
       {selected.length === 1 && <section className="performance-kpis" aria-label="Selected shift metrics">
         {[selected[0]!.shift.availability, selected[0]!.shift.utilization, selected[0]!.shift.performance, selected[0]!.shift.quality, selected[0]!.shift.oee].map(metric => {
