@@ -74,6 +74,37 @@ function Trend({ rows, name }: { rows: readonly Daily[]; name: string }) {
     <p>Values are shown exactly as stored, with source units; not recalculated V2 OEE.</p>
   </section>;
 }
+function ShiftMetricOverview({ metrics }: { metrics: readonly Metric[] }) {
+  const rows = metrics.filter(metric => metric.shiftStartsAtUtc !== null && oeeMetric.test(metric.metricKey))
+    .sort((a, b) => (a.shiftStartsAtUtc ?? "").localeCompare(b.shiftStartsAtUtc ?? "") || a.metricKey.localeCompare(b.metricKey));
+  if (!rows.length) return <p>No source shift-level metric projections in the selected range.</p>;
+  const groups = new Map<string, Metric[]>();
+  for (const row of rows) {
+    const key = JSON.stringify([row.shiftStartsAtUtc, row.shiftId]);
+    const group = groups.get(key);
+    if (group) group.push(row);
+    else groups.set(key, [row]);
+  }
+  const shifts = [...groups.values()];
+  return <section aria-label="Imported V1 shift metric projections">
+    <h3>Shift-level Availability and OEE evidence</h3>
+    <p>{shifts.length} recorded shifts with metric projections. Only original source values are displayed; unavailable Performance, Quality or OEE are not treated as zero.</p>
+    <div style={{overflowX:"auto"}}>
+      <table><thead><tr><th>Shift start (UTC)</th><th>Shift ID</th><th>Availability</th><th>Utilization</th><th>Performance</th><th>Quality</th><th>OEE</th></tr></thead><tbody>
+        {shifts.map((group, index) => {
+          const first = group[0]!;
+          const value = (name: string) => {
+            const row = group.find(metric => metric.metricKey.toLowerCase() === name.toLowerCase());
+            return row ? formatMetric(row) : "Unavailable";
+          };
+          return <tr key={(first.shiftStartsAtUtc ?? "") + ":" + index}><td>{first.shiftStartsAtUtc}</td><td>{first.shiftId ?? "—"}</td>
+            <td>{value("Availability")}</td><td>{value("Utilization")}</td><td>{value("Performance")}</td><td>{value("Quality")}</td><td>{value("OEE")}</td>
+          </tr>;
+        })}
+      </tbody></table>
+    </div>
+  </section>;
+}
 function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: number; seconds: number }[] }) {
   const dates = [...new Set(rows.map(row => row.date))].sort();
   const states = [...new Set(rows.map(row => row.state))].sort((a, b) => a - b);
@@ -230,6 +261,7 @@ export default function HistoricalReportingPage() {
     {loaded && <><p>Imported source: {expectedSource}. {metrics.length} metric projections; {periods.length} raw activity periods.</p>
       <Trend rows={daily} name="Availability" /><Trend rows={daily} name="Utilization" />
       <ActivityDailyChart rows={activity} />
+      <ShiftMetricOverview metrics={metrics} />
       <HistoricalShiftSummary rows={shiftAggregates} />
       <div style={{display:"flex", flexWrap:"wrap", gap:12, margin:"20px 0"}} aria-label="Historical report coverage">
         {[["Historical projections",metrics.length],["Valid daily A/U points",daily.length],["Imported shift inputs",shiftAggregates.length],["Completed activity intervals",periods.length]].map(([label,value]) => <div key={label} style={{flex:"1 1 165px",padding:16,border:"1px solid #cbd5e1",borderRadius:8}}><div style={{fontSize:24,fontWeight:700}}>{value}</div><div>{label}</div></div>)}
