@@ -6,7 +6,7 @@ interface Period { sourceDatabase: string; sourceMachineId: string; projectionRe
 interface MachineReply { source: string; isSample: boolean; machines: Machine[] }
 interface MetricReply { source: string; isSample: boolean; metrics: Metric[] }
 interface ActivityReply { source: string; isSample: boolean; periods: Period[] }
-interface ShiftAggregate { sourceRowId: number; shiftId: string | null; shiftStartsAtUtc: string | null; metricInputKey: string; aggregateValue: string | null; unit: string | null; inputCount: number | null }
+interface ShiftAggregate { sourceRowId: number; shiftId: string | null; shiftStartsAtUtc: string | null; shiftEndsAtUtc: string | null; metricInputKey: string; aggregateValue: string | null; unit: string | null; inputCount: number | null }
 interface ShiftReply { source: string; isSample: boolean; aggregates: ShiftAggregate[] }
 type Daily = { date: string; metric: string; value: number; unit: string };
 const expectedSource = "imported-v1-legacy";
@@ -137,6 +137,45 @@ function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: nu
     </div>
   </section>;
 }
+function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[]; shifts: readonly ShiftAggregate[] }) {
+  // Shift boundaries are taken only from imported source facts, never from the
+  // current site schedule. Clip each raw period to the recorded shift interval.
+  const windows = new Map<string, { id: string; start: string; end: string }>();
+  for (const shift of shifts) {
+    if (!shift.shiftStartsAtUtc || !shift.shiftEndsAtUtc) continue;
+    const id = shift.shiftId ?? "Unspecified";
+    const key = JSON.stringify([id, shift.shiftStartsAtUtc, shift.shiftEndsAtUtc]);
+    windows.set(key, { id, start: shift.shiftStartsAtUtc, end: shift.shiftEndsAtUtc });
+  }
+  const rows = [...windows.values()].sort((a,b) => a.start.localeCompare(b.start)).map(window => {
+    const start = Date.parse(window.start);
+    const end = Date.parse(window.end);
+    const totals = new Map<number, number>();
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      for (const period of periods) {
+        const a = Math.max(start, Date.parse(period.startedAt));
+        const b = Math.min(end, Date.parse(period.endedAt));
+        if (Number.isFinite(a) && Number.isFinite(b) && b > a) {
+          totals.set(period.machineState, (totals.get(period.machineState) ?? 0) + (b - a) / 3600000);
+        }
+      }
+    }
+    const duration = (end - start) / 3600000;
+    const recorded = [...totals.values()].reduce((sum, hours) => sum + hours, 0);
+    return { ...window, totals, duration, recorded, overlap: recorded > duration + 0.01 };
+  });
+  if (!rows.length) return null;
+  const codes = [...new Set(rows.flatMap(row => [...row.totals.keys()]))].sort((a,b) => a-b);
+  return <section aria-label="Source-window historical shift activity">
+    <h3>Machine activity by recorded shift</h3>
+    <p>Raw machine-state intervals clipped to original V1 shift start/end boundaries. Breaks are not excluded. Overlapping source periods may overcount; these figures are not qualified production or OEE durations.</p>
+    <div style={{overflowX:"auto"}}><table><thead><tr><th>Shift start (source UTC)</th><th>Shift</th><th>Window hours</th>{codes.map(code => <th key={code}>{stateLabel(code)} ({code}) hours</th>)}<th>Coverage check</th></tr></thead>
+      <tbody>{rows.map(row => <tr key={row.start + row.id}><td>{row.start}</td><td>{row.id}</td><td>{row.duration.toFixed(2)}</td>
+        {codes.map(code => <td key={code}>{(row.totals.get(code) ?? 0).toFixed(2)}</td>)}
+        <td>{row.overlap ? "Overlapping evidence — review" : row.recorded < row.duration - 0.01 ? "Incomplete interval coverage" : "Raw intervals cover window"}</td>
+      </tr>)}</tbody></table></div>
+  </section>;
+}
 function HistoricalShiftSummary({ rows }: { rows: readonly ShiftAggregate[] }) {
   if (!rows.length) return null;
   const shifts = new Map<string, { shiftId: string; started: string; inputs: ShiftAggregate[] }>();
@@ -263,6 +302,7 @@ export default function HistoricalReportingPage() {
       <ActivityDailyChart rows={activity} />
       <ShiftMetricOverview metrics={metrics} />
       <HistoricalShiftSummary rows={shiftAggregates} />
+      <ShiftActivityBreakdown periods={periods} shifts={shiftAggregates} />
       <div style={{display:"flex", flexWrap:"wrap", gap:12, margin:"20px 0"}} aria-label="Historical report coverage">
         {[["Historical projections",metrics.length],["Valid daily A/U points",daily.length],["Imported shift inputs",shiftAggregates.length],["Completed activity intervals",periods.length]].map(([label,value]) => <div key={label} style={{flex:"1 1 165px",padding:16,border:"1px solid #cbd5e1",borderRadius:8}}><div style={{fontSize:24,fontWeight:700}}>{value}</div><div>{label}</div></div>)}
       </div>
