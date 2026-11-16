@@ -200,6 +200,19 @@ function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[
   return <section aria-label="Source-window historical shift activity">
     <h3>Machine activity by recorded shift</h3>
     <p>Raw machine-state intervals clipped to original V1 shift start/end boundaries. Breaks are not excluded. Overlapping source periods may overcount; these figures are not qualified production or OEE durations.</p>
+    <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:10}} aria-label="Shift activity state legend">
+      {codes.map((code,i) => <span key={code} style={{display:"inline-flex",alignItems:"center",gap:5}}><span aria-hidden="true" style={{display:"inline-block",width:12,height:12,background:["#287da8","#d97706","#64748b","#7c3aed","#059669","#be123c"][i % 6]}} />{stateLabel(code)} ({code})</span>)}
+    </div>
+    <div style={{display:"flex",gap:12,alignItems:"end",overflowX:"auto",padding:"8px 0 16px"}} aria-label="Historical shift state hours chart">
+      {rows.map((row,index) => <div key={row.start + "|" + row.id} style={{flex:"0 0 78px",textAlign:"center"}} title={historicalTime(row.start) + " · " + row.id + " · " + row.recorded.toFixed(2) + " raw interval hours"}>
+        <small>{row.recorded.toFixed(1)}h</small>
+        <div style={{height:110,display:"flex",flexDirection:"column-reverse",background:"#f1f5f9",overflow:"hidden",borderRadius:3}}>
+          {codes.map((code,i) => <div key={code} title={stateLabel(code) + ": " + (row.totals.get(code) ?? 0).toFixed(2) + "h"} style={{height:Math.max(0,Math.min(110,110 * (row.totals.get(code) ?? 0) / Math.max(row.duration,row.recorded,0.01))) + "px",background:["#287da8","#d97706","#64748b","#7c3aed","#059669","#be123c"][i % 6]}} />)}
+        </div>
+        <small>{historicalTime(row.start).slice(0,6)} #{index+1}</small>
+        {row.overlap && <small title="Raw intervals exceed shift window">Overlap</small>}
+      </div>)}
+    </div>
     <div style={{overflowX:"auto"}}><table><thead><tr><th>Shift start (IST)</th><th>Shift</th><th>Window hours</th>{codes.map(code => <th key={code}>{stateLabel(code)} ({code}) hours</th>)}<th>Coverage check</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.start + row.id}><td title={row.start}>{historicalTime(row.start)}</td><td>{row.id}</td><td>{row.duration.toFixed(2)}</td>
         {codes.map(code => <td key={code}>{(row.totals.get(code) ?? 0).toFixed(2)}</td>)}
