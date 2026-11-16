@@ -14,6 +14,7 @@ internal static class LegacyHistoryReportingApi
 {
     private const int MaximumResults = 2000;
     private const int MaximumWindowDays = 31;
+    private static readonly TimeSpan LegacyLocalOffset = TimeSpan.FromMinutes(330);
 
     internal static void MapLegacyHistoryReporting(this WebApplication app)
     {
@@ -65,8 +66,8 @@ internal static class LegacyHistoryReportingApi
                 command.Parameters.Add("@machine", SqlDbType.UniqueIdentifier).Value = machineId;
                 command.Parameters.Add("@fromDate", SqlDbType.Date).Value = from.ToDateTime(TimeOnly.MinValue);
                 command.Parameters.Add("@throughExclusive", SqlDbType.Date).Value = through.AddDays(1).ToDateTime(TimeOnly.MinValue);
-                command.Parameters.Add("@fromUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
-                command.Parameters.Add("@throughUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(through.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+                command.Parameters.Add("@fromUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), LegacyLocalOffset);
+                command.Parameters.Add("@throughUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(through.AddDays(1).ToDateTime(TimeOnly.MinValue), LegacyLocalOffset);
                 await using var reader = await command.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct))
                 {
@@ -134,7 +135,7 @@ internal static class LegacyHistoryReportingApi
                 return Results.Ok(new {
                     machineId, from, through, source = "imported-v1-legacy",
                     evidenceKind = "historical-reporting-only", liveStatus = "not-established",
-                    timeBasis = "UTC; activity periods are raw overlapping intervals, not daily or shift aggregates",
+                    timeBasis = "Asia/Kolkata historical factory calendar; activity periods are raw overlapping intervals, not daily or shift aggregates",
                     isSample = false, periods = rows
                 });
             }, ct);
