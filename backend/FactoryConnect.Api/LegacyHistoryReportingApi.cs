@@ -119,8 +119,8 @@ internal static class LegacyHistoryReportingApi
                     """, connection) { CommandTimeout = 20 };
                 command.Parameters.Add("@take", SqlDbType.Int).Value = MaximumResults + 1;
                 command.Parameters.Add("@machine", SqlDbType.UniqueIdentifier).Value = machineId;
-                command.Parameters.Add("@startUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
-                command.Parameters.Add("@endUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(through.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+                command.Parameters.Add("@startUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), LegacyLocalOffset);
+                command.Parameters.Add("@endUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(through.AddDays(1).ToDateTime(TimeOnly.MinValue), LegacyLocalOffset);
                 await using var reader = await command.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct))
                 {
