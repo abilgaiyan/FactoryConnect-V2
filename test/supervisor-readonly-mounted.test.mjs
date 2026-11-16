@@ -52,7 +52,7 @@ test('real mode reuses canonical reporting and exact overnight activity; inspect
   mockFetch(t, async (url, options) => {
     if (String(url) === '/api/planning/v2/shifts') {
       return Response.json({ isSample: false, shifts: [
-        { shiftId: 'SHIFT-3', durationMinutes: 450, excludedBreakMinutes: 30, plannedProductionMinutes: 420 },
+        { shiftId: 'SHIFT-3', startMinute: 0, endMinute: 450, durationMinutes: 450, excludedBreakMinutes: 30, plannedProductionMinutes: 420 },
       ] });
     }
     if (String(url).includes('/api/planning/v2/shifts/')) {
