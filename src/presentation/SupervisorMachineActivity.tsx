@@ -22,11 +22,13 @@ export default function SupervisorMachineActivity() {
   const [mapping, setMapping] = useState("");
   const [page, setPage] = useState<PeriodPage | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
+  const [pageRequest, setPageRequest] = useState<string | null>(null);
+  const [pageNumber, setPageNumber] = useState(0);
   const [periodError, setPeriodError] = useState("");
   const [periodLoading, setPeriodLoading] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
-    setError(""); setMachines([]); setSelected(""); setActivity(null); setMapping(""); setPage(null); setLoading(true);
+    setError(""); setMachines([]); setSelected(""); setActivity(null); setMapping(""); setPage(null); setPageRequest(null); setPageNumber(0); setLoading(true);
     void fetch("/api/reporting/v2/machines", { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then(async response => {
         if (!response.ok) throw new Error("SQL machine discovery unavailable (HTTP " + response.status + ").");
@@ -44,7 +46,7 @@ export default function SupervisorMachineActivity() {
   useEffect(() => {
     if (!selected) { setActivity(null); return; }
     const controller = new AbortController();
-    setActivity(null); setMapping(""); setPage(null); setCursor(null); setError(""); setLoading(true);
+    setActivity(null); setMapping(""); setPage(null); setCursor(null); setPageRequest(null); setPageNumber(0); setError(""); setLoading(true);
     void fetch("/api/reporting/v2/machines/" + encodeURIComponent(selected) + "/activity",
       { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then(async response => {
@@ -64,7 +66,7 @@ export default function SupervisorMachineActivity() {
     if (!selected || !mapping) { setPage(null); setCursor(null); return; }
     const controller = new AbortController();
     setPage(null); setCursor(null); setPeriodError(""); setPeriodLoading(true);
-    void fetch("/api/reporting/v2/machines/" + encodeURIComponent(selected) + "/activity/" + encodeURIComponent(mapping) + "?take=20",
+    void fetch("/api/reporting/v2/machines/" + encodeURIComponent(selected) + "/activity/" + encodeURIComponent(mapping) + "?take=20" + (pageRequest ? "&cursor=" + encodeURIComponent(pageRequest) : ""),
       { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then(async response => {
         if (!response.ok) throw new Error("Activity periods unavailable (HTTP " + response.status + ").");
@@ -78,7 +80,7 @@ export default function SupervisorMachineActivity() {
       }).catch(e => { if (!controller.signal.aborted) setPeriodError(e instanceof Error ? e.message : "Activity read failed."); })
       .finally(() => { if (!controller.signal.aborted) setPeriodLoading(false); });
     return () => controller.abort();
-  }, [selected, mapping]);
+  }, [selected, mapping, pageRequest]);
   return <section aria-label="SQL machine activity">
     <h2>Machine activity · SQL history</h2>
     <p>Historical published activity only. Live connectivity, shift duration and OEE are not inferred.</p>
@@ -93,7 +95,7 @@ export default function SupervisorMachineActivity() {
     {!loading && !error && machines.length === 0 && <p>No registered machines available for this site.</p>}
     {activity?.status === "published-history" && <div>
       <label htmlFor="supervisor-activity-mapping">Published source mapping</label>
-      <select id="supervisor-activity-mapping" value={mapping} onChange={e => setMapping(e.currentTarget.value)}>
+      <select id="supervisor-activity-mapping" value={mapping} onChange={e => { setPageRequest(null); setPageNumber(0); setMapping(e.currentTarget.value); }}>
         <option value="">Select a published mapping</option>
         {activity.series.map((series, i) => {
           const id = mappingId(series);
@@ -104,9 +106,10 @@ export default function SupervisorMachineActivity() {
         <p>Published mapping identifiers are unavailable; period inspection cannot proceed.</p>}
       {periodLoading && <p role="status">Reading verified periods…</p>}
       {periodError && <p role="alert">{periodError}</p>}
-      {page && <p role="status">Verified historical period records on this page: {page.rows.length}.
+      {page && <p role="status">Verified historical period records on page {pageNumber + 1}: {page.rows.length}.
         {cursor ? " Additional records exist; this page is not complete history." : " No continuation cursor returned."}
         {" "}Period count is not machine running time or complete shift coverage.</p>}
+      {page && cursor && <button type="button" disabled={periodLoading} onClick={() => { setPageNumber(v => v + 1); setPageRequest(cursor); }}>Load next verified page</button>}
     </div>}
     {activity && !loading && <p role="status">{activity.status === "published-history"
       ? "Published activity series: " + activity.series.length + ". Shift totals not yet calculated."
