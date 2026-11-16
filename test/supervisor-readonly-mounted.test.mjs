@@ -89,6 +89,8 @@ test('real mode reuses canonical reporting and exact overnight activity; inspect
   await selectOccurrence(h,2);
   assert.deepEqual(JSON.parse(requests[1].options.body),{fromInclusive:second.startsAtUtc,toExclusive:second.endsAtUtc});
   assert.match(text(h), /Assignment original-b/);
+  assert.match(text(h), /Enter the site's verified IANA timezone/);
+  await h.changeInput(control(h,'Site timezone for provisional alignment','input'),'Asia/Kolkata');
   assert.match(text(h), /does not match the configured full shift duration/);
 });
 
