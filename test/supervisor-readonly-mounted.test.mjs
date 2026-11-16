@@ -91,7 +91,7 @@ test('real mode reuses canonical reporting and exact overnight activity; inspect
   assert.match(text(h), /Assignment original-b/);
   assert.match(text(h), /Enter the site's verified IANA timezone/);
   await h.changeInput(control(h,'Site timezone for provisional alignment','input'),'Asia/Kolkata');
-  assert.match(text(h), /does not match the configured full shift duration/);
+  assert.match(text(h), /Occurrence UTC start does not align with the configured shift start/);
 });
 
 test('above-100 availability stays conflicting and source context mismatch fails closed', async t => {
