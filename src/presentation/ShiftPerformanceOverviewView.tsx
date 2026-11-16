@@ -88,6 +88,25 @@ export function ShiftPerformanceOverviewView({ overview, showFilters = true }: S
           </div>;
         })}
       </section>}
+      {selected.length > 0 && <section aria-label="Management OEE component comparison">
+        <h3>OEE components by machine and shift</h3>
+        <p>Availability, performance and quality are separate reported percentages for each occurrence. They are not recomputed from machine activity or combined into an estimated OEE.</p>
+        {selected.map(({ machine, shift }) => <div key={JSON.stringify([machine.machineId, machine.processorId, shift.shift.shiftScheduleAssignmentId, shift.shift.startsAtUtc])}>
+          <h4>{machine.displayName} · {shift.shift.shiftId} · {shift.shift.startsAtUtc}</h4>
+          {([shift.availability, shift.performance, shift.quality] as const).map(metric => {
+            const raw = metric.state === "calculated" && metric.unit.toLowerCase() === "ratio" ? Number(metric.value) : NaN;
+            const valid = Number.isFinite(raw) && raw >= 0 && raw <= 1;
+            const label = metricLabel(metric.metricKey);
+            return <div key={metric.metricKey}>
+              <p>{label} · {valid ? (raw * 100).toFixed(1) + "%" : metric.state === "calculated" ? "Reported value cannot be plotted as a 0–100% ratio" : formatPresentedMetric(metric).primary}</p>
+              {valid && <div role="img" aria-label={machine.displayName + " " + shift.shift.shiftId + " " + label + " " + (raw * 100).toFixed(1) + " percent"}
+                style={{ width: "100%", maxWidth: "30rem", height: "0.65rem", background: "#e5e7eb", overflow: "hidden", borderRadius: "0.25rem" }}>
+                <div style={{ width: (raw * 100) + "%", height: "100%", background: "#2563eb" }} />
+              </div>}
+            </div>;
+          })}
+        </div>)}
+      </section>}
       {selected.length === 1 && <p className="report-scope-note">Selected: {selected[0]!.machine.displayName} · {selected[0]!.shift.shift.shiftId} · {formatReportTimestamp(selected[0]!.shift.shift.startsAtUtc)} – {formatReportTimestamp(selected[0]!.shift.shift.endsAtUtc)}</p>}
       {selected.length === 1 && <section className="performance-kpis" aria-label="Selected shift metrics">
         {[selected[0]!.shift.availability, selected[0]!.shift.utilization, selected[0]!.shift.performance, selected[0]!.shift.quality, selected[0]!.shift.oee].map(metric => {
