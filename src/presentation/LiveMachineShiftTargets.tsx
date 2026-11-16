@@ -137,7 +137,23 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
       <button type="button" onClick={() => setRetry(value => value + 1)}>Retry targets</button></>
       : targets === null ? <p role="status">Loading recorded targets…</p>
       : targets.length === 0 ? <p>No targets recorded for this machine and business date. This is not a zero target.</p>
-      : <><label>Inspect target revision <select value={selectedShift} onChange={e => setSelectedShift(e.target.value)}><option value="">Select a recorded shift</option>{targets.map(t => <option key={t.shiftId} value={t.shiftId}>{shiftName(t.shiftId)} · revision {t.revision}</option>)}</select></label>
+      : <><section aria-label="Recorded shift production targets">
+        <h4>Production targets by configured shift</h4>
+        <p>Recorded SQL target quantities for {businessDate}. These are planned quantities, not actual production or achievement. Bars are comparable only for the same unit.</p>
+        {targets.map(target => {
+          const sameUnit = targets.filter(item => item.quantityUnit.toLowerCase() === target.quantityUnit.toLowerCase());
+          const maximum = Math.max(...sameUnit.map(item => item.targetQuantity), 0);
+          const width = maximum > 0 ? Math.max(0, Math.min(100, target.targetQuantity / maximum * 100)) : 0;
+          return <div key={target.shiftId}>
+            <p><strong>{shiftName(target.shiftId)}</strong> · {target.targetQuantity} {target.quantityUnit} · revision {target.revision}</p>
+            <div role="img" aria-label={shiftName(target.shiftId) + " planned target " + target.targetQuantity + " " + target.quantityUnit}
+              style={{ width: "100%", maxWidth: "30rem", height: "0.8rem", background: "#e5e7eb", borderRadius: "0.25rem", overflow: "hidden" }}>
+              <div style={{ width: width + "%", height: "100%", background: "#2563eb" }} />
+            </div>
+          </div>;
+        })}
+        <p>Actual quantity and target achievement are not available in this SQL target response and are not inferred.</p>
+      </section><label>Inspect target revision <select value={selectedShift} onChange={e => setSelectedShift(e.target.value)}><option value="">Select a recorded shift</option>{targets.map(t => <option key={t.shiftId} value={t.shiftId}>{shiftName(t.shiftId)} · revision {t.revision}</option>)}</select></label>
       {selectedShift && (() => { const target = targets.find(t => t.shiftId === selectedShift); return target ? <p>Recorded at {target.recordedAtUtc} · revision {target.revision} · target {target.targetQuantity} {target.quantityUnit}. Revision reason: {target.revisionReason}</p> : null; })()}
 
       {selectedShift && <section aria-label="Target revision history">
