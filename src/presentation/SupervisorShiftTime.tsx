@@ -62,6 +62,15 @@ export default function SupervisorShiftTime() {
           <option value="">Select a shift</option>
           {shifts.map(s => <option key={s.shiftId} value={s.shiftId}>{s.displayName} · {clock(s.startMinute)}–{clock(s.endMinute)}</option>)}
         </select>
+        {shift && <div role="img" aria-label={shift.displayName + ": " + shift.plannedProductionMinutes + " minutes planned production, " + shift.excludedBreakMinutes + " minutes excluded breaks"}>
+          <div style={{ display: "flex", width: "100%", minHeight: "24px", borderRadius: "4px", overflow: "hidden" }}>
+            <div style={{ width: (shift.plannedProductionMinutes / shift.durationMinutes * 100) + "%", background: "#16855c" }}
+              title={"Planned production: " + shift.plannedProductionMinutes + " min"} />
+            <div style={{ width: (shift.excludedBreakMinutes / shift.durationMinutes * 100) + "%", background: "#a3a3a3" }}
+              title={"Excluded breaks: " + shift.excludedBreakMinutes + " min"} />
+          </div>
+          <p>Planned production: {shift.plannedProductionMinutes} min ({Math.round(shift.plannedProductionMinutes / shift.durationMinutes * 100)}%) · Excluded breaks: {shift.excludedBreakMinutes} min ({Math.round(shift.excludedBreakMinutes / shift.durationMinutes * 100)}%)</p>
+        </div>}
         {shift && <table><caption>{shift.displayName} · configured site schedule</caption>
           <thead><tr><th>Shift duration</th><th>Excluded breaks</th><th>Planned production</th></tr></thead>
           <tbody><tr><td>{shift.durationMinutes} min</td><td>{shift.excludedBreakMinutes} min</td><td>{shift.plannedProductionMinutes} min</td></tr></tbody>
