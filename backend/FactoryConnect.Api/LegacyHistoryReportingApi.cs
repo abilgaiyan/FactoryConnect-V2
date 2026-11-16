@@ -138,7 +138,7 @@ internal static class LegacyHistoryReportingApi
                         metricInputKey = reader.GetString(7),
                         aggregateValue = reader.IsDBNull(8) ? null : reader.GetString(8),
                         unit = reader.IsDBNull(9) ? null : reader.GetString(9),
-                        inputCount = reader.IsDBNull(10) ? (long?)null : reader.GetInt64(10)
+                        inputCount = reader.IsDBNull(10) ? (long?)null : Convert.ToInt64(reader.GetValue(10), System.Globalization.CultureInfo.InvariantCulture)
                     });
                 }
                 return Results.Ok(new {
