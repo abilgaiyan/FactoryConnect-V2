@@ -10,7 +10,7 @@ if ($SourceDatabase -eq $TargetDatabase) { throw 'Source and target databases mu
 if ($SourceDatabase -notmatch '^[A-Za-z][A-Za-z0-9_]*$' -or $TargetDatabase -notmatch '^[A-Za-z][A-Za-z0-9_]*$') { throw 'Database names must contain only letters, digits and underscores.' }
 $sourceQuery = @'
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
-SELECT CAST('MachineObservation' AS nvarchar(80)) AS DataSet, CONVERT(nvarchar(100),MachineId) AS MachineId, COUNT_BIG(*) AS RowCount, MIN(ObservedAt) AS FirstAt, MAX(ObservedAt) AS LastAt FROM dbo.MachineObservation GROUP BY MachineId
+SELECT CAST('MachineObservation' AS nvarchar(80)) AS DataSet, CONVERT(nvarchar(100),MachineId) AS MachineId, COUNT_BIG(*) AS [RowCount], MIN(ObservedAt) AS FirstAt, MAX(ObservedAt) AS LastAt FROM dbo.MachineObservation GROUP BY MachineId
 UNION ALL
 SELECT 'MachineActivityPeriodHistory', CONVERT(nvarchar(100),MachineId), COUNT_BIG(*), MIN(StartedAt), MAX(EndedAt) FROM dbo.MachineActivityPeriodHistory GROUP BY MachineId
 UNION ALL
@@ -24,8 +24,8 @@ FROM master.Machine m JOIN master.Site s ON s.SiteId=m.SiteId ORDER BY s.Display
 '@
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 # SQL ApplicationIntent=ReadOnly is advisory without an availability group; no write SQL is executed.
-$source = @(Invoke-Sqlcmd -ServerInstance $ServerInstance -Database $SourceDatabase -Query $sourceQuery -TrustServerCertificate -QueryTimeout 120)
-$target = @(Invoke-Sqlcmd -ServerInstance $ServerInstance -Database $TargetDatabase -Query $targetQuery -TrustServerCertificate -QueryTimeout 120)
+$source = @(Invoke-Sqlcmd -ServerInstance $ServerInstance -Database $SourceDatabase -Query $sourceQuery -TrustServerCertificate -QueryTimeout 120 -AbortOnError)
+$target = @(Invoke-Sqlcmd -ServerInstance $ServerInstance -Database $TargetDatabase -Query $targetQuery -TrustServerCertificate -QueryTimeout 120 -AbortOnError)
 $source | Select-Object DataSet,MachineId,RowCount,FirstAt,LastAt | Export-Csv (Join-Path $OutputDirectory 'v1-machine-history.csv') -NoTypeInformation -Encoding UTF8
 $target | Select-Object SiteId,SiteName,MachineId,MachineName,IsRetired | Export-Csv (Join-Path $OutputDirectory 'v2-machines.csv') -NoTypeInformation -Encoding UTF8
 Write-Host "Read-only inventory complete: $OutputDirectory"
