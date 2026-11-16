@@ -261,6 +261,15 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
     <h3>Recorded activity outside planned breaks</h3>
     <p>Configured excluded breaks: {excludedMs / 60000} min. Planned production window: {plannedMs / 60000} min. State intervals are clipped against each excluded break.</p>
     <p>Shift clock definition: {String(Math.floor(shift.startMinute / 60)).padStart(2, "0")}:{String(shift.startMinute % 60).padStart(2, "0")} to {String(Math.floor(shift.endMinute / 60)).padStart(2, "0")}:{String(shift.endMinute % 60).padStart(2, "0")} site-local. UTC occurrence start and end were checked against the entered timezone {timeZone}. The timezone is user-supplied, not independently verified site configuration; these values must not be treated as certified OEE availability.</p>
+    <figure aria-label="Break-adjusted machine state chart">
+      <figcaption>Recorded machine states as a share of planned production time (excluded breaks removed)</figcaption>
+      <div role="img" aria-label={byState.map(s => s.state + " " + (s.ms / plannedMs * 100).toFixed(1) + " percent").join(", ") + ", unrepresented " + (missingMs / plannedMs * 100).toFixed(1) + " percent"}
+        style={{ display: "flex", width: "100%", height: "1.5rem", overflow: "hidden", borderRadius: "0.25rem", background: "#e5e7eb" }}>
+        {byState.filter(s => s.ms > 0).map(s => <div key={s.state} title={s.state + ": " + (s.ms / plannedMs * 100).toFixed(1) + "%"}
+          style={{ width: (s.ms / plannedMs * 100) + "%", background: s.state === "running" ? "#16803c" : s.state === "stopped" ? "#d97706" : s.state === "fault" ? "#b91c1c" : s.state === "idle" ? "#2563eb" : "#64748b" }} />)}
+      </div>
+      <p>Grey remainder is unrepresented coverage. Green: running; amber: stopped; red: fault; blue: idle; other recorded states: slate. This is an evidence-coverage chart, not an OEE score.</p>
+    </figure>
     <dl>{byState.map(s => <div key={s.state}><dt>{s.state}</dt><dd>{(s.ms / 60000).toFixed(2)} min ({(s.ms / plannedMs * 100).toFixed(1)}%)</dd></div>)}
       <div><dt>Unrepresented outside breaks</dt><dd>{(missingMs / 60000).toFixed(2)} min ({(missingMs / plannedMs * 100).toFixed(1)}%)</dd></div>
     </dl>
