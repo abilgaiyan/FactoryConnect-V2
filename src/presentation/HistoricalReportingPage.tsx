@@ -12,6 +12,15 @@ type Daily = { date: string; metric: string; value: number; unit: string };
 const expectedSource = "imported-v1-legacy";
 const stateNames: Record<number, string> = { 0: "Unknown", 1: "Stopped", 2: "Idle", 3: "Running", 4: "Fault", 5: "Offline" };
 const stateLabel = (code: number) => stateNames[code] ?? "Unrecognized";
+const historicalTime = (instant: string | null): string => {
+  if (!instant) return "Unspecified";
+  const parsed = Date.parse(instant);
+  if (!Number.isFinite(parsed)) return "Invalid source timestamp";
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(parsed)) + " IST";
+};
 const percentMetric = /^(availability|utilization)$/i;
 const oeeMetric = /^(availability|utilization|performance|quality|oee)$/i;
 const numeric = (value: string | null): number | null => {
@@ -90,14 +99,14 @@ function ShiftMetricOverview({ metrics }: { metrics: readonly Metric[] }) {
     <h3>Shift-level Availability and OEE evidence</h3>
     <p>{shifts.length} recorded shifts with metric projections. Only original source values are displayed; unavailable Performance, Quality or OEE are not treated as zero.</p>
     <div style={{overflowX:"auto"}}>
-      <table><thead><tr><th>Shift start (UTC)</th><th>Shift ID</th><th>Availability</th><th>Utilization</th><th>Performance</th><th>Quality</th><th>OEE</th></tr></thead><tbody>
+      <table><thead><tr><th>Shift start (IST)</th><th>Shift ID</th><th>Availability</th><th>Utilization</th><th>Performance</th><th>Quality</th><th>OEE</th></tr></thead><tbody>
         {shifts.map((group, index) => {
           const first = group[0]!;
           const value = (name: string) => {
             const row = group.find(metric => metric.metricKey.toLowerCase() === name.toLowerCase());
             return row ? formatMetric(row) : "Unavailable";
           };
-          return <tr key={(first.shiftStartsAtUtc ?? "") + ":" + index}><td>{first.shiftStartsAtUtc}</td><td>{first.shiftId ?? "—"}</td>
+          return <tr key={(first.shiftStartsAtUtc ?? "") + ":" + index}><td title={first.shiftStartsAtUtc ?? undefined}>{historicalTime(first.shiftStartsAtUtc)}</td><td>{first.shiftId ?? "—"}</td>
             <td>{value("Availability")}</td><td>{value("Utilization")}</td><td>{value("Performance")}</td><td>{value("Quality")}</td><td>{value("OEE")}</td>
           </tr>;
         })}
@@ -169,8 +178,8 @@ function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[
   return <section aria-label="Source-window historical shift activity">
     <h3>Machine activity by recorded shift</h3>
     <p>Raw machine-state intervals clipped to original V1 shift start/end boundaries. Breaks are not excluded. Overlapping source periods may overcount; these figures are not qualified production or OEE durations.</p>
-    <div style={{overflowX:"auto"}}><table><thead><tr><th>Shift start (source UTC)</th><th>Shift</th><th>Window hours</th>{codes.map(code => <th key={code}>{stateLabel(code)} ({code}) hours</th>)}<th>Coverage check</th></tr></thead>
-      <tbody>{rows.map(row => <tr key={row.start + row.id}><td>{row.start}</td><td>{row.id}</td><td>{row.duration.toFixed(2)}</td>
+    <div style={{overflowX:"auto"}}><table><thead><tr><th>Shift start (IST)</th><th>Shift</th><th>Window hours</th>{codes.map(code => <th key={code}>{stateLabel(code)} ({code}) hours</th>)}<th>Coverage check</th></tr></thead>
+      <tbody>{rows.map(row => <tr key={row.start + row.id}><td title={row.start}>{historicalTime(row.start)}</td><td>{row.id}</td><td>{row.duration.toFixed(2)}</td>
         {codes.map(code => <td key={code}>{(row.totals.get(code) ?? 0).toFixed(2)}</td>)}
         <td>{row.overlap ? "Overlapping evidence — review" : row.recorded < row.duration - 0.01 ? "Incomplete interval coverage" : "Raw intervals cover window"}</td>
       </tr>)}</tbody></table></div>
@@ -193,7 +202,7 @@ function HistoricalShiftSummary({ rows }: { rows: readonly ShiftAggregate[] }) {
     <div style={{overflowX:"auto"}}>
       <table><thead><tr><th>Shift start (source UTC)</th><th>Shift</th><th>Recorded input values</th></tr></thead>
         <tbody>{sorted.map(shift => <tr key={shift.started + "|" + shift.shiftId}>
-          <td>{shift.started}</td><td>{shift.shiftId}</td>
+          <td title={shift.started}>{historicalTime(shift.started)}</td><td>{shift.shiftId}</td>
           <td>{shift.inputs.map(input => <div key={input.sourceRowId}><strong>{input.metricInputKey}</strong>: {input.aggregateValue === null ? "Unavailable" : input.aggregateValue + (input.unit ? " " + input.unit : "")}</div>)}</td>
         </tr>)}</tbody>
       </table>
@@ -316,7 +325,7 @@ export default function HistoricalReportingPage() {
       <details><summary><strong>Historical shift inputs ({shiftAggregates.length} rows)</strong> · expand source details</summary>
       <p>These are the original V1 shift aggregate values, not recalculated targets or OEE. Historical shift definitions and break exclusions remain as recorded in V1.</p>
       <table><thead><tr><th>Shift</th><th>Shift start UTC</th><th>Input</th><th>Source value</th><th>Input count</th></tr></thead><tbody>
-        {shiftAggregates.map(row => <tr key={row.sourceRowId}><td>{row.shiftId ?? "Unspecified"}</td><td>{row.shiftStartsAtUtc ?? "Unspecified"}</td><td>{row.metricInputKey}</td><td>{row.aggregateValue === null ? "Unavailable" : row.aggregateValue + " " + (row.unit ?? "")}</td><td>{row.inputCount ?? "—"}</td></tr>)}
+        {shiftAggregates.map(row => <tr key={row.sourceRowId}><td>{row.shiftId ?? "Unspecified"}</td><td title={row.shiftStartsAtUtc ?? undefined}>{historicalTime(row.shiftStartsAtUtc)}</td><td>{row.metricInputKey}</td><td>{row.aggregateValue === null ? "Unavailable" : row.aggregateValue + " " + (row.unit ?? "")}</td><td>{row.inputCount ?? "—"}</td></tr>)}
       </tbody></table>
       {!shiftAggregates.length && !shiftError && <p>No historical shift aggregates in the selected range.</p>}
       </details>
