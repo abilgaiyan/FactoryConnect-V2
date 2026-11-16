@@ -72,6 +72,38 @@ function Trend({ rows, name }: { rows: readonly Daily[]; name: string }) {
     <p>Values are shown exactly as stored, with source units; not recalculated V2 OEE.</p>
   </section>;
 }
+function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: number; seconds: number }[] }) {
+  const dates = [...new Set(rows.map(row => row.date))].sort();
+  const states = [...new Set(rows.map(row => row.state))].sort((a, b) => a - b);
+  if (!dates.length) return <p>No completed activity intervals in this range.</p>;
+  // Raw interval durations can overlap in source revisions. Do not label the sums
+  // as utilization, machine availability or qualified shift production time.
+  const palette = ["#287da8", "#d97706", "#64748b", "#7c3aed", "#059669", "#be123c"];
+  const max = Math.max(1, ...dates.map(date => rows.filter(row => row.date === date).reduce((sum, row) => sum + row.seconds, 0)));
+  return <section aria-label="Imported V1 activity by India calendar day">
+    <h3>Historical activity by day</h3>
+    <p>Hours by original V1 state code, split at India midnight. Raw source intervals may overlap; this is not a qualified OEE or shift-duration calculation.</p>
+    <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:12}}>
+      {states.map((state,i) => <span key={state} style={{display:"inline-flex",alignItems:"center",gap:6}}><span aria-hidden="true" style={{display:"inline-block",width:12,height:12,background:palette[i % palette.length]}} />State {state}</span>)}
+    </div>
+    <div style={{display:"flex",gap:10,alignItems:"end",overflowX:"auto",minHeight:180,padding:"8px 0"}}>
+      {dates.map(date => {
+        const day = rows.filter(row => row.date === date);
+        const total = day.reduce((sum,row) => sum + row.seconds, 0);
+        return <div key={date} style={{flex:"1 0 55px",maxWidth:110,textAlign:"center"}} title={date + ": " + (total / 3600).toFixed(2) + " raw interval hours"}>
+          <small>{(total / 3600).toFixed(1)}h</small>
+          <div style={{height:125,display:"flex",flexDirection:"column-reverse",justifyContent:"start",background:"#f1f5f9",borderRadius:3,overflow:"hidden"}}>
+            {states.map((state,i) => {
+              const seconds = day.find(row => row.state === state)?.seconds ?? 0;
+              return seconds > 0 ? <div key={state} title={date + " · state " + state + ": " + (seconds / 3600).toFixed(2) + "h"} style={{height:(seconds / max * 125) + "px",background:palette[i % palette.length]}} /> : null;
+            })}
+          </div>
+          <small>{date.slice(5)}</small>
+        </div>;
+      })}
+    </div>
+  </section>;
+}
 // Query smaller date windows when the API refuses more than 2,000 raw periods.
 // Windows overlap at their boundaries because long intervals may span multiple days.
 async function readActivity(base: string, from: string, through: string): Promise<Period[]> {
@@ -156,6 +188,7 @@ export default function HistoricalReportingPage() {
     {!valid && machineId && <p role="alert">Select an inclusive range of at most 31 days.</p>}
     {loaded && <><p>Imported source: {expectedSource}. {metrics.length} metric projections; {periods.length} raw activity periods.</p>
       <Trend rows={daily} name="Availability" /><Trend rows={daily} name="Utilization" />
+      <ActivityDailyChart rows={activity} />
       <div style={{display:"flex", flexWrap:"wrap", gap:12, margin:"20px 0"}} aria-label="Historical report coverage">
         {[["Historical projections",metrics.length],["Valid daily A/U points",daily.length],["Imported shift inputs",shiftAggregates.length],["Completed activity intervals",periods.length]].map(([label,value]) => <div key={label} style={{flex:"1 1 165px",padding:16,border:"1px solid #cbd5e1",borderRadius:8}}><div style={{fontSize:24,fontWeight:700}}>{value}</div><div>{label}</div></div>)}
       </div>
