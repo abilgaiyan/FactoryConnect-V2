@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { DashboardApplicationRuntime } from "../application/application-runtime.ts";
 import { isProductionDayIdentity } from "../application/production-day-shift-reporting.ts";
 import { useShiftPerformanceOverview } from "../application/use-shift-performance-overview.ts";
-import { formatActivityDuration, loadActivityReport, type ActivityReport } from "../application/machine-activity-report.ts";
+import { activityStates, formatActivityDuration, loadActivityReport, type ActivityReport } from "../application/machine-activity-report.ts";
 import { ShiftPerformancePageStateView } from "./ShiftPerformancePageStateView.tsx";
 import { ShiftPerformanceOverviewView } from "./ShiftPerformanceOverviewView.tsx";
 import type { ShiftPerformanceMachine, ShiftPerformanceOverview, ShiftPerformanceShift } from "./shift-performance-model.ts";
@@ -81,6 +81,29 @@ function OccurrenceRead({ overview, runtime }: { readonly overview: ShiftPerform
   </>;
 }
 
+function ExactStateChart({ report }: { readonly report: ActivityReport }) {
+  const duration = report.totals.reduce((sum, entry) => sum + entry.durationTicks, report.unrepresentedTicks);
+  if (duration <= 0) return <p>No measurable duration returned for this occurrence.</p>;
+  const colors: Record<string, string> = {
+    running: "#16855c", stopped: "#d97706", idle: "#7c8caa",
+    fault: "#c24140", offline: "#475569", unknown: "#a3a3a3", unrepresented: "#e5e7eb",
+  };
+  const portions = [...activityStates.map(state => ({
+    state, ticks: report.totals.find(t => t.state === state)?.durationTicks ?? 0,
+  })), { state: "unrepresented", ticks: report.unrepresentedTicks }];
+  return <section aria-label="Measured machine state distribution">
+    <h3>Recorded machine state · exact occurrence</h3>
+    <p>This chart uses validated historical activity durations. Unrepresented coverage is not treated as running, stopped or recorded Unknown. Planned break exclusions and OEE are not applied.</p>
+    <div role="img" aria-label={portions.map(p => p.state + " " + (p.ticks / 10000000).toFixed(1) + " seconds").join(", ")}
+      style={{ display: "flex", height: "26px", width: "100%", overflow: "hidden", borderRadius: "4px" }}>
+      {portions.filter(p => p.ticks > 0).map(p =>
+        <div key={p.state} title={p.state + ": " + formatActivityDuration(p.ticks)}
+          style={{ width: (p.ticks / duration * 100) + "%", backgroundColor: colors[p.state] }} />)}
+    </div>
+    <ul>{portions.map(p => <li key={p.state}>{p.state}: {formatActivityDuration(p.ticks)} ({(p.ticks / duration * 100).toFixed(1)}%)</li>)}</ul>
+  </section>;
+}
+
 function ExactActivity({ machine, occurrence, timeoutMilliseconds }: { readonly machine: ShiftPerformanceMachine; readonly occurrence: ShiftPerformanceShift; readonly timeoutMilliseconds: number }) {
   const [result, setResult] = useState<ActivityReport | null>(null);
   const [error, setError] = useState("");
@@ -102,7 +125,7 @@ function ExactActivity({ machine, occurrence, timeoutMilliseconds }: { readonly 
     <p>Closed stored periods only. Displayed bounds may be clipped to this occurrence; original source bounds remain visible. Open periods, missing coverage and recorded Unknown are different conditions.</p>
     <p>Durable explanation actions are unavailable. The API does not return the complete publication revision/output ordinal reference. Positions are inspection provenance, not a replacement exact-event key.</p>
     {error ? <><p role="alert">{error} No sample fallback.</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry activity</button></>
-      : result ? <><p>Unrepresented coverage: {formatActivityDuration(result.unrepresentedTicks)}. Not proof of downtime or acquisition failure.</p><MachineActivityEvidence report={result} /></>
+      : result ? <><p>Unrepresented coverage: {formatActivityDuration(result.unrepresentedTicks)}. Not proof of downtime or acquisition failure.</p><ExactStateChart report={result} /><MachineActivityEvidence report={result} /></>
       : <p role="status">Loading exact shift activity…</p>}
   </section>;
 }
