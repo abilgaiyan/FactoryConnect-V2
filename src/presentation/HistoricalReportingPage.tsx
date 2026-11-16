@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 interface Machine { sourceMachineId: string; deviceKey: string; sourceDatabase: string }
 interface Metric { sourceRowId: number; productionBusinessDate: string | null; shiftId: string | null; shiftStartsAtUtc: string | null; metricKey: string; status: number; metricValue: string | null; unit: string | null; reasonCode: number | null }
-interface Period { machineState: number; startedAt: string; endedAt: string }
+interface Period { sourceDatabase: string; sourceMachineId: string; projectionRevision: number; outputOrdinal: number; machineState: number; startedAt: string; endedAt: string }
 interface MachineReply { source: string; isSample: boolean; machines: Machine[] }
 interface MetricReply { source: string; isSample: boolean; metrics: Metric[] }
 interface ActivityReply { source: string; isSample: boolean; periods: Period[] }
@@ -70,6 +70,34 @@ function Trend({ rows, name }: { rows: readonly Daily[]; name: string }) {
     <p>Values are shown exactly as stored, with source units; not recalculated V2 OEE.</p>
   </section>;
 }
+// Query smaller date windows when the API refuses more than 2,000 raw periods.
+// Windows overlap at their boundaries because long intervals may span multiple days.
+async function readActivity(base: string, from: string, through: string): Promise<Period[]> {
+  const start = Date.parse(from + "T00:00:00Z");
+  const end = Date.parse(through + "T00:00:00Z");
+  const read = async (a: number, b: number): Promise<Period[]> => {
+    const first = new Date(a).toISOString().slice(0, 10);
+    const last = new Date(b).toISOString().slice(0, 10);
+    const response = await fetch(base + "/activity?from=" + first + "&through=" + last, { credentials: "include", cache: "no-store" });
+    if (response.status === 413 && a < b) {
+      const middle = a + Math.floor((b - a) / (2 * 86_400_000)) * 86_400_000;
+      const left = await read(a, middle);
+      const right = await read(middle + 86_400_000, b);
+      return [...left, ...right];
+    }
+    if (!response.ok) throw Error("Historical activity HTTP " + response.status + " (" + first + " to " + last + ")");
+    const result = await response.json() as ActivityReply;
+    if (result.source !== expectedSource || result.isSample || !Array.isArray(result.periods)) throw Error("Unexpected historical activity response");
+    return result.periods;
+  };
+  const records = await read(start, end);
+  const unique = new Map<string, Period>();
+  for (const p of records) {
+    const key = JSON.stringify([p.sourceDatabase, p.sourceMachineId, p.projectionRevision, p.outputOrdinal, p.startedAt, p.endedAt, p.machineState]);
+    unique.set(key, p);
+  }
+  return [...unique.values()];
+}
 export default function HistoricalReportingPage() {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [machineId, setMachineId] = useState("");
@@ -96,11 +124,14 @@ export default function HistoricalReportingPage() {
     try {
       const base = `/api/reporting/v2/legacy/machines/${encodeURIComponent(machineId)}`;
       const qs = `?from=${encodeURIComponent(from)}&through=${encodeURIComponent(through)}`;
-      const responses = await Promise.all(["metrics", "activity"].map(kind => fetch(base + "/" + kind + qs, { credentials: "include", cache: "no-store" })));
-      for (const response of responses) if (!response.ok) throw Error(`Historical reporting HTTP ${response.status}`);
-      const [m, a] = await Promise.all([responses[0]!.json() as Promise<MetricReply>, responses[1]!.json() as Promise<ActivityReply>]);
-      if (m.source !== expectedSource || a.source !== expectedSource || m.isSample || a.isSample || !Array.isArray(m.metrics) || !Array.isArray(a.periods)) throw Error("Unexpected historical data response");
-      setMetrics(m.metrics); setPeriods(a.periods); setLoaded(true);
+      const [metricResponse, activityPeriods] = await Promise.all([
+        fetch(base + "/metrics" + qs, { credentials: "include", cache: "no-store" }),
+        readActivity(base, from, through),
+      ]);
+      if (!metricResponse.ok) throw Error("Historical metrics HTTP " + metricResponse.status);
+      const m = await metricResponse.json() as MetricReply;
+      if (m.source !== expectedSource || m.isSample || !Array.isArray(m.metrics)) throw Error("Unexpected historical metrics response");
+      setMetrics(m.metrics); setPeriods(activityPeriods); setLoaded(true);
     } catch (e) { setError(String(e)); }
     finally { setLoading(false); }
   }
