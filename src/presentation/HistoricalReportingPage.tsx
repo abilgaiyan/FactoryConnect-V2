@@ -97,7 +97,7 @@ function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: nu
           <div style={{height:125,display:"flex",flexDirection:"column-reverse",justifyContent:"start",background:"#f1f5f9",borderRadius:3,overflow:"hidden"}}>
             {states.map((state,i) => {
               const seconds = day.find(row => row.state === state)?.seconds ?? 0;
-              return seconds > 0 ? <div key={state} title={date +  · " + stateLabel(state) + " (" + state + "): " + (seconds / 3600).toFixed(2) + "h"} style={{height:(seconds / max * 125) + "px",background:palette[i % palette.length]}} /> : null;
+              return seconds > 0 ? <div key={state} title={date + " · " + stateLabel(state) + " (" + state + "): " + (seconds / 3600).toFixed(2) + "h"} style={{height:(seconds / max * 125) + "px",background:palette[i % palette.length]}} /> : null;
             })}
           </div>
           <small>{date.slice(5)}</small>
