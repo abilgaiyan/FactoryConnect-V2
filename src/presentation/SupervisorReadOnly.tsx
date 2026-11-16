@@ -208,7 +208,16 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
   if (!timeZone) return <section>{zoneControl}<p>Enter the site's verified IANA timezone to align the UTC occurrence with the configured shift clock. No timezone is inferred from the browser.</p></section>;
   const localStart = occurrenceStartMinuteInZone(report.fromInclusive, timeZone);
   if (localStart === null) return <section>{zoneControl}<p role="alert">Invalid site timezone. No break-adjusted totals calculated.</p></section>;
+  const startDate = new Date(report.fromInclusive);
+  const endDate = new Date(report.toExclusive);
+  if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime()) ||
+      startDate.getUTCSeconds() !== 0 || startDate.getUTCMilliseconds() !== 0 ||
+      endDate.getUTCSeconds() !== 0 || endDate.getUTCMilliseconds() !== 0)
+    return <section>{zoneControl}<p role="alert">Occurrence UTC boundaries are not aligned to whole minutes. No break-adjusted totals calculated.</p></section>;
   if (localStart !== shift.startMinute) return <section>{zoneControl}<p role="alert">Occurrence UTC start does not align with the configured shift start in {timeZone}. No break-adjusted totals calculated.</p></section>;
+  const localEnd = occurrenceStartMinuteInZone(report.toExclusive, timeZone);
+  if (localEnd !== shift.endMinute)
+    return <section>{zoneControl}<p role="alert">Occurrence UTC end does not align with the configured shift end in {timeZone}. No break-adjusted totals calculated.</p></section>;
   const start = Date.parse(report.fromInclusive);
   const end = Date.parse(report.toExclusive);
   const expectedDuration = (shift.endMinute - shift.startMinute + 1440) % 1440;
@@ -241,7 +250,7 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
     {zoneControl}
     <h3>Recorded activity outside planned breaks</h3>
     <p>Configured excluded breaks: {excludedMs / 60000} min. Planned production window: {plannedMs / 60000} min. State intervals are clipped against each excluded break.</p>
-    <p>Shift clock definition: {String(Math.floor(shift.startMinute / 60)).padStart(2, "0")}:{String(shift.startMinute % 60).padStart(2, "0")} to {String(Math.floor(shift.endMinute / 60)).padStart(2, "0")}:{String(shift.endMinute % 60).padStart(2, "0")} site-local. UTC occurrence start was checked against the entered timezone {timeZone}. The timezone is user-supplied, not independently verified site configuration; these values must not be treated as certified OEE availability.</p>
+    <p>Shift clock definition: {String(Math.floor(shift.startMinute / 60)).padStart(2, "0")}:{String(shift.startMinute % 60).padStart(2, "0")} to {String(Math.floor(shift.endMinute / 60)).padStart(2, "0")}:{String(shift.endMinute % 60).padStart(2, "0")} site-local. UTC occurrence start and end were checked against the entered timezone {timeZone}. The timezone is user-supplied, not independently verified site configuration; these values must not be treated as certified OEE availability.</p>
     <dl>{byState.map(s => <div key={s.state}><dt>{s.state}</dt><dd>{(s.ms / 60000).toFixed(2)} min ({(s.ms / plannedMs * 100).toFixed(1)}%)</dd></div>)}
       <div><dt>Unrepresented outside breaks</dt><dd>{(missingMs / 60000).toFixed(2)} min ({(missingMs / plannedMs * 100).toFixed(1)}%)</dd></div>
     </dl>
