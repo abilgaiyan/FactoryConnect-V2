@@ -91,8 +91,18 @@ function ExactStateChart({ report }: { readonly report: ActivityReport }) {
   const portions = [...activityStates.map(state => ({
     state, ticks: report.totals.find(t => t.state === state)?.durationTicks ?? 0,
   })), { state: "unrepresented", ticks: report.unrepresentedTicks }];
+  const measured = duration - report.unrepresentedTicks;
+  const running = report.totals.find(t => t.state === "running")?.durationTicks ?? 0;
+  const stopped = report.totals.find(t => t.state === "stopped")?.durationTicks ?? 0;
   return <section aria-label="Measured machine state distribution">
     <h3>Recorded machine state · exact occurrence</h3>
+    <dl>
+      <dt>Measured historical coverage</dt><dd>{(measured / duration * 100).toFixed(1)}% ({formatActivityDuration(measured)})</dd>
+      <dt>Recorded running / occurrence</dt><dd>{(running / duration * 100).toFixed(1)}% ({formatActivityDuration(running)})</dd>
+      <dt>Recorded stopped / occurrence</dt><dd>{(stopped / duration * 100).toFixed(1)}% ({formatActivityDuration(stopped)})</dd>
+      <dt>Unrepresented / occurrence</dt><dd>{(report.unrepresentedTicks / duration * 100).toFixed(1)}% ({formatActivityDuration(report.unrepresentedTicks)})</dd>
+    </dl>
+    <p>These are observed proportions of the full occurrence, not OEE availability. Recorded unknown, idle, fault and offline remain separate; planned breaks are not excluded.</p>
     <p>This chart uses validated historical activity durations. Unrepresented coverage is not treated as running, stopped or recorded Unknown. Planned break exclusions and OEE are not applied.</p>
     <div role="img" aria-label={portions.map(p => p.state + " " + (p.ticks / 10000000).toFixed(1) + " seconds").join(", ")}
       style={{ display: "flex", height: "26px", width: "100%", overflow: "hidden", borderRadius: "4px" }}>
