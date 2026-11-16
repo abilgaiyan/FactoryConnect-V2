@@ -114,6 +114,31 @@ function ExactStateChart({ report }: { readonly report: ActivityReport }) {
   </section>;
 }
 
+function ExactActivityTimeline({ report }: { readonly report: ActivityReport }) {
+  const start = Date.parse(report.fromInclusive);
+  const end = Date.parse(report.toExclusive);
+  const span = end - start;
+  if (!(span > 0)) return null;
+  const colors: Record<string, string> = {
+    running: "#16855c", stopped: "#d97706", idle: "#7c8caa",
+    fault: "#c24140", offline: "#475569", unknown: "#a3a3a3",
+  };
+  return <section aria-label="Historical machine activity timeline">
+    <h3>Machine state timeline · exact shift</h3>
+    <p>Position shows when each closed recorded interval occurred. Blank gaps mean unrepresented coverage, not downtime. This timeline does not exclude planned breaks.</p>
+    <div role="img" aria-label={"Historical activity timeline from " + report.fromInclusive + " to " + report.toExclusive}
+      style={{ position: "relative", width: "100%", height: "30px", background: "#e5e7eb", borderRadius: "4px" }}>
+      {report.intervals.map(interval => {
+        const left = (Date.parse(interval.startedAtUtc) - start) / span * 100;
+        const width = (Date.parse(interval.endedAtUtc) - Date.parse(interval.startedAtUtc)) / span * 100;
+        return <div key={interval.position} title={interval.state + ": " + interval.startedAtUtc + " – " + interval.endedAtUtc}
+          style={{ position: "absolute", left: left + "%", width: width + "%", top: 0, bottom: 0, background: colors[interval.state] }} />;
+      })}
+    </div>
+    <p>From <time dateTime={report.fromInclusive}>{report.fromInclusive}</time> to <time dateTime={report.toExclusive}>{report.toExclusive}</time></p>
+  </section>;
+}
+
 function ExactActivity({ machine, occurrence, timeoutMilliseconds }: { readonly machine: ShiftPerformanceMachine; readonly occurrence: ShiftPerformanceShift; readonly timeoutMilliseconds: number }) {
   const [result, setResult] = useState<ActivityReport | null>(null);
   const [error, setError] = useState("");
@@ -135,7 +160,7 @@ function ExactActivity({ machine, occurrence, timeoutMilliseconds }: { readonly 
     <p>Closed stored periods only. Displayed bounds may be clipped to this occurrence; original source bounds remain visible. Open periods, missing coverage and recorded Unknown are different conditions.</p>
     <p>Durable explanation actions are unavailable. The API does not return the complete publication revision/output ordinal reference. Positions are inspection provenance, not a replacement exact-event key.</p>
     {error ? <><p role="alert">{error} No sample fallback.</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry activity</button></>
-      : result ? <><p>Unrepresented coverage: {formatActivityDuration(result.unrepresentedTicks)}. Not proof of downtime or acquisition failure.</p><ExactStateChart report={result} /><MachineActivityEvidence report={result} /></>
+      : result ? <><p>Unrepresented coverage: {formatActivityDuration(result.unrepresentedTicks)}. Not proof of downtime or acquisition failure.</p><ExactStateChart report={result} /><ExactActivityTimeline report={result} /><MachineActivityEvidence report={result} /></>
       : <p role="status">Loading exact shift activity…</p>}
   </section>;
 }
