@@ -169,6 +169,7 @@ function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: nu
   </section>;
 }
 function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[]; shifts: readonly ShiftAggregate[] }) {
+  const [reviewOnly, setReviewOnly] = useState(false);
   // Shift boundaries are taken only from imported source facts, never from the
   // current site schedule. Clip each raw period to the recorded shift interval.
   const windows = new Map<string, { id: string; start: string; end: string }>();
@@ -210,25 +211,30 @@ function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[
     return { ...window, totals, duration, recorded, covered, overlap: hasOverlap, incomplete: covered < duration - 0.01 };
   });
   if (!rows.length) return null;
+  const flagged = rows.filter(row => row.overlap || row.incomplete);
+  const visibleRows = reviewOnly ? flagged : rows;
   const codes = [...new Set(rows.flatMap(row => [...row.totals.keys()]))].sort((a,b) => a-b);
   return <section aria-label="Source-window historical shift activity">
     <h3>Machine activity by recorded shift</h3>
     <p>Raw machine-state intervals clipped to original V1 shift start/end boundaries. Breaks are not excluded. Distinct covered hours are calculated from the union of intervals, so overlap cannot hide missing time. Raw state hours can still overcount; neither measure is qualified production or OEE duration.</p>
+    <p role="status">{rows.length} recorded shift windows · {flagged.length} require evidence review ({rows.filter(row => row.overlap).length} with overlap, {rows.filter(row => row.incomplete).length} with missing coverage). These counts can overlap.</p>
+    <label style={{display:"inline-flex",gap:6,alignItems:"center",marginBottom:12}}><input type="checkbox" checked={reviewOnly} onChange={event => setReviewOnly(event.target.checked)} />Show only shifts needing evidence review</label>
+    {reviewOnly && visibleRows.length === 0 && <p>No shifts have overlap or missing-coverage warnings in the loaded data.</p>}
     <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:10}} aria-label="Shift activity state legend">
       {codes.map((code,i) => <span key={code} style={{display:"inline-flex",alignItems:"center",gap:5}}><span aria-hidden="true" style={{display:"inline-block",width:12,height:12,background:["#287da8","#d97706","#64748b","#7c3aed","#059669","#be123c"][i % 6]}} />{stateLabel(code)} ({code})</span>)}
     </div>
     <div style={{display:"flex",gap:12,alignItems:"end",overflowX:"auto",padding:"8px 0 16px"}} aria-label="Historical shift state hours chart">
-      {rows.map((row,index) => <div key={row.start + "|" + row.id} style={{flex:"0 0 78px",textAlign:"center"}} title={historicalTime(row.start) + " · " + row.id + " · " + row.recorded.toFixed(2) + " raw interval hours"}>
+      {visibleRows.map((row,index) => <div key={row.start + "|" + row.id} style={{flex:"0 0 78px",textAlign:"center"}} title={historicalTime(row.start) + " · " + row.id + " · " + row.recorded.toFixed(2) + " raw interval hours"}>
         <small>{row.recorded.toFixed(1)}h</small>
         <div style={{height:110,display:"flex",flexDirection:"column-reverse",background:"#f1f5f9",overflow:"hidden",borderRadius:3}}>
           {codes.map((code,i) => <div key={code} title={stateLabel(code) + ": " + (row.totals.get(code) ?? 0).toFixed(2) + "h"} style={{height:Math.max(0,Math.min(110,110 * (row.totals.get(code) ?? 0) / Math.max(row.duration,row.recorded,0.01))) + "px",background:["#287da8","#d97706","#64748b","#7c3aed","#059669","#be123c"][i % 6]}} />)}
         </div>
         <small>{historicalTime(row.start).slice(0,6)} #{index+1}</small>
-        {row.overlap && <small title="Raw intervals exceed shift window">Overlap</small>}
+        {row.overlap && <small title="Raw intervals overlap">Overlap</small>}{row.incomplete && <small title="Missing interval coverage">Gaps</small>}
       </div>)}
     </div>
     <div style={{overflowX:"auto"}}><table><thead><tr><th>Shift start (IST)</th><th>Shift</th><th>Window hours</th><th>Distinct covered hours</th>{codes.map(code => <th key={code}>{stateLabel(code)} ({code}) hours</th>)}<th>Coverage check</th></tr></thead>
-      <tbody>{rows.map(row => <tr key={row.start + row.id}><td title={row.start}>{historicalTime(row.start)}</td><td>{row.id}</td><td>{row.duration.toFixed(2)}</td><td>{row.covered.toFixed(2)}</td>
+      <tbody>{visibleRows.map(row => <tr key={row.start + row.id}><td title={row.start}>{historicalTime(row.start)}</td><td>{row.id}</td><td>{row.duration.toFixed(2)}</td><td>{row.covered.toFixed(2)}</td>
         {codes.map(code => <td key={code}>{(row.totals.get(code) ?? 0).toFixed(2)}</td>)}
         <td>{row.overlap && row.incomplete ? "Overlap and gaps — review" : row.overlap ? "Overlapping evidence — review" : row.incomplete ? "Incomplete interval coverage" : "Raw intervals cover window"}</td>
       </tr>)}</tbody></table></div>
