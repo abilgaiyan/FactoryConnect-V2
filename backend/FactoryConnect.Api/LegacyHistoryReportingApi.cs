@@ -97,6 +97,58 @@ internal static class LegacyHistoryReportingApi
             }, ct);
         }).RequireRateLimiting("security-boundary");
 
+        // Imported V1 shift input aggregates are source facts, not recomputed OEE.
+        app.MapGet("/api/reporting/v2/legacy/machines/{machineId:guid}/shift-aggregates", async (
+            Guid machineId, DateOnly from, DateOnly through, HttpContext http,
+            IConfiguration config, CancellationToken ct) =>
+        {
+            if (!ValidRange(from, through)) return Results.BadRequest(new { error = "Select an inclusive date range of at most 31 days." });
+            return await AuthorizedRead(http, config, async (connection, ct) =>
+            {
+                var aggregates = new List<object>();
+                await using var command = new SqlCommand("""
+                    SELECT TOP (@take)
+                        s.SourceDatabase, s.SourceRowId, s.SourceSiteId,
+                        s.ShiftScheduleAssignmentId, s.ShiftId,
+                        s.ShiftStartsAtUtc, s.ShiftEndsAtUtc,
+                        s.MetricInputKey, s.AggregateValue, s.Unit, s.InputCount
+                    FROM legacy_reporting.ShiftAggregate s
+                    INNER JOIN legacy_reporting.Machine m
+                        ON m.SourceDatabase=s.SourceDatabase AND m.SourceMachineId=s.SourceMachineId
+                    WHERE s.SourceMachineId=@machine
+                      AND s.ShiftStartsAtUtc < @throughUtc
+                      AND s.ShiftEndsAtUtc > @fromUtc
+                    ORDER BY s.ShiftStartsAtUtc, s.SourceRowId
+                    """, connection) { CommandTimeout = 20 };
+                command.Parameters.Add("@take", SqlDbType.Int).Value = MaximumResults + 1;
+                command.Parameters.Add("@machine", SqlDbType.UniqueIdentifier).Value = machineId;
+                command.Parameters.Add("@fromUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), LegacyLocalOffset);
+                command.Parameters.Add("@throughUtc", SqlDbType.DateTimeOffset).Value = new DateTimeOffset(through.AddDays(1).ToDateTime(TimeOnly.MinValue), LegacyLocalOffset);
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    if (aggregates.Count == MaximumResults) return Results.StatusCode(413);
+                    aggregates.Add(new {
+                        sourceDatabase = reader.GetString(0), sourceRowId = reader.GetInt64(1),
+                        sourceSiteId = reader.IsDBNull(2) ? null : reader.GetString(2),
+                        shiftScheduleAssignmentId = reader.IsDBNull(3) ? null : reader.GetString(3),
+                        shiftId = reader.IsDBNull(4) ? null : reader.GetString(4),
+                        shiftStartsAtUtc = reader.IsDBNull(5) ? (DateTimeOffset?)null : reader.GetFieldValue<DateTimeOffset>(5),
+                        shiftEndsAtUtc = reader.IsDBNull(6) ? (DateTimeOffset?)null : reader.GetFieldValue<DateTimeOffset>(6),
+                        metricInputKey = reader.GetString(7),
+                        aggregateValue = reader.IsDBNull(8) ? null : reader.GetString(8),
+                        unit = reader.IsDBNull(9) ? null : reader.GetString(9),
+                        inputCount = reader.IsDBNull(10) ? (long?)null : reader.GetInt64(10)
+                    });
+                }
+                return Results.Ok(new {
+                    machineId, from, through, source = "imported-v1-legacy",
+                    evidenceKind = "historical-reporting-only", liveStatus = "not-established",
+                    isSample = false, aggregates
+                });
+            }, ct);
+        }).RequireRateLimiting("security-boundary");
+
         app.MapGet("/api/reporting/v2/legacy/machines/{machineId:guid}/activity", async (
             Guid machineId, DateOnly from, DateOnly through, HttpContext http,
             IConfiguration config, CancellationToken ct) =>
