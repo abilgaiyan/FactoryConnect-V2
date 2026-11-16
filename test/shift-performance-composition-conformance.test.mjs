@@ -137,7 +137,7 @@ test("production Shift Performance composition keeps the frozen dependency direc
   );
   assert.deepEqual(
     await sourceImports("src/presentation/ShiftPerformanceOverviewView.tsx"),
-    ["react", "./date-formatting.ts", "./shift-performance-model.ts", "./shift-performance-view-formatting.ts"],
+    ["react", "./ManagementShiftTargets.tsx", "./date-formatting.ts", "./shift-performance-model.ts", "./shift-performance-view-formatting.ts"],
   );
   assert.deepEqual(
     await sourceImports("src/presentation/ShiftPerformancePageStateView.tsx"),

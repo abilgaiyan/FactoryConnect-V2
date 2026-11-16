@@ -1,4 +1,5 @@
 import { useState } from "react";
+import ManagementShiftTargets from "./ManagementShiftTargets.tsx";
 import { formatReportDate, formatReportTimestamp } from "./date-formatting.ts";
 import type {
   PresentedMetric,
@@ -88,6 +89,7 @@ export function ShiftPerformanceOverviewView({ overview, showFilters = true }: S
           </div>;
         })}
       </section>}
+      {selected.length > 0 && <ManagementShiftTargets productionDay={overview.productionDay} selected={selected} />}
       {selected.length > 0 && <section aria-label="Management OEE component comparison">
         <h3>OEE components by machine and shift</h3>
         <p>Availability, performance and quality are separate reported percentages for each occurrence. They are not recomputed from machine activity or combined into an estimated OEE.</p>
