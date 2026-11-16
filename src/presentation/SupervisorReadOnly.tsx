@@ -139,6 +139,64 @@ function ExactActivityTimeline({ report }: { readonly report: ActivityReport }) 
   </section>;
 }
 
+type PlannedBreak = { breakId: string; startOffsetMinute: number; durationMinutes: number; excludeFromPlannedProduction: boolean };
+function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityReport; readonly shiftId: string }) {
+  const [breaks, setBreaks] = useState<PlannedBreak[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    setBreaks(null); setError("");
+    void fetch("/api/planning/v2/shifts/" + encodeURIComponent(shiftId) + "/breaks",
+      { credentials: "same-origin", cache: "no-store", signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error("Shift breaks unavailable (HTTP " + response.status + ").");
+        const data: unknown = await response.json();
+        if (!data || typeof data !== "object") throw new Error("Invalid shift breaks.");
+        const value = data as { breaks?: unknown; isSample?: unknown };
+        if (value.isSample !== false || !Array.isArray(value.breaks) || !value.breaks.every((b: unknown) => {
+          if (!b || typeof b !== "object") return false;
+          const v = b as PlannedBreak;
+          return typeof v.breakId === "string" && Number.isInteger(v.startOffsetMinute) &&
+            v.startOffsetMinute >= 0 && Number.isInteger(v.durationMinutes) && v.durationMinutes > 0 &&
+            typeof v.excludeFromPlannedProduction === "boolean";
+        })) throw new Error("Unverified shift breaks.");
+        if (!controller.signal.aborted) setBreaks(value.breaks as PlannedBreak[]);
+      }).catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Shift breaks unavailable."); });
+    return () => controller.abort();
+  }, [shiftId]);
+  if (error) return <p role="alert">Break-adjusted activity unavailable: {error}. No zero-break assumption.</p>;
+  if (!breaks) return <p role="status">Loading configured break intervals…</p>;
+  const start = Date.parse(report.fromInclusive);
+  const end = Date.parse(report.toExclusive);
+  const excluded = breaks.filter(b => b.excludeFromPlannedProduction)
+    .map(b => ({ start: start + b.startOffsetMinute * 60000, end: start + (b.startOffsetMinute + b.durationMinutes) * 60000 }))
+    .sort((a, b) => a.start - b.start);
+  if (excluded.some((b, i) => b.start < start || b.end > end || (i > 0 && b.start < excluded[i - 1]!.end)))
+    return <p role="alert">Break intervals conflict with this exact occurrence. No adjusted totals calculated.</p>;
+  const overlap = (a: number, b: number, c: number, d: number) => Math.max(0, Math.min(b, d) - Math.max(a, c));
+  const excludedMs = excluded.reduce((sum, b) => sum + b.end - b.start, 0);
+  const plannedMs = end - start - excludedMs;
+  if (plannedMs <= 0) return <p role="alert">No positive planned production duration after breaks.</p>;
+  const byState = activityStates.map(state => {
+    const intervals = report.intervals.filter(i => i.state === state);
+    const ms = intervals.reduce((sum, i) => {
+      const a = Date.parse(i.startedAtUtc), b = Date.parse(i.endedAtUtc);
+      return sum + b - a - excluded.reduce((cut, br) => cut + overlap(a, b, br.start, br.end), 0);
+    }, 0);
+    return { state, ms };
+  });
+  const representedMs = byState.reduce((sum, s) => sum + s.ms, 0);
+  const missingMs = Math.max(0, plannedMs - representedMs);
+  return <section aria-label="Break-adjusted recorded machine activity">
+    <h3>Recorded activity outside planned breaks</h3>
+    <p>Configured excluded breaks: {excludedMs / 60000} min. Planned production window: {plannedMs / 60000} min. State intervals are clipped against each excluded break.</p>
+    <dl>{byState.map(s => <div key={s.state}><dt>{s.state}</dt><dd>{(s.ms / 60000).toFixed(2)} min ({(s.ms / plannedMs * 100).toFixed(1)}%)</dd></div>)}
+      <div><dt>Unrepresented outside breaks</dt><dd>{(missingMs / 60000).toFixed(2)} min ({(missingMs / plannedMs * 100).toFixed(1)}%)</dd></div>
+    </dl>
+    <p>These are recorded durations after break exclusion, not certified OEE availability. Unknown and unrepresented coverage remain separate.</p>
+  </section>;
+}
+
 function ExactActivity({ machine, occurrence, timeoutMilliseconds }: { readonly machine: ShiftPerformanceMachine; readonly occurrence: ShiftPerformanceShift; readonly timeoutMilliseconds: number }) {
   const [result, setResult] = useState<ActivityReport | null>(null);
   const [error, setError] = useState("");
@@ -160,7 +218,7 @@ function ExactActivity({ machine, occurrence, timeoutMilliseconds }: { readonly 
     <p>Closed stored periods only. Displayed bounds may be clipped to this occurrence; original source bounds remain visible. Open periods, missing coverage and recorded Unknown are different conditions.</p>
     <p>Durable explanation actions are unavailable. The API does not return the complete publication revision/output ordinal reference. Positions are inspection provenance, not a replacement exact-event key.</p>
     {error ? <><p role="alert">{error} No sample fallback.</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry activity</button></>
-      : result ? <><p>Unrepresented coverage: {formatActivityDuration(result.unrepresentedTicks)}. Not proof of downtime or acquisition failure.</p><ExactStateChart report={result} /><ExactActivityTimeline report={result} /><MachineActivityEvidence report={result} /></>
+      : result ? <><p>Unrepresented coverage: {formatActivityDuration(result.unrepresentedTicks)}. Not proof of downtime or acquisition failure.</p><ExactStateChart report={result} /><ExactActivityTimeline report={result} /><BreakAdjustedActivity report={result} shiftId={occurrence.shift.shiftId} /><MachineActivityEvidence report={result} /></>
       : <p role="status">Loading exact shift activity…</p>}
   </section>;
 }

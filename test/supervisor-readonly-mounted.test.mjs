@@ -49,7 +49,15 @@ function deferred() { let resolve, reject; const promise = new Promise((r,j) => 
 
 test('real mode reuses canonical reporting and exact overnight activity; inspection retains provenance', async t => {
   const r = runtime(); const requests = [];
-  mockFetch(t, async (url, options) => { requests.push({url,options}); return Response.json(activity(JSON.parse(options.body))); });
+  mockFetch(t, async (url, options) => {
+    if (String(url).includes('/api/planning/v2/shifts/')) {
+      return Response.json({ isSample: false, breaks: [
+        { breakId: 'planned-1', startOffsetMinute: 180, durationMinutes: 30, excludeFromPlannedProduction: true },
+      ] });
+    }
+    requests.push({url,options});
+    return Response.json(activity(JSON.parse(options.body)));
+  });
   const h = await mountInDom(React.createElement(Workspace,{runtime:r.value})); t.after(() => h.dispose());
   assert.match(text(h), /Live site shift planning/); assert.doesNotMatch(text(h), /Sample operator|sample-event/);
   await load(h); assert.equal(r.calls.length,1);
@@ -61,6 +69,8 @@ test('real mode reuses canonical reporting and exact overnight activity; inspect
   assert.equal(requests.length,1);
   assert.match(requests[0].url,new RegExp(source.machineId));
   assert.deepEqual(JSON.parse(requests[0].options.body),{fromInclusive:first.startsAtUtc,toExclusive:first.endsAtUtc});
+  assert.match(text(h), /Recorded activity outside planned breaks/);
+  assert.match(text(h), /Configured excluded breaks: 30 min/);
   assert.match(text(h), /MissingReferenceTime/); assert.match(text(h), /MissingGoodQuantity/); assert.match(text(h), /DependencyUnavailable/);
   assert.match(h.document.querySelector('.performance-kpis').textContent,/0%/);
   assert.match(text(h),/9007199254740993/); assert.match(text(h),/mtconnect:factory-source/);
