@@ -256,11 +256,25 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
   });
   const representedMs = byState.reduce((sum, s) => sum + s.ms, 0);
   const missingMs = Math.max(0, plannedMs - representedMs);
+  const runningMs = byState.find(s => s.state === "running")?.ms ?? 0;
+  const stoppedMs = byState.find(s => s.state === "stopped")?.ms ?? 0;
+  const formatMinutes = (ms: number) => (ms / 60000).toFixed(2) + " min";
   return <section aria-label="Break-adjusted recorded machine activity">
     {zoneControl}
     <h3>Recorded activity outside planned breaks</h3>
     <p>Configured excluded breaks: {excludedMs / 60000} min. Planned production window: {plannedMs / 60000} min. State intervals are clipped against each excluded break.</p>
     <p>Shift clock definition: {String(Math.floor(shift.startMinute / 60)).padStart(2, "0")}:{String(shift.startMinute % 60).padStart(2, "0")} to {String(Math.floor(shift.endMinute / 60)).padStart(2, "0")}:{String(shift.endMinute % 60).padStart(2, "0")} site-local. UTC occurrence start and end were checked against the entered timezone {timeZone}. The timezone is user-supplied, not independently verified site configuration; these values must not be treated as certified OEE availability.</p>
+    <section aria-label="Supervisor planned-production activity summary">
+      <h4>Planned-production activity summary</h4>
+      <dl>
+        <div><dt>Planned production time</dt><dd>{formatMinutes(plannedMs)}</dd></div>
+        <div><dt>Measured coverage outside breaks</dt><dd>{formatMinutes(representedMs)} ({(representedMs / plannedMs * 100).toFixed(1)}%)</dd></div>
+        <div><dt>Recorded running outside breaks</dt><dd>{formatMinutes(runningMs)} ({(runningMs / plannedMs * 100).toFixed(1)}%)</dd></div>
+        <div><dt>Recorded stopped outside breaks</dt><dd>{formatMinutes(stoppedMs)} ({(stoppedMs / plannedMs * 100).toFixed(1)}%)</dd></div>
+        <div><dt>Unrepresented outside breaks</dt><dd>{formatMinutes(missingMs)} ({(missingMs / plannedMs * 100).toFixed(1)}%)</dd></div>
+      </dl>
+      <p>Measured coverage is not necessarily productive time; missing evidence is not counted as downtime. These figures are not certified OEE.</p>
+    </section>
     <figure aria-label="Break-adjusted machine state chart">
       <figcaption>Recorded machine states as a share of planned production time (excluded breaks removed)</figcaption>
       <div role="img" aria-label={byState.map(s => s.state + " " + (s.ms / plannedMs * 100).toFixed(1) + " percent").join(", ") + ", unrepresented " + (missingMs / plannedMs * 100).toFixed(1) + " percent"}
