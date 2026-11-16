@@ -87,15 +87,15 @@ function exportShiftMetricsCsv(metrics: readonly Metric[], machine: string): voi
   const escapeCell = (value: string | number | null | undefined): string => {
     const raw = String(value ?? "");
     // Prevent spreadsheet formula injection in source-controlled text values.
-    const safe = /^[\\s]*[=+@-]/.test(raw) ? "'" + raw : raw;
+    const safe = /^\s*[=+@-]/.test(raw) ? "'" + raw : raw;
     return '"' + safe.replace(/"/g, '""') + '"';
   };
   const columns = ["Machine", "Shift start IST", "Shift ID", "Metric", "Source status", "Value", "Unit", "Reason code", "Source row ID"];
   const rows = metrics.filter(metric => metric.shiftStartsAtUtc !== null && oeeMetric.test(metric.metricKey))
     .map(metric => [machine, historicalTime(metric.shiftStartsAtUtc), metric.shiftId, metric.metricKey,
       metric.status, metric.status === 0 ? metric.metricValue : null, metric.unit, metric.reasonCode, metric.sourceRowId]);
-  const csv = [columns, ...rows].map(row => row.map(escapeCell).join(",")).join("\\r\\n");
-  const url = URL.createObjectURL(new Blob(["\\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+  const csv = [columns, ...rows].map(row => row.map(escapeCell).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = "factoryconnect-history-shifts.csv";
