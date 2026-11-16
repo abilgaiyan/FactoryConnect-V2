@@ -140,7 +140,7 @@ function ExactActivityTimeline({ report }: { readonly report: ActivityReport }) 
 }
 
 type PlannedBreak = { breakId: string; startOffsetMinute: number; durationMinutes: number; excludeFromPlannedProduction: boolean };
-type PlannedShift = { shiftId: string; durationMinutes: number; excludedBreakMinutes: number; plannedProductionMinutes: number };
+type PlannedShift = { shiftId: string; startMinute: number; endMinute: number; durationMinutes: number; excludedBreakMinutes: number; plannedProductionMinutes: number };
 function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityReport; readonly shiftId: string }) {
   const [breaks, setBreaks] = useState<PlannedBreak[] | null>(null);
   const [shift, setShift] = useState<PlannedShift | null>(null);
@@ -159,7 +159,9 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
           const matching = (value.shifts as PlannedShift[]).filter(s => s.shiftId === shiftId);
           if (matching.length !== 1) throw new Error("Exact shift definition unavailable or ambiguous.");
           const s = matching[0]!;
-          if (!Number.isInteger(s.durationMinutes) || s.durationMinutes <= 0 ||
+          if (!Number.isInteger(s.startMinute) || s.startMinute < 0 || s.startMinute >= 1440 ||
+              !Number.isInteger(s.endMinute) || s.endMinute < 0 || s.endMinute >= 1440 ||
+              !Number.isInteger(s.durationMinutes) || s.durationMinutes <= 0 ||
               !Number.isInteger(s.excludedBreakMinutes) || s.excludedBreakMinutes < 0 ||
               !Number.isInteger(s.plannedProductionMinutes) || s.plannedProductionMinutes < 0 ||
               s.excludedBreakMinutes + s.plannedProductionMinutes !== s.durationMinutes)
@@ -189,6 +191,9 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
   if (!breaks || !shift) return <p role="status">Loading configured shift and break intervals…</p>;
   const start = Date.parse(report.fromInclusive);
   const end = Date.parse(report.toExclusive);
+  const expectedDuration = (shift.endMinute - shift.startMinute + 1440) % 1440;
+  if (expectedDuration !== shift.durationMinutes)
+    return <p role="alert">Configured shift clock boundaries disagree with its duration. Break-adjusted totals are unavailable.</p>;
   if (end - start !== shift.durationMinutes * 60000)
     return <p role="alert">This occurrence does not match the configured full shift duration. Break-adjusted totals are unavailable for partial or mismatched occurrences.</p>;
   const excluded = breaks.filter(b => b.excludeFromPlannedProduction)
@@ -215,6 +220,7 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
   return <section aria-label="Break-adjusted recorded machine activity">
     <h3>Recorded activity outside planned breaks</h3>
     <p>Configured excluded breaks: {excludedMs / 60000} min. Planned production window: {plannedMs / 60000} min. State intervals are clipped against each excluded break.</p>
+    <p>Shift clock definition: {String(Math.floor(shift.startMinute / 60)).padStart(2, "0")}:{String(shift.startMinute % 60).padStart(2, "0")} to {String(Math.floor(shift.endMinute / 60)).padStart(2, "0")}:{String(shift.endMinute % 60).padStart(2, "0")} site-local. The reporting occurrence is UTC; site timezone and actual clock-start alignment have not been verified. These values must not be treated as certified OEE availability.</p>
     <dl>{byState.map(s => <div key={s.state}><dt>{s.state}</dt><dd>{(s.ms / 60000).toFixed(2)} min ({(s.ms / plannedMs * 100).toFixed(1)}%)</dd></div>)}
       <div><dt>Unrepresented outside breaks</dt><dd>{(missingMs / 60000).toFixed(2)} min ({(missingMs / plannedMs * 100).toFixed(1)}%)</dd></div>
     </dl>
