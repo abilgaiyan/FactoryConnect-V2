@@ -17,6 +17,15 @@ interface TargetResponse {
   isSample: boolean;
   targets: Target[];
 }
+function csvCell(value: string | number): string {
+  const text = String(value);
+  // Keep factory-entered order, part and operation identifiers as text in spreadsheet applications.
+  const safe = /^[\\s]*[=+@-]/.test(text) ? "'" + text : text;
+  return '"' + safe.replace(/"/g, '""') + '"';
+}
+function planCsv(rows: readonly (readonly (string | number)[])[]): string {
+  return "\uFEFF" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
+}
 export default function ManagementShiftTargets({ productionDay, selected }: {
   readonly productionDay: string;
   readonly selected: readonly { machine: ShiftPerformanceMachine; shift: ShiftPerformanceShift }[];
@@ -51,12 +60,27 @@ export default function ManagementShiftTargets({ productionDay, selected }: {
     });
     return () => controller.abort();
   }, [open, scopeKey, retry]);
+  const exportRows: (string | number)[][] = [
+    ["Production date", "Site", "Production line", "Machine", "Machine ID", "Reporting processor", "Shift", "Shift assignment", "Shift start UTC", "Shift end UTC", "Target status", "Target quantity", "Unit", "Revision", "Production order", "Part", "Operation", "Revision recorded UTC", "Actual status", "Achievement status"],
+    ...selected.map(({ machine, shift }) => {
+      const error = state?.errors[machine.machineId];
+      const target = state?.targets[machine.machineId]?.find(item => item.shiftId.toLowerCase() === shift.shift.shiftId.toLowerCase());
+      return [productionDay, machine.siteId, machine.productionLineId, machine.displayName, machine.machineId, machine.processorId,
+        shift.shift.shiftId, shift.shift.shiftScheduleAssignmentId, shift.shift.startsAtUtc, shift.shift.endsAtUtc,
+        error ? "Unavailable: " + error : target ? "Recorded" : "No recorded target",
+        target?.targetQuantity ?? "", target?.quantityUnit ?? "", target?.revision ?? "",
+        target?.productionOrder ?? "", target?.partNumber ?? "", target?.operation ?? "", target?.recordedAtUtc ?? "",
+        "Not available", "Not calculated"];
+    }),
+  ];
   return <section aria-label="Management SQL production targets">
     <h3>Recorded production targets · SQL planning</h3>
     <p>Compare configured machine-shift targets for this production day. Actual production and target achievement are not provided by this read and are not estimated.</p>
     <button type="button" onClick={() => setOpen(value => !value)}>{open ? "Hide SQL targets" : "Load SQL targets for selected machines"}</button>
     {open && (state === null ? <p role="status">Loading recorded targets…</p> : <>
       <button type="button" onClick={() => setRetry(value => value + 1)}>Refresh SQL targets</button>
+      <p><a download="factoryconnect-management-production-plan.csv" href={"data:text/csv;charset=utf-8," + encodeURIComponent(planCsv(exportRows))}>Export selected SQL production plan CSV</a></p>
+
       <table><thead><tr><th>Machine</th><th>Shift</th><th>Target</th><th>Production order</th><th>Part</th><th>Operation</th><th>Revision recorded UTC</th><th>Actual</th><th>Achievement</th></tr></thead>
         <tbody>{selected.map(({ machine, shift }) => {
           const error = state.errors[machine.machineId];
