@@ -104,6 +104,30 @@ function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: nu
     </div>
   </section>;
 }
+function HistoricalShiftSummary({ rows }: { rows: readonly ShiftAggregate[] }) {
+  if (!rows.length) return null;
+  const shifts = new Map<string, { shiftId: string; started: string; inputs: ShiftAggregate[] }>();
+  for (const row of rows) {
+    const started = row.shiftStartsAtUtc ?? "Unknown shift start";
+    const key = JSON.stringify([row.shiftId, started]);
+    const group = shifts.get(key);
+    if (group) group.inputs.push(row);
+    else shifts.set(key, { shiftId: row.shiftId ?? "Unspecified shift", started, inputs: [row] });
+  }
+  const sorted = [...shifts.values()].sort((a,b) => a.started.localeCompare(b.started));
+  return <section aria-label="Historical V1 shift evidence overview">
+    <h3>Recorded shift inputs</h3>
+    <p>{sorted.length} imported shifts. Values are shown individually as recorded in V1; different inputs and units are never added together.</p>
+    <div style={{overflowX:"auto"}}>
+      <table><thead><tr><th>Shift start (source UTC)</th><th>Shift</th><th>Recorded input values</th></tr></thead>
+        <tbody>{sorted.map(shift => <tr key={shift.started + "|" + shift.shiftId}>
+          <td>{shift.started}</td><td>{shift.shiftId}</td>
+          <td>{shift.inputs.map(input => <div key={input.sourceRowId}><strong>{input.metricInputKey}</strong>: {input.aggregateValue === null ? "Unavailable" : input.aggregateValue + (input.unit ? " " + input.unit : "")}</div>)}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </section>;
+}
 // Query smaller date windows when the API refuses more than 2,000 raw periods.
 // Windows overlap at their boundaries because long intervals may span multiple days.
 async function readActivity(base: string, from: string, through: string): Promise<Period[]> {
@@ -204,6 +228,7 @@ export default function HistoricalReportingPage() {
     {loaded && <><p>Imported source: {expectedSource}. {metrics.length} metric projections; {periods.length} raw activity periods.</p>
       <Trend rows={daily} name="Availability" /><Trend rows={daily} name="Utilization" />
       <ActivityDailyChart rows={activity} />
+      <HistoricalShiftSummary rows={shiftAggregates} />
       <div style={{display:"flex", flexWrap:"wrap", gap:12, margin:"20px 0"}} aria-label="Historical report coverage">
         {[["Historical projections",metrics.length],["Valid daily A/U points",daily.length],["Imported shift inputs",shiftAggregates.length],["Completed activity intervals",periods.length]].map(([label,value]) => <div key={label} style={{flex:"1 1 165px",padding:16,border:"1px solid #cbd5e1",borderRadius:8}}><div style={{fontSize:24,fontWeight:700}}>{value}</div><div>{label}</div></div>)}
       </div>
