@@ -54,6 +54,7 @@ internal static class LegacyHistoryReportingApi
                         p.ProductionBusinessDate, p.MetricKey, p.DefinitionVersion,
                         p.Status, p.MetricValue, p.Unit, p.ReasonCode
                     FROM legacy_reporting.MetricProjection p
+                    INNER JOIN legacy_reporting.Machine m ON m.SourceDatabase=p.SourceDatabase AND m.SourceMachineId=p.SourceMachineId
                     WHERE p.SourceMachineId = @machine
                       AND (
                         (p.ProductionBusinessDate >= @fromDate AND p.ProductionBusinessDate < @throughExclusive)
@@ -107,13 +108,14 @@ internal static class LegacyHistoryReportingApi
                 // crossing periods are not lost. EndedAt=NULL is not an ended period.
                 var rows = new List<object>();
                 await using var command = new SqlCommand("""
-                    SELECT TOP (@take) SourceDatabase, SourceMachineId, MachineState,
-                        StartedAt, EndedAt, ProjectionRevision, OutputOrdinal
-                    FROM legacy_reporting.ActivityPeriod
-                    WHERE SourceMachineId = @machine
-                      AND EndedAt IS NOT NULL AND EndedAt > StartedAt
-                      AND StartedAt < @endUtc AND EndedAt > @startUtc
-                    ORDER BY StartedAt, ProjectionRevision, OutputOrdinal
+                    SELECT TOP (@take) a.SourceDatabase, a.SourceMachineId, a.MachineState,
+                        a.StartedAt, a.EndedAt, a.ProjectionRevision, a.OutputOrdinal
+                    FROM legacy_reporting.ActivityPeriod a
+                    INNER JOIN legacy_reporting.Machine m ON m.SourceDatabase=a.SourceDatabase AND m.SourceMachineId=a.SourceMachineId
+                    WHERE a.SourceMachineId = @machine
+                      AND a.EndedAt IS NOT NULL AND a.EndedAt > a.StartedAt
+                      AND a.StartedAt < @endUtc AND a.EndedAt > @startUtc
+                    ORDER BY a.StartedAt, a.ProjectionRevision, a.OutputOrdinal
                     """, connection) { CommandTimeout = 20 };
                 command.Parameters.Add("@take", SqlDbType.Int).Value = MaximumResults + 1;
                 command.Parameters.Add("@machine", SqlDbType.UniqueIdentifier).Value = machineId;
