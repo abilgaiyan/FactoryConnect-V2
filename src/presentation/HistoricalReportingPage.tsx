@@ -214,12 +214,36 @@ function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[
   const flagged = rows.filter(row => row.overlap || row.incomplete);
   const visibleRows = reviewOnly ? flagged : rows;
   const codes = [...new Set(rows.flatMap(row => [...row.totals.keys()]))].sort((a,b) => a-b);
+  const exportEvidence = () => {
+    const headers = ["Shift start IST", "Source shift ID", "Window hours", "Distinct covered hours", "Raw interval hours", "Overlapping evidence", "Missing coverage", ...codes.map(code => stateLabel(code) + " (" + code + ") raw hours")];
+    const csvCell = (value: string | number | boolean): string => {
+      const raw = String(value);
+      const safe = /^\\s*[=+@-]/.test(raw) ? "'" + raw : raw;
+      return '"' + safe.replace(/"/g, '""') + '"';
+    };
+    const data = visibleRows.map(row => [
+      historicalTime(row.start), row.id, row.duration.toFixed(2), row.covered.toFixed(2), row.recorded.toFixed(2),
+      row.overlap ? "Yes" : "No", row.incomplete ? "Yes" : "No",
+      ...codes.map(code => (row.totals.get(code) ?? 0).toFixed(2))
+    ]);
+    const csv = [headers, ...data].map(values => values.map(csvCell).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], {type: "text/csv;charset=utf-8"}));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = reviewOnly ? "factoryconnect-shifts-needing-review.csv" : "factoryconnect-shift-activity-evidence.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return <section aria-label="Source-window historical shift activity">
     <h3>Machine activity by recorded shift</h3>
     <p>Raw machine-state intervals clipped to original V1 shift start/end boundaries. Breaks are not excluded. Distinct covered hours are calculated from the union of intervals, so overlap cannot hide missing time. Raw state hours can still overcount; neither measure is qualified production or OEE duration.</p>
     <p role="status">{rows.length} recorded shift windows · {flagged.length} require evidence review ({rows.filter(row => row.overlap).length} with overlap, {rows.filter(row => row.incomplete).length} with missing coverage). These counts can overlap.</p>
     <label style={{display:"inline-flex",gap:6,alignItems:"center",marginBottom:12}}><input type="checkbox" checked={reviewOnly} onChange={event => setReviewOnly(event.target.checked)} />Show only shifts needing evidence review</label>
     {reviewOnly && visibleRows.length === 0 && <p>No shifts have overlap or missing-coverage warnings in the loaded data.</p>}
+    <button type="button" disabled={visibleRows.length === 0} onClick={exportEvidence}>Export displayed shift evidence (CSV)</button>
     <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:10}} aria-label="Shift activity state legend">
       {codes.map((code,i) => <span key={code} style={{display:"inline-flex",alignItems:"center",gap:5}}><span aria-hidden="true" style={{display:"inline-block",width:12,height:12,background:["#287da8","#d97706","#64748b","#7c3aed","#059669","#be123c"][i % 6]}} />{stateLabel(code)} ({code})</span>)}
     </div>
