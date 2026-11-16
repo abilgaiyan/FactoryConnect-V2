@@ -153,7 +153,7 @@ function occurrenceStartMinuteInZone(utc: string, timeZone: string): number | nu
   } catch { return null; }
 }
 
-function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityReport; readonly shiftId: string }) {
+function BreakAdjustedActivity({ report, shiftId, machine, assignmentId }: { readonly report: ActivityReport; readonly shiftId: string; readonly machine: ShiftPerformanceMachine; readonly assignmentId: string }) {
   const [timeZone, setTimeZone] = useState(() => {
     try { return window.sessionStorage.getItem("fc2-supervisor-site-timezone") ?? ""; }
     catch { return ""; }
@@ -261,7 +261,12 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
   const formatMinutes = (ms: number) => (ms / 60000).toFixed(2) + " min";
   const csvRows = [
     ["Record", "Value", "Minutes", "Percent of planned production"],
+    ["Site", machine.siteId, "", ""],
+    ["Production line", machine.productionLineId, "", ""],
+    ["Machine", machine.machineId, "", ""],
+    ["Reporting processor", machine.processorId, "", ""],
     ["Shift", shiftId, "", ""],
+    ["Shift assignment", assignmentId, "", ""],
     ["UTC occurrence start", report.fromInclusive, "", ""],
     ["UTC occurrence end", report.toExclusive, "", ""],
     ["User-entered timezone (not site-verified)", timeZone, "", ""],
@@ -326,7 +331,7 @@ function ExactActivity({ machine, occurrence, timeoutMilliseconds }: { readonly 
     <p>Closed stored periods only. Displayed bounds may be clipped to this occurrence; original source bounds remain visible. Open periods, missing coverage and recorded Unknown are different conditions.</p>
     <p>Durable explanation actions are unavailable. The API does not return the complete publication revision/output ordinal reference. Positions are inspection provenance, not a replacement exact-event key.</p>
     {error ? <><p role="alert">{error} No sample fallback.</p><button type="button" onClick={() => setAttempt(value => value + 1)}>Retry activity</button></>
-      : result ? <><p>Unrepresented coverage: {formatActivityDuration(result.unrepresentedTicks)}. Not proof of downtime or acquisition failure.</p><ExactStateChart report={result} /><ExactActivityTimeline report={result} /><BreakAdjustedActivity report={result} shiftId={occurrence.shift.shiftId} /><MachineActivityEvidence report={result} /></>
+      : result ? <><p>Unrepresented coverage: {formatActivityDuration(result.unrepresentedTicks)}. Not proof of downtime or acquisition failure.</p><ExactStateChart report={result} /><ExactActivityTimeline report={result} /><BreakAdjustedActivity report={result} shiftId={occurrence.shift.shiftId} machine={machine} assignmentId={occurrence.shift.shiftScheduleAssignmentId} /><MachineActivityEvidence report={result} /></>
       : <p role="status">Loading exact shift activity…</p>}
   </section>;
 }
