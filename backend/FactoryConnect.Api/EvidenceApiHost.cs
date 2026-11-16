@@ -248,6 +248,7 @@ app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/evidence", async (
     finally { CryptographicOperations.ZeroMemory(sessionHash); }
 }).RequireRateLimiting("security-boundary");
 
+app.MapLegacyHistoryReporting();
 app.MapActivityHistory();
 app.MapMasterRegistration();
 app.MapMachineActivationReadiness();
