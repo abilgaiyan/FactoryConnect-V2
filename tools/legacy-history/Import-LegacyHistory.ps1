@@ -40,10 +40,10 @@ BEGIN TRY
  IF OBJECT_ID('legacy_reporting.ActivityPeriod','U') IS NULL
   CREATE TABLE legacy_reporting.ActivityPeriod(
    SourceDatabase sysname NOT NULL, SourceMachineId uniqueidentifier NOT NULL,
-   StreamKeyBinary varbinary(900) NOT NULL, StateProcessorIdOrderKey varbinary(900) NOT NULL,
-   ProjectionRevision decimal(38,0) NOT NULL, OutputOrdinal int NOT NULL,
+   StreamKeyBinary varbinary(512) NOT NULL, StateProcessorIdOrderKey varbinary(769) NOT NULL,
+   ProjectionRevision decimal(20,0) NOT NULL, OutputOrdinal int NOT NULL,
    MachineState tinyint NOT NULL, StartedAt datetimeoffset NOT NULL, EndedAt datetimeoffset NULL,
-   InstanceId decimal(38,0) NULL, Sequence decimal(38,0) NULL,
+   InstanceId decimal(20,0) NULL, Sequence decimal(20,0) NULL,
    CONSTRAINT PK_LegacyActivity PRIMARY KEY(SourceDatabase,SourceMachineId,StreamKeyBinary,StateProcessorIdOrderKey,ProjectionRevision,OutputOrdinal)
   );
  IF OBJECT_ID('legacy_reporting.ShiftAggregate','U') IS NULL
