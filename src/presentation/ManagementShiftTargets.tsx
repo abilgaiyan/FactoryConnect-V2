@@ -6,6 +6,10 @@ interface Target {
   targetQuantity: number;
   quantityUnit: string;
   revision: number;
+  productionOrder: string | null;
+  partNumber: string | null;
+  operation: string | null;
+  recordedAtUtc: string;
 }
 interface TargetResponse {
   machineId: string;
@@ -53,14 +57,14 @@ export default function ManagementShiftTargets({ productionDay, selected }: {
     <button type="button" onClick={() => setOpen(value => !value)}>{open ? "Hide SQL targets" : "Load SQL targets for selected machines"}</button>
     {open && (state === null ? <p role="status">Loading recorded targets…</p> : <>
       <button type="button" onClick={() => setRetry(value => value + 1)}>Refresh SQL targets</button>
-      <table><thead><tr><th>Machine</th><th>Shift</th><th>Target</th><th>Actual</th><th>Achievement</th></tr></thead>
+      <table><thead><tr><th>Machine</th><th>Shift</th><th>Target</th><th>Production order</th><th>Part</th><th>Operation</th><th>Revision recorded UTC</th><th>Actual</th><th>Achievement</th></tr></thead>
         <tbody>{selected.map(({ machine, shift }) => {
           const error = state.errors[machine.machineId];
           const target = state.targets[machine.machineId]?.find(item => item.shiftId.toLowerCase() === shift.shift.shiftId.toLowerCase());
           return <tr key={JSON.stringify([machine.machineId, machine.processorId, shift.shift.shiftScheduleAssignmentId, shift.shift.startsAtUtc])}>
             <th scope="row">{machine.displayName}</th><td>{shift.shift.shiftId} · {shift.shift.startsAtUtc}</td>
             <td>{error ? "Unavailable: " + error : target ? target.targetQuantity + " " + target.quantityUnit + " · rev " + target.revision : "No recorded target"}</td>
-            <td>Not available</td><td>Not calculated</td>
+            <td>{target?.productionOrder || "Not specified"}</td><td>{target?.partNumber || "Not specified"}</td><td>{target?.operation || "Not specified"}</td><td>{target?.recordedAtUtc || "Not available"}</td><td>Not available</td><td>Not calculated</td>
           </tr>;
         })}</tbody>
       </table>
