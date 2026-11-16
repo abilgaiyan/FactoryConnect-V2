@@ -210,7 +210,7 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
       .catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Shift breaks unavailable."); });
     return () => controller.abort();
   }, [shiftId]);
-  const zoneControl = <label>Site timezone for provisional alignment (IANA, saved for this browser tab)
+  const zoneControl = <label>Site timezone for provisional alignment (IANA)
     <input type="text" value={timeZone} onChange={event => updateTimeZone(event.target.value.trim())} placeholder="e.g. Asia/Kolkata" />
   </label>;
   if (error) return <section>{zoneControl}<p role="alert">Break-adjusted activity unavailable: {error}. No zero-break assumption.</p></section>;
