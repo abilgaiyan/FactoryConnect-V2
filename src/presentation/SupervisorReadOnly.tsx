@@ -141,7 +141,20 @@ function ExactActivityTimeline({ report }: { readonly report: ActivityReport }) 
 
 type PlannedBreak = { breakId: string; startOffsetMinute: number; durationMinutes: number; excludeFromPlannedProduction: boolean };
 type PlannedShift = { shiftId: string; startMinute: number; endMinute: number; durationMinutes: number; excludedBreakMinutes: number; plannedProductionMinutes: number };
+function occurrenceStartMinuteInZone(utc: string, timeZone: string): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(utc));
+    const hour = Number(parts.find(p => p.type === "hour")?.value);
+    const minute = Number(parts.find(p => p.type === "minute")?.value);
+    return Number.isInteger(hour) && hour >= 0 && hour < 24 &&
+      Number.isInteger(minute) && minute >= 0 && minute < 60 ? hour * 60 + minute : null;
+  } catch { return null; }
+}
+
 function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityReport; readonly shiftId: string }) {
+  const [timeZone, setTimeZone] = useState("");
   const [breaks, setBreaks] = useState<PlannedBreak[] | null>(null);
   const [shift, setShift] = useState<PlannedShift | null>(null);
   const [error, setError] = useState("");
@@ -187,8 +200,15 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
       .catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Shift breaks unavailable."); });
     return () => controller.abort();
   }, [shiftId]);
-  if (error) return <p role="alert">Break-adjusted activity unavailable: {error}. No zero-break assumption.</p>;
-  if (!breaks || !shift) return <p role="status">Loading configured shift and break intervals…</p>;
+  const zoneControl = <label>Site timezone for provisional alignment (IANA)
+    <input type="text" value={timeZone} onChange={event => setTimeZone(event.target.value.trim())} placeholder="e.g. Asia/Kolkata" />
+  </label>;
+  if (error) return <section>{zoneControl}<p role="alert">Break-adjusted activity unavailable: {error}. No zero-break assumption.</p></section>;
+  if (!breaks || !shift) return <section>{zoneControl}<p role="status">Loading configured shift and break intervals…</p></section>;
+  if (!timeZone) return <section>{zoneControl}<p>Enter the site's verified IANA timezone to align the UTC occurrence with the configured shift clock. No timezone is inferred from the browser.</p></section>;
+  const localStart = occurrenceStartMinuteInZone(report.fromInclusive, timeZone);
+  if (localStart === null) return <section>{zoneControl}<p role="alert">Invalid site timezone. No break-adjusted totals calculated.</p></section>;
+  if (localStart !== shift.startMinute) return <section>{zoneControl}<p role="alert">Occurrence UTC start does not align with the configured shift start in {timeZone}. No break-adjusted totals calculated.</p></section>;
   const start = Date.parse(report.fromInclusive);
   const end = Date.parse(report.toExclusive);
   const expectedDuration = (shift.endMinute - shift.startMinute + 1440) % 1440;
@@ -218,9 +238,10 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
   const representedMs = byState.reduce((sum, s) => sum + s.ms, 0);
   const missingMs = Math.max(0, plannedMs - representedMs);
   return <section aria-label="Break-adjusted recorded machine activity">
+    {zoneControl}
     <h3>Recorded activity outside planned breaks</h3>
     <p>Configured excluded breaks: {excludedMs / 60000} min. Planned production window: {plannedMs / 60000} min. State intervals are clipped against each excluded break.</p>
-    <p>Shift clock definition: {String(Math.floor(shift.startMinute / 60)).padStart(2, "0")}:{String(shift.startMinute % 60).padStart(2, "0")} to {String(Math.floor(shift.endMinute / 60)).padStart(2, "0")}:{String(shift.endMinute % 60).padStart(2, "0")} site-local. The reporting occurrence is UTC; site timezone and actual clock-start alignment have not been verified. These values must not be treated as certified OEE availability.</p>
+    <p>Shift clock definition: {String(Math.floor(shift.startMinute / 60)).padStart(2, "0")}:{String(shift.startMinute % 60).padStart(2, "0")} to {String(Math.floor(shift.endMinute / 60)).padStart(2, "0")}:{String(shift.endMinute % 60).padStart(2, "0")} site-local. UTC occurrence start was checked against the entered timezone {timeZone}. The timezone is user-supplied, not independently verified site configuration; these values must not be treated as certified OEE availability.</p>
     <dl>{byState.map(s => <div key={s.state}><dt>{s.state}</dt><dd>{(s.ms / 60000).toFixed(2)} min ({(s.ms / plannedMs * 100).toFixed(1)}%)</dd></div>)}
       <div><dt>Unrepresented outside breaks</dt><dd>{(missingMs / 60000).toFixed(2)} min ({(missingMs / plannedMs * 100).toFixed(1)}%)</dd></div>
     </dl>
