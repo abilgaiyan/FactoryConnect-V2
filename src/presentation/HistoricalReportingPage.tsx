@@ -10,6 +10,8 @@ interface ShiftAggregate { sourceRowId: number; shiftId: string | null; shiftSta
 interface ShiftReply { source: string; isSample: boolean; aggregates: ShiftAggregate[] }
 type Daily = { date: string; metric: string; value: number; unit: string };
 const expectedSource = "imported-v1-legacy";
+const stateNames: Record<number, string> = { 0: "Unknown", 1: "Stopped", 2: "Idle", 3: "Running", 4: "Fault", 5: "Offline" };
+const stateLabel = (code: number) => stateNames[code] ?? "Unrecognized";
 const percentMetric = /^(availability|utilization)$/i;
 const oeeMetric = /^(availability|utilization|performance|quality|oee)$/i;
 const numeric = (value: string | null): number | null => {
@@ -82,9 +84,9 @@ function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: nu
   const max = Math.max(1, ...dates.map(date => rows.filter(row => row.date === date).reduce((sum, row) => sum + row.seconds, 0)));
   return <section aria-label="Imported V1 activity by India calendar day">
     <h3>Historical activity by day</h3>
-    <p>Hours by original V1 state code, split at India midnight. Raw source intervals may overlap; this is not a qualified OEE or shift-duration calculation.</p>
+    <p>Hours by verified V1 machine state, split at India midnight. Raw source intervals may overlap; this is not a qualified OEE or shift-duration calculation.</p>
     <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:12}}>
-      {states.map((state,i) => <span key={state} style={{display:"inline-flex",alignItems:"center",gap:6}}><span aria-hidden="true" style={{display:"inline-block",width:12,height:12,background:palette[i % palette.length]}} />State {state}</span>)}
+      {states.map((state,i) => <span key={state} style={{display:"inline-flex",alignItems:"center",gap:6}}><span aria-hidden="true" style={{display:"inline-block",width:12,height:12,background:palette[i % palette.length]}} />{stateLabel(state)} ({state})</span>)}
     </div>
     <div style={{display:"flex",gap:10,alignItems:"end",overflowX:"auto",minHeight:180,padding:"8px 0"}}>
       {dates.map(date => {
@@ -95,7 +97,7 @@ function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: nu
           <div style={{height:125,display:"flex",flexDirection:"column-reverse",justifyContent:"start",background:"#f1f5f9",borderRadius:3,overflow:"hidden"}}>
             {states.map((state,i) => {
               const seconds = day.find(row => row.state === state)?.seconds ?? 0;
-              return seconds > 0 ? <div key={state} title={date + " · state " + state + ": " + (seconds / 3600).toFixed(2) + "h"} style={{height:(seconds / max * 125) + "px",background:palette[i % palette.length]}} /> : null;
+              return seconds > 0 ? <div key={state} title={date +  · " + stateLabel(state) + " (" + state + "): " + (seconds / 3600).toFixed(2) + "h"} style={{height:(seconds / max * 125) + "px",background:palette[i % palette.length]}} /> : null;
             })}
           </div>
           <small>{date.slice(5)}</small>
@@ -216,7 +218,7 @@ export default function HistoricalReportingPage() {
   const activity = useMemo(() => splitActivityByIndiaDay(periods, from, through), [periods, from, through]);
   const activityDates = [...new Set(activity.map(row => row.date))];
   return <section aria-label="Imported Gajra historical reporting">
-    <h1>Historical Gajra reporting</h1>
+    <h1>Historical machine reporting</h1>
     <p><strong>Imported V1 history · not live V2 status.</strong> Availability and Utilization are historical projections. Performance, Quality and OEE remain unavailable unless the source has a valid numerical result.</p>
     {error && <p role="alert">{error}</p>}
     <div><label>Historical machine <select value={machineId} onChange={e => { setMachineId(e.target.value); setLoaded(false); }}><option value="">Select machine</option>{machines.map(m => <option key={m.sourceDatabase + m.sourceMachineId} value={m.sourceMachineId}>{m.deviceKey}</option>)}</select></label>{" "}
@@ -247,9 +249,9 @@ export default function HistoricalReportingPage() {
       {!shiftAggregates.length && !shiftError && <p>No historical shift aggregates in the selected range.</p>}
       </details>
       <details><summary><strong>Activity duration by India calendar day ({activity.length} rows)</strong> · expand source details</summary>
-      <p>Completed source intervals split at local midnight. State codes are preserved until V1 state definitions are verified. These are not shift-adjusted production durations.</p>
-      <table><thead><tr><th>Day</th><th>V1 state code</th><th>Hours</th></tr></thead><tbody>
-        {activity.map(row => <tr key={row.date + ":" + row.state}><td>{row.date}</td><td>{row.state}</td><td>{(row.seconds / 3600).toFixed(2)}</td></tr>)}
+      <p>Completed source intervals split at local midnight. Machine-state names follow the V1 MachineState enum; numeric codes are preserved. These are not shift-adjusted production durations.</p>
+      <table><thead><tr><th>Day</th><th>V1 machine state</th><th>Hours</th></tr></thead><tbody>
+        {activity.map(row => <tr key={row.date + ":" + row.state}><td>{row.date}</td><td>{stateLabel(row.state)} ({row.state})</td><td>{(row.seconds / 3600).toFixed(2)}</td></tr>)}
       </tbody></table>
       {!activityDates.length && <p>No completed activity intervals in this range.</p>}
       </details>
