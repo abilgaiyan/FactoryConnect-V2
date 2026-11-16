@@ -114,7 +114,7 @@ export function App({ runtime }: AppProps) {
           <ApplicationLink href="/overview" navigate={navigate} current={route.kind === "overview"}>Overview</ApplicationLink>{" "}
           <ApplicationLink href="/fleet" navigate={navigate} current={route.kind === "fleet"}>Fleet status</ApplicationLink>{" "}
           <ApplicationLink href="/reports/range" navigate={navigate} current={route.kind === "dateRange"}>Date-range report</ApplicationLink>{" "}
-          <ApplicationLink href="/reports/historical" navigate={navigate} current={route.kind === "historicalReporting"}>Gajra history</ApplicationLink>{" "}
+          <ApplicationLink href="/reports/historical" navigate={navigate} current={route.kind === "historicalReporting"}>History</ApplicationLink>{" "}
           <ApplicationLink href="/" navigate={navigate} current={route.kind === "productionDayOverview"}>
             Production days
           </ApplicationLink>
