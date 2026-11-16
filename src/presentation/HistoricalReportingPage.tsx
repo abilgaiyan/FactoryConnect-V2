@@ -6,6 +6,8 @@ interface Period { sourceDatabase: string; sourceMachineId: string; projectionRe
 interface MachineReply { source: string; isSample: boolean; machines: Machine[] }
 interface MetricReply { source: string; isSample: boolean; metrics: Metric[] }
 interface ActivityReply { source: string; isSample: boolean; periods: Period[] }
+interface ShiftAggregate { sourceRowId: number; shiftId: string | null; shiftStartsAtUtc: string | null; metricInputKey: string; aggregateValue: string | null; unit: string | null; inputCount: number | null }
+interface ShiftReply { source: string; isSample: boolean; aggregates: ShiftAggregate[] }
 type Daily = { date: string; metric: string; value: number; unit: string };
 const expectedSource = "imported-v1-legacy";
 const percentMetric = /^(availability|utilization)$/i;
@@ -105,6 +107,7 @@ export default function HistoricalReportingPage() {
   const [through, setThrough] = useState("2026-10-31");
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [periods, setPeriods] = useState<Period[]>([]);
+  const [shiftAggregates, setShiftAggregates] = useState<ShiftAggregate[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -120,18 +123,21 @@ export default function HistoricalReportingPage() {
   const valid = machineId && Number.isFinite(days) && days >= 0 && days < 31;
   async function load() {
     if (!valid) return;
-    setLoading(true); setLoaded(false); setError(""); setMetrics([]); setPeriods([]);
+    setLoading(true); setLoaded(false); setError(""); setMetrics([]); setPeriods([]); setShiftAggregates([]);
     try {
       const base = `/api/reporting/v2/legacy/machines/${encodeURIComponent(machineId)}`;
       const qs = `?from=${encodeURIComponent(from)}&through=${encodeURIComponent(through)}`;
-      const [metricResponse, activityPeriods] = await Promise.all([
+      const [metricResponse, activityPeriods, shiftResponse] = await Promise.all([
         fetch(base + "/metrics" + qs, { credentials: "include", cache: "no-store" }),
         readActivity(base, from, through),
+        fetch(base + "/shift-aggregates" + qs, { credentials: "include", cache: "no-store" }),
       ]);
       if (!metricResponse.ok) throw Error("Historical metrics HTTP " + metricResponse.status);
-      const m = await metricResponse.json() as MetricReply;
+      if (!shiftResponse.ok) throw Error("Historical shift aggregates HTTP " + shiftResponse.status);
+      const [m, s] = await Promise.all([metricResponse.json() as Promise<MetricReply>, shiftResponse.json() as Promise<ShiftReply>]);
       if (m.source !== expectedSource || m.isSample || !Array.isArray(m.metrics)) throw Error("Unexpected historical metrics response");
-      setMetrics(m.metrics); setPeriods(activityPeriods); setLoaded(true);
+      if (s.source !== expectedSource || s.isSample || !Array.isArray(s.aggregates)) throw Error("Unexpected historical shift response");
+      setMetrics(m.metrics); setPeriods(activityPeriods); setShiftAggregates(s.aggregates); setLoaded(true);
     } catch (e) { setError(String(e)); }
     finally { setLoading(false); }
   }
@@ -154,6 +160,12 @@ export default function HistoricalReportingPage() {
       <table><thead><tr><th>Date</th><th>Shift</th><th>Metric</th><th>Value or source status</th></tr></thead>
         <tbody>{metrics.filter(m => oeeMetric.test(m.metricKey)).map(m => <tr key={m.sourceRowId}><td>{m.productionBusinessDate ?? "—"}</td><td>{m.shiftId ?? m.shiftStartsAtUtc ?? "Daily"}</td><td>{m.metricKey}</td><td>{formatMetric(m)}</td></tr>)}</tbody>
       </table>
+      <h2>Historical shift inputs</h2>
+      <p>These are the original V1 shift aggregate values, not recalculated targets or OEE. Historical shift definitions and break exclusions remain as recorded in V1.</p>
+      <table><thead><tr><th>Shift</th><th>Shift start UTC</th><th>Input</th><th>Source value</th><th>Input count</th></tr></thead><tbody>
+        {shiftAggregates.map(row => <tr key={row.sourceRowId}><td>{row.shiftId ?? "Unspecified"}</td><td>{row.shiftStartsAtUtc ?? "Unspecified"}</td><td>{row.metricInputKey}</td><td>{row.aggregateValue === null ? "Unavailable" : row.aggregateValue + " " + (row.unit ?? "")}</td><td>{row.inputCount ?? "—"}</td></tr>)}
+      </tbody></table>
+      {!shiftAggregates.length && <p>No historical shift aggregates in the selected range.</p>}
       <h2>Activity duration by India calendar day</h2>
       <p>Completed source intervals split at local midnight. State codes are preserved until V1 state definitions are verified. These are not shift-adjusted production durations.</p>
       <table><thead><tr><th>Day</th><th>V1 state code</th><th>Hours</th></tr></thead><tbody>
