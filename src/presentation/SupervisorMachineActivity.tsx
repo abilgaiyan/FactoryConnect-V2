@@ -109,6 +109,13 @@ export default function SupervisorMachineActivity() {
       {page && <p role="status">Verified historical period records on page {pageNumber + 1}: {page.rows.length}.
         {cursor ? " Additional records exist; this page is not complete history." : " No continuation cursor returned."}
         {" "}Period count is not machine running time or complete shift coverage.</p>}
+      {page && page.rows.length > 0 && <details>
+        <summary>Inspect verified historical period records (page {pageNumber + 1})</summary>
+        <p>Raw published fields are displayed for validation. Timestamps, states and coverage have not been interpreted as OEE evidence.</p>
+        <ol>{page.rows.map((row, i) => <li key={i}>
+          <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(row, null, 2)}</pre>
+        </li>)}</ol>
+      </details>}
       {page && cursor && <button type="button" disabled={periodLoading} onClick={() => { setPageNumber(v => v + 1); setPageRequest(cursor); }}>Load next verified page</button>}
     </div>}
     {activity && !loading && <p role="status">{activity.status === "published-history"
