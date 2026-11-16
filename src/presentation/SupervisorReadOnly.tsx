@@ -140,13 +140,33 @@ function ExactActivityTimeline({ report }: { readonly report: ActivityReport }) 
 }
 
 type PlannedBreak = { breakId: string; startOffsetMinute: number; durationMinutes: number; excludeFromPlannedProduction: boolean };
+type PlannedShift = { shiftId: string; durationMinutes: number; excludedBreakMinutes: number; plannedProductionMinutes: number };
 function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityReport; readonly shiftId: string }) {
   const [breaks, setBreaks] = useState<PlannedBreak[] | null>(null);
+  const [shift, setShift] = useState<PlannedShift | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     const controller = new AbortController();
-    setBreaks(null); setError("");
-    void fetch("/api/planning/v2/shifts/" + encodeURIComponent(shiftId) + "/breaks",
+    setBreaks(null); setShift(null); setError("");
+    void Promise.all([
+      fetch("/api/planning/v2/shifts", { credentials: "same-origin", cache: "no-store", signal: controller.signal })
+        .then(async response => {
+          if (!response.ok) throw new Error("Shift definitions unavailable (HTTP " + response.status + ").");
+          const data: unknown = await response.json();
+          if (!data || typeof data !== "object") throw new Error("Invalid shift definitions.");
+          const value = data as { shifts?: unknown; isSample?: unknown };
+          if (value.isSample !== false || !Array.isArray(value.shifts)) throw new Error("Unverified shift definitions.");
+          const matching = (value.shifts as PlannedShift[]).filter(s => s.shiftId === shiftId);
+          if (matching.length !== 1) throw new Error("Exact shift definition unavailable or ambiguous.");
+          const s = matching[0]!;
+          if (!Number.isInteger(s.durationMinutes) || s.durationMinutes <= 0 ||
+              !Number.isInteger(s.excludedBreakMinutes) || s.excludedBreakMinutes < 0 ||
+              !Number.isInteger(s.plannedProductionMinutes) || s.plannedProductionMinutes < 0 ||
+              s.excludedBreakMinutes + s.plannedProductionMinutes !== s.durationMinutes)
+            throw new Error("Invalid shift duration reconciliation.");
+          return s;
+        }),
+      fetch("/api/planning/v2/shifts/" + encodeURIComponent(shiftId) + "/breaks",
       { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then(async response => {
         if (!response.ok) throw new Error("Shift breaks unavailable (HTTP " + response.status + ").");
@@ -160,14 +180,17 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
             v.startOffsetMinute >= 0 && Number.isInteger(v.durationMinutes) && v.durationMinutes > 0 &&
             typeof v.excludeFromPlannedProduction === "boolean";
         })) throw new Error("Unverified shift breaks.");
-        if (!controller.signal.aborted) setBreaks(value.breaks as PlannedBreak[]);
-      }).catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Shift breaks unavailable."); });
+        return value.breaks as PlannedBreak[];
+      })]).then(([s, b]) => { if (!controller.signal.aborted) { setShift(s); setBreaks(b); } })
+      .catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Shift breaks unavailable."); });
     return () => controller.abort();
   }, [shiftId]);
   if (error) return <p role="alert">Break-adjusted activity unavailable: {error}. No zero-break assumption.</p>;
-  if (!breaks) return <p role="status">Loading configured break intervals…</p>;
+  if (!breaks || !shift) return <p role="status">Loading configured shift and break intervals…</p>;
   const start = Date.parse(report.fromInclusive);
   const end = Date.parse(report.toExclusive);
+  if (end - start !== shift.durationMinutes * 60000)
+    return <p role="alert">This occurrence does not match the configured full shift duration. Break-adjusted totals are unavailable for partial or mismatched occurrences.</p>;
   const excluded = breaks.filter(b => b.excludeFromPlannedProduction)
     .map(b => ({ start: start + b.startOffsetMinute * 60000, end: start + (b.startOffsetMinute + b.durationMinutes) * 60000 }))
     .sort((a, b) => a.start - b.start);
@@ -175,6 +198,8 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
     return <p role="alert">Break intervals conflict with this exact occurrence. No adjusted totals calculated.</p>;
   const overlap = (a: number, b: number, c: number, d: number) => Math.max(0, Math.min(b, d) - Math.max(a, c));
   const excludedMs = excluded.reduce((sum, b) => sum + b.end - b.start, 0);
+  if (excludedMs !== shift.excludedBreakMinutes * 60000)
+    return <p role="alert">Configured excluded break durations do not reconcile with the shift definition.</p>;
   const plannedMs = end - start - excludedMs;
   if (plannedMs <= 0) return <p role="alert">No positive planned production duration after breaks.</p>;
   const byState = activityStates.map(state => {

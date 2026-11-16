@@ -50,6 +50,11 @@ function deferred() { let resolve, reject; const promise = new Promise((r,j) => 
 test('real mode reuses canonical reporting and exact overnight activity; inspection retains provenance', async t => {
   const r = runtime(); const requests = [];
   mockFetch(t, async (url, options) => {
+    if (String(url) === '/api/planning/v2/shifts') {
+      return Response.json({ isSample: false, shifts: [
+        { shiftId: 'SHIFT-3', durationMinutes: 450, excludedBreakMinutes: 30, plannedProductionMinutes: 420 },
+      ] });
+    }
     if (String(url).includes('/api/planning/v2/shifts/')) {
       return Response.json({ isSample: false, breaks: [
         { breakId: 'planned-1', startOffsetMinute: 180, durationMinutes: 30, excludeFromPlannedProduction: true },
@@ -82,6 +87,7 @@ test('real mode reuses canonical reporting and exact overnight activity; inspect
   await selectOccurrence(h,2);
   assert.deepEqual(JSON.parse(requests[1].options.body),{fromInclusive:second.startsAtUtc,toExclusive:second.endsAtUtc});
   assert.match(text(h), /Assignment original-b/);
+  assert.match(text(h), /does not match the configured full shift duration/);
 });
 
 test('above-100 availability stays conflicting and source context mismatch fails closed', async t => {
