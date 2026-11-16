@@ -140,6 +140,7 @@ export default function HistoricalReportingPage() {
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [periods, setPeriods] = useState<Period[]>([]);
   const [shiftAggregates, setShiftAggregates] = useState<ShiftAggregate[]>([]);
+  const [shiftError, setShiftError] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -155,21 +156,35 @@ export default function HistoricalReportingPage() {
   const valid = machineId && Number.isFinite(days) && days >= 0 && days < 31;
   async function load() {
     if (!valid) return;
-    setLoading(true); setLoaded(false); setError(""); setMetrics([]); setPeriods([]); setShiftAggregates([]);
+    setLoading(true); setLoaded(false); setError(""); setMetrics([]); setPeriods([]); setShiftAggregates([]); setShiftError("");
     try {
       const base = `/api/reporting/v2/legacy/machines/${encodeURIComponent(machineId)}`;
       const qs = `?from=${encodeURIComponent(from)}&through=${encodeURIComponent(through)}`;
-      const [metricResponse, activityPeriods, shiftResponse] = await Promise.all([
-        fetch(base + "/metrics" + qs, { credentials: "include", cache: "no-store" }),
+      // Independent read failures must not hide successfully loaded historical metrics or activity.
+      const results = await Promise.allSettled([
+        fetch(base + "/metrics" + qs, { credentials: "include", cache: "no-store" }).then(async response => {
+          if (!response.ok) throw Error("Historical metrics HTTP " + response.status);
+          const result = await response.json() as MetricReply;
+          if (result.source !== expectedSource || result.isSample || !Array.isArray(result.metrics)) throw Error("Unexpected historical metrics response");
+          return result.metrics;
+        }),
         readActivity(base, from, through),
-        fetch(base + "/shift-aggregates" + qs, { credentials: "include", cache: "no-store" }),
+        fetch(base + "/shift-aggregates" + qs, { credentials: "include", cache: "no-store" }).then(async response => {
+          if (!response.ok) throw Error("Historical shift aggregates HTTP " + response.status);
+          const result = await response.json() as ShiftReply;
+          if (result.source !== expectedSource || result.isSample || !Array.isArray(result.aggregates)) throw Error("Unexpected historical shift response");
+          return result.aggregates;
+        }),
       ]);
-      if (!metricResponse.ok) throw Error("Historical metrics HTTP " + metricResponse.status);
-      if (!shiftResponse.ok) throw Error("Historical shift aggregates HTTP " + shiftResponse.status);
-      const [m, s] = await Promise.all([metricResponse.json() as Promise<MetricReply>, shiftResponse.json() as Promise<ShiftReply>]);
-      if (m.source !== expectedSource || m.isSample || !Array.isArray(m.metrics)) throw Error("Unexpected historical metrics response");
-      if (s.source !== expectedSource || s.isSample || !Array.isArray(s.aggregates)) throw Error("Unexpected historical shift response");
-      setMetrics(m.metrics); setPeriods(activityPeriods); setShiftAggregates(s.aggregates); setLoaded(true);
+      const [metricResult, activityResult, shiftResult] = results;
+      if (metricResult.status === "fulfilled") setMetrics(metricResult.value);
+      if (activityResult.status === "fulfilled") setPeriods(activityResult.value);
+      if (shiftResult.status === "fulfilled") setShiftAggregates(shiftResult.value);
+      else setShiftError(String(shiftResult.reason));
+      const failed = [metricResult, activityResult].filter(result => result.status === "rejected")
+        .map(result => String((result as PromiseRejectedResult).reason));
+      setError(failed.join("; "));
+      setLoaded(results.some(result => result.status === "fulfilled"));
     } catch (e) { setError(String(e)); }
     finally { setLoading(false); }
   }
@@ -198,12 +213,13 @@ export default function HistoricalReportingPage() {
         <tbody>{metrics.filter(m => oeeMetric.test(m.metricKey)).map(m => <tr key={m.sourceRowId}><td>{m.productionBusinessDate ?? "—"}</td><td>{m.shiftId ?? m.shiftStartsAtUtc ?? "Daily"}</td><td>{m.metricKey}</td><td>{formatMetric(m)}</td></tr>)}</tbody>
       </table>
       </details>
+      {shiftError && <p role="alert">Shift input records unavailable: {shiftError}. Other historical sections remain usable.</p>}
       <details><summary><strong>Historical shift inputs ({shiftAggregates.length} rows)</strong> · expand source details</summary>
       <p>These are the original V1 shift aggregate values, not recalculated targets or OEE. Historical shift definitions and break exclusions remain as recorded in V1.</p>
       <table><thead><tr><th>Shift</th><th>Shift start UTC</th><th>Input</th><th>Source value</th><th>Input count</th></tr></thead><tbody>
         {shiftAggregates.map(row => <tr key={row.sourceRowId}><td>{row.shiftId ?? "Unspecified"}</td><td>{row.shiftStartsAtUtc ?? "Unspecified"}</td><td>{row.metricInputKey}</td><td>{row.aggregateValue === null ? "Unavailable" : row.aggregateValue + " " + (row.unit ?? "")}</td><td>{row.inputCount ?? "—"}</td></tr>)}
       </tbody></table>
-      {!shiftAggregates.length && <p>No historical shift aggregates in the selected range.</p>}
+      {!shiftAggregates.length && !shiftError && <p>No historical shift aggregates in the selected range.</p>}
       </details>
       <details><summary><strong>Activity duration by India calendar day ({activity.length} rows)</strong> · expand source details</summary>
       <p>Completed source intervals split at local midnight. State codes are preserved until V1 state definitions are verified. These are not shift-adjusted production durations.</p>
