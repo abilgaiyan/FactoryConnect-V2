@@ -26,3 +26,22 @@ Review the two generated CSVs locally; do not commit factory identifiers or mach
 4. Show real history in management and shift reports; calculate OEE only when evidence supports each component.
 
 No production installation or production SQL changes are authorized.
+
+
+## Historical reporting staging import (development only)
+
+The second script `Import-LegacyHistory.ps1` uses the confirmed Gajra V1 source machine IDs and inserts historical activity periods, shift metric aggregates, and metric projections into **new** `legacy_reporting` tables in the selected V2 development database. It does not modify the V1 database, V2 `master`, `acquisition`, `activity`, or existing reporting tables. Import uses one transaction and skips existing source keys on reruns.
+
+Dry run (no writes):
+
+```powershell
+.\tools\legacy-history\Import-LegacyHistory.ps1 -ServerInstance '.\FCINVENTORY' -SourceDatabase 'FactoryConnect_P0_20261105' -TargetDatabase 'FactoryConnect_V2_Dev'
+```
+
+**Do not run write mode until the dry-run and SQL script have been reviewed.** When approved, apply explicitly:
+
+```powershell
+.\tools\legacy-history\Import-LegacyHistory.ps1 -ServerInstance '.\FCINVENTORY' -SourceDatabase 'FactoryConnect_P0_20261105' -TargetDatabase 'FactoryConnect_V2_Dev' -Apply -ConfirmTargetDatabase 'FactoryConnect_V2_Dev'
+```
+
+This is an initial staging slice, **not yet connected to V2 reporting APIs or UI**. Values remain source values; the importer does not reinterpret state codes, metric status, shifts, or OEE semantics. It does not map V1 machine GUIDs to V2 machine GUIDs or mark them commissioned. Reconciliation and API/UI integration are follow-up work. Run against a disposable copy of V2 development data first; SQL execution has not been tested against the user's instance.
