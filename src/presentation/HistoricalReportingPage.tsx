@@ -83,7 +83,28 @@ function Trend({ rows, name }: { rows: readonly Daily[]; name: string }) {
     <p>Values are shown exactly as stored, with source units; not recalculated V2 OEE.</p>
   </section>;
 }
-function ShiftMetricOverview({ metrics }: { metrics: readonly Metric[] }) {
+function exportShiftMetricsCsv(metrics: readonly Metric[], machine: string): void {
+  const escapeCell = (value: string | number | null | undefined): string => {
+    const raw = String(value ?? "");
+    // Prevent spreadsheet formula injection in source-controlled text values.
+    const safe = /^\s*[=+@-]/.test(raw) ? "'" + raw : raw;
+    return '"' + safe.replace(/"/g, '""') + '"';
+  };
+  const columns = ["Machine", "Shift start IST", "Shift ID", "Metric", "Source status", "Value", "Unit", "Reason code", "Source row ID"];
+  const rows = metrics.filter(metric => metric.shiftStartsAtUtc !== null && oeeMetric.test(metric.metricKey))
+    .map(metric => [machine, historicalTime(metric.shiftStartsAtUtc), metric.shiftId, metric.metricKey,
+      metric.status, metric.status === 0 ? metric.metricValue : null, metric.unit, metric.reasonCode, metric.sourceRowId]);
+  const csv = [columns, ...rows].map(row => row.map(escapeCell).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "factoryconnect-history-shifts.csv";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+function ShiftMetricOverview({ metrics, machine }: { metrics: readonly Metric[]; machine: string }) {
   const rows = metrics.filter(metric => metric.shiftStartsAtUtc !== null && oeeMetric.test(metric.metricKey))
     .sort((a, b) => (a.shiftStartsAtUtc ?? "").localeCompare(b.shiftStartsAtUtc ?? "") || a.metricKey.localeCompare(b.metricKey));
   if (!rows.length) return <p>No source shift-level metric projections in the selected range.</p>;
@@ -97,6 +118,7 @@ function ShiftMetricOverview({ metrics }: { metrics: readonly Metric[] }) {
   const shifts = [...groups.values()];
   return <section aria-label="Imported V1 shift metric projections">
     <h3>Shift-level Availability and OEE evidence</h3>
+    <button type="button" onClick={() => exportShiftMetricsCsv(rows, machine)}>Export shift metrics (CSV)</button>
     <p>{shifts.length} recorded shifts with metric projections. Only original source values are displayed; unavailable Performance, Quality or OEE are not treated as zero.</p>
     <div style={{overflowX:"auto"}}>
       <table><thead><tr><th>Shift start (IST)</th><th>Shift ID</th><th>Availability</th><th>Utilization</th><th>Performance</th><th>Quality</th><th>OEE</th></tr></thead><tbody>
@@ -200,7 +222,7 @@ function HistoricalShiftSummary({ rows }: { rows: readonly ShiftAggregate[] }) {
     <h3>Recorded shift inputs</h3>
     <p>{sorted.length} imported shifts. Values are shown individually as recorded in V1; different inputs and units are never added together.</p>
     <div style={{overflowX:"auto"}}>
-      <table><thead><tr><th>Shift start (source UTC)</th><th>Shift</th><th>Recorded input values</th></tr></thead>
+      <table><thead><tr><th>Shift start (IST)</th><th>Shift</th><th>Recorded input values</th></tr></thead>
         <tbody>{sorted.map(shift => <tr key={shift.started + "|" + shift.shiftId}>
           <td title={shift.started}>{historicalTime(shift.started)}</td><td>{shift.shiftId}</td>
           <td>{shift.inputs.map(input => <div key={input.sourceRowId}><strong>{input.metricInputKey}</strong>: {input.aggregateValue === null ? "Unavailable" : input.aggregateValue + (input.unit ? " " + input.unit : "")}</div>)}</td>
@@ -309,7 +331,7 @@ export default function HistoricalReportingPage() {
     {loaded && <><p>Imported source: {expectedSource}. {metrics.length} metric projections; {periods.length} raw activity periods.</p>
       <Trend rows={daily} name="Availability" /><Trend rows={daily} name="Utilization" />
       <ActivityDailyChart rows={activity} />
-      <ShiftMetricOverview metrics={metrics} />
+      <ShiftMetricOverview metrics={metrics} machine={machines.find(m => m.sourceMachineId === machineId)?.deviceKey ?? machineId} />
       <HistoricalShiftSummary rows={shiftAggregates} />
       <ShiftActivityBreakdown periods={periods} shifts={shiftAggregates} />
       <div style={{display:"flex", flexWrap:"wrap", gap:12, margin:"20px 0"}} aria-label="Historical report coverage">
