@@ -20,7 +20,7 @@ interface TargetResponse {
 function csvCell(value: string | number): string {
   const text = String(value);
   // Keep factory-entered order, part and operation identifiers as text in spreadsheet applications.
-  const safe = /^[\\s]*[=+@-]/.test(text) ? "'" + text : text;
+  const safe = /^\s*[=+@-]/.test(text) ? "'" + text : text;
   return '"' + safe.replace(/"/g, '""') + '"';
 }
 function planCsv(rows: readonly (readonly (string | number)[])[]): string {
