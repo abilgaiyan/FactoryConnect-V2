@@ -259,11 +259,25 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
   const runningMs = byState.find(s => s.state === "running")?.ms ?? 0;
   const stoppedMs = byState.find(s => s.state === "stopped")?.ms ?? 0;
   const formatMinutes = (ms: number) => (ms / 60000).toFixed(2) + " min";
+  const csvRows = [
+    ["Record", "Value", "Minutes", "Percent of planned production"],
+    ["Shift", shiftId, "", ""],
+    ["UTC occurrence start", report.fromInclusive, "", ""],
+    ["UTC occurrence end", report.toExclusive, "", ""],
+    ["User-entered timezone (not site-verified)", timeZone, "", ""],
+    ["Planned production", "", (plannedMs / 60000).toFixed(2), "100.0"],
+    ["Excluded planned breaks", "", (excludedMs / 60000).toFixed(2), ""],
+    ...byState.map(s => ["Recorded state", s.state, (s.ms / 60000).toFixed(2), (s.ms / plannedMs * 100).toFixed(1)]),
+    ["Unrepresented (not downtime)", "", (missingMs / 60000).toFixed(2), (missingMs / plannedMs * 100).toFixed(1)],
+    ["Qualification", "Provisional measured activity; not certified OEE", "", ""],
+  ];
+  const csv = csvRows.map(row => row.map(value => '"' + String(value).replace(/"/g, '""') + '"').join(",")).join("\r\n");
   return <section aria-label="Break-adjusted recorded machine activity">
     {zoneControl}
     <h3>Recorded activity outside planned breaks</h3>
     <p>Configured excluded breaks: {excludedMs / 60000} min. Planned production window: {plannedMs / 60000} min. State intervals are clipped against each excluded break.</p>
     <p>Shift clock definition: {String(Math.floor(shift.startMinute / 60)).padStart(2, "0")}:{String(shift.startMinute % 60).padStart(2, "0")} to {String(Math.floor(shift.endMinute / 60)).padStart(2, "0")}:{String(shift.endMinute % 60).padStart(2, "0")} site-local. UTC occurrence start and end were checked against the entered timezone {timeZone}. The timezone is user-supplied, not independently verified site configuration; these values must not be treated as certified OEE availability.</p>
+    <p><a download="factoryconnect-shift-activity.csv" href={"data:text/csv;charset=utf-8," + encodeURIComponent("\uFEFF" + csv)}>Export break-adjusted activity CSV</a></p>
     <section aria-label="Supervisor planned-production activity summary">
       <h4>Planned-production activity summary</h4>
       <dl>
