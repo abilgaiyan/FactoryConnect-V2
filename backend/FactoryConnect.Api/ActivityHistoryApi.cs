@@ -66,25 +66,36 @@ internal static class ActivityHistoryApi
                         continuity = "same-batch-only-not-physical-completeness",
                         status = series.Count == 0 ? "no-published-history" : "published-history", series });
                 }, allowOperatorCookie: true)).RequireRateLimiting("security-boundary");
+        // Authenticated browser reporting exposes bounded, verified published periods.
+        // A page is historical evidence, not a complete shift timeline or live state.
+        app.MapGet("/api/reporting/v2/machines/{machineId:guid}/activity/{mappingId:guid}", async (
+            Guid machineId, Guid mappingId, HttpContext http, IConfiguration config, ILoggerFactory loggerFactory, CancellationToken ct) =>
+            await Read(http, config, loggerFactory.CreateLogger("FactoryConnect.ReportingActivityPeriods.Integrity"),
+                async (authority, token, site, stream) => await ReadPeriods(http, authority, token, site, stream, machineId, mappingId, ct),
+                allowOperatorCookie: true)).RequireRateLimiting("security-boundary");
         app.MapGet("/api/commissioning/v2/machines/{machineId:guid}/activity/{mappingId:guid}",async(
             Guid machineId,Guid mappingId,HttpContext http,IConfiguration config,ILoggerFactory loggerFactory,CancellationToken ct)=>
-            await Read(http,config,loggerFactory.CreateLogger("FactoryConnect.ActivityHistory.Integrity"),async(authority,token,site,stream)=> {
-                var take=20;
-                if(http.Request.Query.TryGetValue("take",out var value) &&
-                    (value.Count!=1 || !int.TryParse(value[0],out take) || take is <1 or >100))
-                    return Results.BadRequest(new { error="take must be between 1 and 100" });
-                string? cursor=null;
-                if(http.Request.Query.TryGetValue("cursor",out var requested))
-                {
-                    if(requested.Count!=1 || requested[0]?.Length is not (>0 and <=2048))return Results.BadRequest();
-                    cursor=requested[0];
-                }
-                var page=await authority.ReadActivityPeriodsAsync(token,site,machineId,stream,mappingId,take,cursor,ct);
-                return Results.Ok(new { machineId,siteId=site,streamKey=stream,
-                    evidenceKind="historical-derived-activity",currentConnectivity=(string?)null,
-                    verification="immutable-publication-receipts",continuity="same-batch-only-not-physical-completeness",
-                    page.Series,page.Rows,page.NextCursor });
-            }));
+            await Read(http,config,loggerFactory.CreateLogger("FactoryConnect.ActivityHistory.Integrity"),async(authority,token,site,stream)=>
+                await ReadPeriods(http,authority,token,site,stream,machineId,mappingId,ct)));
+    }
+    private static async Task<IResult> ReadPeriods(HttpContext http, SqlSecurityAuthority authority,
+        byte[] token, Guid site, string stream, Guid machineId, Guid mappingId, CancellationToken ct)
+    {
+        var take = 20;
+        if (http.Request.Query.TryGetValue("take", out var value) &&
+            (value.Count != 1 || !int.TryParse(value[0], out take) || take is < 1 or > 100))
+            return Results.BadRequest(new { error = "take must be between 1 and 100" });
+        string? cursor = null;
+        if (http.Request.Query.TryGetValue("cursor", out var requested))
+        {
+            if (requested.Count != 1 || requested[0]?.Length is not (> 0 and <= 2048)) return Results.BadRequest();
+            cursor = requested[0];
+        }
+        var page = await authority.ReadActivityPeriodsAsync(token, site, machineId, stream, mappingId, take, cursor, ct);
+        return Results.Ok(new { machineId, siteId = site, streamKey = stream,
+            evidenceKind = "historical-derived-activity", currentConnectivity = (string?)null,
+            verification = "immutable-publication-receipts", continuity = "same-batch-only-not-physical-completeness",
+            page.Series, page.Rows, page.NextCursor });
     }
     private static async Task<IResult> Read(HttpContext http,IConfiguration config,ILogger logger,
         Func<SqlSecurityAuthority,byte[],Guid,string,Task<IResult>> read, bool allowOperatorCookie = false)
