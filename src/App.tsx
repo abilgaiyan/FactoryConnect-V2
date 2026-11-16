@@ -10,6 +10,7 @@ import { MachineActivityReportPage } from "./presentation/MachineActivityReportP
 import { formatReportDate } from "./presentation/date-formatting.ts";
 import { FleetStatusPage } from "./presentation/FleetStatusPage.tsx";
 import { DateRangePage } from "./presentation/DateRangePage.tsx";
+import HistoricalReportingPage from "./presentation/HistoricalReportingPage.tsx";
 import {
   type FormEvent,
   type MouseEvent,
@@ -113,6 +114,7 @@ export function App({ runtime }: AppProps) {
           <ApplicationLink href="/overview" navigate={navigate} current={route.kind === "overview"}>Overview</ApplicationLink>{" "}
           <ApplicationLink href="/fleet" navigate={navigate} current={route.kind === "fleet"}>Fleet status</ApplicationLink>{" "}
           <ApplicationLink href="/reports/range" navigate={navigate} current={route.kind === "dateRange"}>Date-range report</ApplicationLink>{" "}
+          <ApplicationLink href="/reports/historical" navigate={navigate} current={route.kind === "historicalReporting"}>Gajra history</ApplicationLink>{" "}
           <ApplicationLink href="/" navigate={navigate} current={route.kind === "productionDayOverview"}>
             Production days
           </ApplicationLink>
@@ -169,6 +171,7 @@ function RouteView({ route, navigate, runtime }: RouteViewProps) {
     case "overview": return <ManagementOverviewPage runtime={runtime} search={route.search} navigate={navigate} />;
     case "fleet": return <FleetStatusPage runtime={runtime} />;
     case "dateRange": return <DateRangePage key={window.location.search} runtime={runtime} />;
+    case "historicalReporting": return <HistoricalReportingPage />;
     case "productionDayOverview":
       return <ProductionDaySelection navigate={navigate} sourceCount={runtime.configuration.sources.length} />;
     case "productionDayDetail":
