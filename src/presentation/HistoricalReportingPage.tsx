@@ -182,24 +182,38 @@ function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[
     const start = Date.parse(window.start);
     const end = Date.parse(window.end);
     const totals = new Map<number, number>();
+    const intervals: { a: number; b: number }[] = [];
     if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
       for (const period of periods) {
         const a = Math.max(start, Date.parse(period.startedAt));
         const b = Math.min(end, Date.parse(period.endedAt));
         if (Number.isFinite(a) && Number.isFinite(b) && b > a) {
+          intervals.push({ a, b });
           totals.set(period.machineState, (totals.get(period.machineState) ?? 0) + (b - a) / 3600000);
         }
       }
     }
+    // Calculate distinct time coverage separately from raw state-hour sums.
+    // Overlapping intervals can conceal gaps if only totals are compared.
+    intervals.sort((left, right) => left.a - right.a || left.b - right.b);
+    let coveredMs = 0;
+    let mergedEnd = Number.NEGATIVE_INFINITY;
+    let hasOverlap = false;
+    for (const interval of intervals) {
+      if (interval.a < mergedEnd) hasOverlap = true;
+      coveredMs += Math.max(0, interval.b - Math.max(interval.a, mergedEnd));
+      mergedEnd = Math.max(mergedEnd, interval.b);
+    }
     const duration = (end - start) / 3600000;
     const recorded = [...totals.values()].reduce((sum, hours) => sum + hours, 0);
-    return { ...window, totals, duration, recorded, overlap: recorded > duration + 0.01 };
+    const covered = coveredMs / 3600000;
+    return { ...window, totals, duration, recorded, covered, overlap: hasOverlap, incomplete: covered < duration - 0.01 };
   });
   if (!rows.length) return null;
   const codes = [...new Set(rows.flatMap(row => [...row.totals.keys()]))].sort((a,b) => a-b);
   return <section aria-label="Source-window historical shift activity">
     <h3>Machine activity by recorded shift</h3>
-    <p>Raw machine-state intervals clipped to original V1 shift start/end boundaries. Breaks are not excluded. Overlapping source periods may overcount; these figures are not qualified production or OEE durations.</p>
+    <p>Raw machine-state intervals clipped to original V1 shift start/end boundaries. Breaks are not excluded. Distinct covered hours are calculated from the union of intervals, so overlap cannot hide missing time. Raw state hours can still overcount; neither measure is qualified production or OEE duration.</p>
     <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:10}} aria-label="Shift activity state legend">
       {codes.map((code,i) => <span key={code} style={{display:"inline-flex",alignItems:"center",gap:5}}><span aria-hidden="true" style={{display:"inline-block",width:12,height:12,background:["#287da8","#d97706","#64748b","#7c3aed","#059669","#be123c"][i % 6]}} />{stateLabel(code)} ({code})</span>)}
     </div>
@@ -213,10 +227,10 @@ function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[
         {row.overlap && <small title="Raw intervals exceed shift window">Overlap</small>}
       </div>)}
     </div>
-    <div style={{overflowX:"auto"}}><table><thead><tr><th>Shift start (IST)</th><th>Shift</th><th>Window hours</th>{codes.map(code => <th key={code}>{stateLabel(code)} ({code}) hours</th>)}<th>Coverage check</th></tr></thead>
-      <tbody>{rows.map(row => <tr key={row.start + row.id}><td title={row.start}>{historicalTime(row.start)}</td><td>{row.id}</td><td>{row.duration.toFixed(2)}</td>
+    <div style={{overflowX:"auto"}}><table><thead><tr><th>Shift start (IST)</th><th>Shift</th><th>Window hours</th><th>Distinct covered hours</th>{codes.map(code => <th key={code}>{stateLabel(code)} ({code}) hours</th>)}<th>Coverage check</th></tr></thead>
+      <tbody>{rows.map(row => <tr key={row.start + row.id}><td title={row.start}>{historicalTime(row.start)}</td><td>{row.id}</td><td>{row.duration.toFixed(2)}</td><td>{row.covered.toFixed(2)}</td>
         {codes.map(code => <td key={code}>{(row.totals.get(code) ?? 0).toFixed(2)}</td>)}
-        <td>{row.overlap ? "Overlapping evidence — review" : row.recorded < row.duration - 0.01 ? "Incomplete interval coverage" : "Raw intervals cover window"}</td>
+        <td>{row.overlap && row.incomplete ? "Overlap and gaps — review" : row.overlap ? "Overlapping evidence — review" : row.incomplete ? "Incomplete interval coverage" : "Raw intervals cover window"}</td>
       </tr>)}</tbody></table></div>
   </section>;
 }
