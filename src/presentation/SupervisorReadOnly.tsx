@@ -154,7 +154,17 @@ function occurrenceStartMinuteInZone(utc: string, timeZone: string): number | nu
 }
 
 function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityReport; readonly shiftId: string }) {
-  const [timeZone, setTimeZone] = useState("");
+  const [timeZone, setTimeZone] = useState(() => {
+    try { return window.sessionStorage.getItem("fc2-supervisor-site-timezone") ?? ""; }
+    catch { return ""; }
+  });
+  const updateTimeZone = (value: string) => {
+    setTimeZone(value);
+    try {
+      if (value) window.sessionStorage.setItem("fc2-supervisor-site-timezone", value);
+      else window.sessionStorage.removeItem("fc2-supervisor-site-timezone");
+    } catch { /* Browsers with disabled storage still allow per-occurrence entry. */ }
+  };
   const [breaks, setBreaks] = useState<PlannedBreak[] | null>(null);
   const [shift, setShift] = useState<PlannedShift | null>(null);
   const [error, setError] = useState("");
@@ -201,7 +211,7 @@ function BreakAdjustedActivity({ report, shiftId }: { readonly report: ActivityR
     return () => controller.abort();
   }, [shiftId]);
   const zoneControl = <label>Site timezone for provisional alignment (IANA)
-    <input type="text" value={timeZone} onChange={event => setTimeZone(event.target.value.trim())} placeholder="e.g. Asia/Kolkata" />
+    <input type="text" value={timeZone} onChange={event => updateTimeZone(event.target.value.trim())} placeholder="e.g. Asia/Kolkata" />
   </label>;
   if (error) return <section>{zoneControl}<p role="alert">Break-adjusted activity unavailable: {error}. No zero-break assumption.</p></section>;
   if (!breaks || !shift) return <section>{zoneControl}<p role="status">Loading configured shift and break intervals…</p></section>;
