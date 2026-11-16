@@ -25,6 +25,15 @@ export function ShiftPerformanceOverviewView({ overview, showFilters = true }: S
       .map(machine => ({ ...machine, shifts: machine.shifts.filter(shift => !shiftFilter || shift.shift.shiftId === shiftFilter) })),
   })).filter(group => group.machines.length > 0);
   const selected = visibleGroups.flatMap(group => group.machines.flatMap(machine => machine.shifts.map(shift => ({ machine, shift }))));
+  const csvHeader = ["Production day", "Site", "Production line", "Machine", "Machine ID", "Reporting processor", "Shift", "Shift assignment", "Start UTC", "End UTC", "Metric", "State", "Value", "Unit", "Reason code"];
+  const csvRows = selected.flatMap(({ machine, shift }) => [shift.availability, shift.utilization, shift.performance, shift.quality, shift.oee].map(metric => [
+    overview.productionDay, machine.siteId, machine.productionLineId, machine.displayName, machine.machineId, machine.processorId,
+    shift.shift.shiftId, shift.shift.shiftScheduleAssignmentId, shift.shift.startsAtUtc, shift.shift.endsAtUtc,
+    metric.metricKey, metric.state, metric.state === "calculated" ? String(metric.value) : "",
+    metric.state === "calculated" ? metric.unit : "",
+    metric.state === "unavailable" || metric.state === "insufficient-evidence" ? metric.reasonCode ?? "" : "",
+  ]));
+  const csvText = [csvHeader, ...csvRows].map(row => row.map(cell => '"' + String(cell).replace(/"/g, '""') + '"').join(",")).join("\r\n");
   return (
     <section className="equipment-performance" aria-labelledby="shift-performance-title">
       <h2 id="shift-performance-title">Shift performance</h2>
@@ -61,6 +70,7 @@ export function ShiftPerformanceOverviewView({ overview, showFilters = true }: S
         })}
         <p>Green represents occurrences with a reported calculated metric; grey includes unavailable, insufficient and missing metrics. Calculated values are not independently certified here.</p>
       </section>}
+      {selected.length > 0 && <p><a download="factoryconnect-management-shift-metrics.csv" href={"data:text/csv;charset=utf-8," + encodeURIComponent("\uFEFF" + csvText)}>Export selected shift metrics CSV</a></p>}
       {selected.length === 1 && <p className="report-scope-note">Selected: {selected[0]!.machine.displayName} · {selected[0]!.shift.shift.shiftId} · {formatReportTimestamp(selected[0]!.shift.shift.startsAtUtc)} – {formatReportTimestamp(selected[0]!.shift.shift.endsAtUtc)}</p>}
       {selected.length === 1 && <section className="performance-kpis" aria-label="Selected shift metrics">
         {[selected[0]!.shift.availability, selected[0]!.shift.utilization, selected[0]!.shift.performance, selected[0]!.shift.quality, selected[0]!.shift.oee].map(metric => {
