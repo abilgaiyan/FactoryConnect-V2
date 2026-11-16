@@ -6,6 +6,7 @@ export type ApplicationRoute =
   | { kind: "overview"; search: string }
   | { kind: "fleet" }
   | { kind: "dateRange" }
+  | { kind: "historicalReporting" }
   | { kind: "productionDayOverview" }
   | { kind: "productionDayDetail"; productionDay: string }
   | { kind: "shiftPerformance"; productionDay: string }
@@ -24,6 +25,7 @@ export function parseApplicationRoute(pathname: string, search = ""): Applicatio
   if (pathname === "/commissioning") return { kind: "commissioning" };
   if (pathname === "/overview") return { kind: "overview", search };
   if (pathname === "/fleet") return { kind: "fleet" };
+  if (pathname === "/reports/historical") return { kind: "historicalReporting" };
   if (pathname === "/reports/range") return { kind: "dateRange" };
   if (pathname === "/") {
     return { kind: "productionDayOverview" };
@@ -98,6 +100,7 @@ export function routePath(route: Exclude<ApplicationRoute, { kind: "notFound" }>
     case "overview": return `/overview${route.search}`;
     case "fleet": return "/fleet";
     case "dateRange": return "/reports/range";
+    case "historicalReporting": return "/reports/historical";
     case "productionDayOverview":
       return "/";
     case "productionDayDetail":
