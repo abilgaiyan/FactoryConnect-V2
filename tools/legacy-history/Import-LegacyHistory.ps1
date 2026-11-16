@@ -49,10 +49,10 @@ BEGIN TRY
  IF OBJECT_ID('legacy_reporting.ShiftAggregate','U') IS NULL
   CREATE TABLE legacy_reporting.ShiftAggregate(
    SourceDatabase sysname NOT NULL, SourceRowId bigint NOT NULL,
-   SourceMachineId uniqueidentifier NOT NULL, SourceSiteId nvarchar(256) NULL,
-   ShiftScheduleAssignmentId nvarchar(256) NULL, ShiftId nvarchar(256) NULL,
+   SourceMachineId uniqueidentifier NOT NULL, SourceSiteId nvarchar(512) NULL,
+   ShiftScheduleAssignmentId nvarchar(512) NULL, ShiftId nvarchar(512) NULL,
    ShiftStartsAtUtc datetimeoffset NULL, ShiftEndsAtUtc datetimeoffset NULL,
-   MetricInputKey nvarchar(256) NOT NULL, AggregateValue nvarchar(max) NULL, Unit nvarchar(128) NULL,
+   MetricInputKey nvarchar(512) NOT NULL, AggregateValue nvarchar(128) NULL, Unit nvarchar(256) NULL,
    InputCount bigint NULL,
    CONSTRAINT PK_LegacyShiftAggregate PRIMARY KEY(SourceDatabase,SourceRowId)
   );
@@ -60,11 +60,11 @@ BEGIN TRY
   CREATE TABLE legacy_reporting.MetricProjection(
    SourceDatabase sysname NOT NULL, SourceRowId bigint NOT NULL,
    SourceMachineId uniqueidentifier NOT NULL, PeriodKind tinyint NOT NULL,
-   SourceSiteId nvarchar(256) NULL, ShiftId nvarchar(256) NULL,
+   SourceSiteId nvarchar(512) NULL, ShiftId nvarchar(512) NULL,
    ShiftStartsAtUtc datetimeoffset NULL, ShiftEndsAtUtc datetimeoffset NULL,
-   ProductionBusinessDate date NULL, MetricKey nvarchar(256) NOT NULL,
-   DefinitionVersion nvarchar(256) NULL, Status tinyint NOT NULL,
-   MetricValue nvarchar(max) NULL, Unit nvarchar(128) NULL, ReasonCode tinyint NULL,
+   ProductionBusinessDate date NULL, MetricKey nvarchar(512) NOT NULL,
+   DefinitionVersion nvarchar(512) NULL, Status tinyint NOT NULL,
+   MetricValue nvarchar(128) NULL, Unit nvarchar(256) NULL, ReasonCode tinyint NULL,
    CONSTRAINT PK_LegacyMetricProjection PRIMARY KEY(SourceDatabase,SourceRowId)
   );
  IF NOT EXISTS (SELECT 1 FROM legacy_reporting.Machine WHERE SourceDatabase=N'$SourceDatabase' AND SourceMachineId='677b030b-1ede-4a67-82ae-6a494791357f')
