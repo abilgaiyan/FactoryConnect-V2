@@ -74,6 +74,8 @@ test('real mode reuses canonical reporting and exact overnight activity; inspect
   assert.equal(requests.length,1);
   assert.match(requests[0].url,new RegExp(source.machineId));
   assert.deepEqual(JSON.parse(requests[0].options.body),{fromInclusive:first.startsAtUtc,toExclusive:first.endsAtUtc});
+  assert.match(text(h), /Enter the site's verified IANA timezone/);
+  await h.changeInput(control(h,'Site timezone for provisional alignment','input'),'Asia/Kolkata');
   assert.match(text(h), /Recorded activity outside planned breaks/);
   assert.match(text(h), /Configured excluded breaks: 30 min/);
   assert.match(text(h), /MissingReferenceTime/); assert.match(text(h), /MissingGoodQuantity/); assert.match(text(h), /DependencyUnavailable/);
