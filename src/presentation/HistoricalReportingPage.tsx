@@ -44,7 +44,7 @@ export function splitActivityByIndiaDay(periods: readonly Period[], from: string
     }
   }
   return [...totals].map(([key, seconds]) => {
-    const [date, state] = key.split("|");
+    const [date = "", state = "0"] = key.split("|");
     return { date, state: Number(state), seconds };
   }).sort((a, b) => a.date.localeCompare(b.date) || a.state - b.state);
 }
@@ -98,7 +98,7 @@ export default function HistoricalReportingPage() {
       const qs = `?from=${encodeURIComponent(from)}&through=${encodeURIComponent(through)}`;
       const responses = await Promise.all(["metrics", "activity"].map(kind => fetch(base + "/" + kind + qs, { credentials: "include", cache: "no-store" })));
       for (const response of responses) if (!response.ok) throw Error(`Historical reporting HTTP ${response.status}`);
-      const [m, a] = await Promise.all([responses[0].json() as Promise<MetricReply>, responses[1].json() as Promise<ActivityReply>]);
+      const [m, a] = await Promise.all([responses[0]!.json() as Promise<MetricReply>, responses[1]!.json() as Promise<ActivityReply>]);
       if (m.source !== expectedSource || a.source !== expectedSource || m.isSample || a.isSample || !Array.isArray(m.metrics) || !Array.isArray(a.periods)) throw Error("Unexpected historical data response");
       setMetrics(m.metrics); setPeriods(a.periods); setLoaded(true);
     } catch (e) { setError(String(e)); }
