@@ -168,6 +168,42 @@ function ActivityDailyChart({ rows }: { rows: readonly { date: string; state: nu
     </div>
   </section>;
 }
+function HistoricalScheduleReconciliation({ shifts }: { shifts: readonly ShiftAggregate[] }) {
+  // Compare only source-recorded shift windows. This is an audit of clock
+  // discrepancies, not a reassignment of historical production evidence.
+  const expected = new Set(["07:30|16:00|510", "16:00|00:00|480", "00:00|07:30|450"]);
+  const clock = (instant: string): string => new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(new Date(instant));
+  const windows = new Map<string, { shift: string; start: string; end: string; actual: string; matches: boolean }>();
+  for (const item of shifts) {
+    if (!item.shiftStartsAtUtc || !item.shiftEndsAtUtc) continue;
+    const startMs = Date.parse(item.shiftStartsAtUtc);
+    const endMs = Date.parse(item.shiftEndsAtUtc);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+    const key = JSON.stringify([item.shiftId, startMs, endMs]);
+    const startClock = clock(item.shiftStartsAtUtc);
+    const endClock = clock(item.shiftEndsAtUtc);
+    const minutes = (endMs - startMs) / 60000;
+    windows.set(key, {
+      shift: item.shiftId ?? "Unspecified", start: item.shiftStartsAtUtc,
+      end: item.shiftEndsAtUtc, actual: startClock + "–" + endClock,
+      matches: expected.has(startClock + "|" + endClock + "|" + minutes),
+    });
+  }
+  const rows = [...windows.values()].sort((a,b) => a.start.localeCompare(b.start));
+  if (!rows.length) return null;
+  const differing = rows.filter(row => !row.matches);
+  return <section aria-label="Historical V1 shift schedule reconciliation">
+    <h3>Historical shift timing reconciliation</h3>
+    <p>Approved V2 factory shifts (IST): 07:30–16:00, 16:00–00:00, 00:00–07:30. This compares recorded V1 shift windows with approved clock times; it does not change source evidence or recalculate OEE. Break exclusions are not assessed.</p>
+    <p role="status">{rows.length} recorded shift windows checked · {differing.length} differ from approved timing.</p>
+    {differing.length > 0 && <details><summary>Review {differing.length} historical timing discrepancies</summary>
+      <div style={{overflowX:"auto"}}><table><thead><tr><th>Original start (IST)</th><th>Source shift ID</th><th>Recorded clock (IST)</th><th>Review</th></tr></thead>
+      <tbody>{differing.map(row => <tr key={row.start + row.shift}><td>{historicalTime(row.start)}</td><td>{row.shift}</td><td>{row.actual}</td><td>Differs from approved V2 shift timing; retain original V1 evidence</td></tr>)}</tbody></table></div>
+    </details>}
+  </section>;
+}
 function ShiftActivityBreakdown({ periods, shifts }: { periods: readonly Period[]; shifts: readonly ShiftAggregate[] }) {
   const [reviewOnly, setReviewOnly] = useState(false);
   // Shift boundaries are taken only from imported source facts, never from the
@@ -390,6 +426,7 @@ export default function HistoricalReportingPage() {
       <ActivityDailyChart rows={activity} />
       <ShiftMetricOverview metrics={metrics} machine={machines.find(m => m.sourceMachineId === machineId)?.deviceKey ?? machineId} />
       <HistoricalShiftSummary rows={shiftAggregates} />
+      <HistoricalScheduleReconciliation shifts={shiftAggregates} />
       <ShiftActivityBreakdown periods={periods} shifts={shiftAggregates} />
       <div style={{display:"flex", flexWrap:"wrap", gap:12, margin:"20px 0"}} aria-label="Historical report coverage">
         {[["Historical projections",metrics.length],["Valid daily A/U points",daily.length],["Imported shift inputs",shiftAggregates.length],["Completed activity intervals",periods.length]].map(([label,value]) => <div key={label} style={{flex:"1 1 165px",padding:16,border:"1px solid #cbd5e1",borderRadius:8}}><div style={{fontSize:24,fontWeight:700}}>{value}</div><div>{label}</div></div>)}
