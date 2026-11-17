@@ -90,7 +90,7 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
         const payload: { error?: string } = await response.json().catch(() => ({}));
         throw new Error(payload.error ?? `Target save failed (HTTP ${response.status}). Check site permissions.`);
       }
-      setNotice("New target revision saved to SQL."); setReason(""); setRetry(value => value + 1);
+      setNotice("Production target saved."); setReason(""); setRetry(value => value + 1);
     } catch (e) { setError(String(e)); } finally { setSaving(false); }
   }
 
@@ -132,7 +132,7 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
     URL.revokeObjectURL(url);
   }
   return <section aria-label="Live machine shift targets">
-    <h3>Machine shift targets · SQL planning</h3>
+    <h3>Machine shift targets</h3>
     <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       {open ? "Hide targets" : "Load machine shift targets"}
     </button>
@@ -167,7 +167,7 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
       : targets.length === 0 ? <p>No targets recorded for this machine and business date. This is not a zero target.</p>
       : <><button type="button" onClick={exportTargetsCsv}>Export recorded shift targets (CSV)</button><section aria-label="Recorded shift production targets">
         <h4>Production targets by configured shift</h4>
-        <p>Recorded SQL target quantities for {businessDate}. These are planned quantities, not actual production or achievement. Bars are comparable only for the same unit.</p>
+        <p>Recorded target quantities for {businessDate}. These are planned quantities, not actual production or achievement. Bars are comparable only for the same unit.</p>
         {targets.map(target => {
           const sameUnit = targets.filter(item => item.quantityUnit.toLowerCase() === target.quantityUnit.toLowerCase());
           const maximum = Math.max(...sameUnit.map(item => item.targetQuantity), 0);
