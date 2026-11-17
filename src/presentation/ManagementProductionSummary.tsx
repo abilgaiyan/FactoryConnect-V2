@@ -13,7 +13,7 @@ function compatible(a: Quantity, b: Quantity) {
 // Protect exported spreadsheet cells from formula execution and preserve CSV quoting.
 function csvCell(value: string | number | null) {
   const raw = String(value ?? "");
-  const safe = /^[\\s]*[=+@-]/.test(raw) ? "'" + raw : raw;
+  const safe = /^\s*[=+@-]/.test(raw) ? "'" + raw : raw;
   return '"' + safe.replace(/"/g, '""') + '"';
 }
 function exportCsv(rows: readonly Summary[], date: string) {
