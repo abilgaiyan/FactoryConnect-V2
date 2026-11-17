@@ -8,6 +8,7 @@ import { formatReportTimestamp } from './date-formatting.ts';
 import type { RangeItem } from '../application/date-range-reporting.ts';
 import './management-overview.css';
 import ManagementProductionSummary from './ManagementProductionSummary.tsx';
+import ManagementProductionTrend from './ManagementProductionTrend.tsx';
 export function ManagementOverviewPage({ runtime, search, navigate }: { runtime: DashboardApplicationRuntime; search: string; navigate: (href: string) => void }) {
     const selection = useMemo(() => {
         try { return { kind: 'valid' as const, value: overviewSelection(search, runtime.configuration.sources) }; }
@@ -38,6 +39,7 @@ function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicat
         <p>Fleet Availability/OEE and coverage percentages withheld pending qualified aggregation and coverage contracts.</p>
         {!selection.day && <p>Select a production day to load per-machine Availability, Utilization, Performance, Quality and OEE. No ongoing-day calendar is assumed.</p>}
         <ManagementProductionSummary machines={productionMachines} businessDate={selection.day} />
+        <ManagementProductionTrend machines={productionMachines} businessDate={selection.day} />
         <div className="overview-machines">{machines.map(machine => {
             const source = machine.sources[0]!;
             const attempt = attempts[machine.machineId];
