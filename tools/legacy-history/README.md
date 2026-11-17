@@ -45,3 +45,35 @@ Dry run (no writes):
 ```
 
 This is an initial staging slice, **not yet connected to V2 reporting APIs or UI**. Values remain source values; the importer does not reinterpret state codes, metric status, shifts, or OEE semantics. It does not map V1 machine GUIDs to V2 machine GUIDs or mark them commissioned. Reconciliation and API/UI integration are follow-up work. Run against a disposable copy of V2 development data first; SQL execution has not been tested against the user's instance.
+
+
+## Historical V1 versus approved V2 shift timing reconciliation (FC2-160)
+
+The V2 shift clocks are the approved factory configuration: SHIFT-1 07:30–16:00,
+SHIFT-2 16:00–00:00 and SHIFT-3 00:00–07:30 IST. Earlier V1 rosters may
+reflect initial setup mistakes. Do not overwrite imported V1 evidence or use
+its initial shift boundaries as proof of the approved factory schedule.
+
+After running `Export-LegacyRosterOccurrences.ps1`, compare the exported
+roster to the approved clocks (no SQL connection required):
+
+```powershell
+.\tools\legacy-history\Compare-LegacyRosterToApprovedShifts.ps1 -RosterCsv '.\artifacts\legacy-roster-reconciliation\v1-machine-shift-roster-occurrences.csv'
+```
+
+The result `v1-v2-shift-timing-reconciliation.csv` includes original UTC/IST
+boundaries, approved clock times, machine, date, roster revision, and a
+classification per shift. It **does not create corrected source timestamps**,
+apply break exclusions, infer production, or calculate OEE. Unrecognized shift
+IDs or malformed source times are flagged as unverifiable.
+
+On the reviewed November 2026 export, GG-003 had seven days (21 shifts)
+of earlier 06:00/14:00/22:00 clocks before the October 22 correction.
+These are a known configuration discrepancy, not evidence that the machine
+was actually operating during the alternative shift windows. The original
+roster data remains authoritative as a record of what V1 stored; the
+approved V2 schedule is authoritative for current operations.
+
+This is an **offline audit tool**, not yet an in-app historical reporting
+recalculation. Historical break-adjusted OEE still requires applicable
+break evidence and qualified production/quality inputs.
