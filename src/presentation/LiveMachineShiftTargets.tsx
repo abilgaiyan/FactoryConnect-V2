@@ -132,6 +132,13 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
         <button type="submit">{saving ? "Saving…" : "Save target revision"}</button>
       </fieldset>
     </form>}
+    {open && targets !== null && shifts !== null && !error && <section aria-label="Shift target completeness">
+      <h4>Shift target coverage</h4>
+      <p role="status">{shifts.filter(shift => targets.some(target => target.shiftId.toLowerCase() === shift.shiftId.toLowerCase())).length} of {shifts.length} configured shifts have recorded production targets for {businessDate}.</p>
+      {shifts.filter(shift => !targets.some(target => target.shiftId.toLowerCase() === shift.shiftId.toLowerCase())).length > 0 &&
+        <p><strong>Missing targets:</strong> {shifts.filter(shift => !targets.some(target => target.shiftId.toLowerCase() === shift.shiftId.toLowerCase())).map(shift => shift.displayName).join(", ")}. Missing is not a zero target; enter a revision before interpreting plan achievement.</p>}
+      {shifts.length === 0 && <p>No configured shifts are available; target completeness cannot be assessed.</p>}
+    </section>}
     {notice && <p role="status">{notice}</p>}
     {open && (error ? <><p role="alert">{error}. No sample fallback.</p>
       <button type="button" onClick={() => setRetry(value => value + 1)}>Retry targets</button></>
