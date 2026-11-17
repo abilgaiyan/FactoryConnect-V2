@@ -82,6 +82,31 @@ export default function LiveMachineTargetActual({ machineId, businessDate }: {
                 <td>{status}</td>
               </tr>;
             })}</tbody></table>}
+        <section aria-label="Shift production achievement charts">
+          <h4>Production plan vs declared actual · shift charts</h4>
+          <p>Each chart uses its own scale; compare the target and declared production within the same shift only. Blue indicates target, green indicates declared good, and orange indicates declared rejected. Missing or incompatible evidence is not plotted.</p>
+          {comparable.filter(r => r.target && r.actual && r.target.targetQuantity > 0).length === 0 &&
+            <p>No comparable positive-target shift records are available to chart.</p>}
+          {comparable.filter(r => r.target && r.actual && r.target.targetQuantity > 0).map(({ shift, target, actual }) => {
+            if (!target || !actual) return null;
+            const total = actual.goodQuantity + actual.rejectedQuantity;
+            const maximum = Math.max(target.targetQuantity, total);
+            const scale = (quantity: number) => maximum > 0 ? 340 * quantity / maximum : 0;
+            return <figure key={shift.shiftId}>
+              <figcaption><strong>{shift.displayName}</strong> · {target.quantityUnit} · target revision {target.revision}, declared revision {actual.revision}</figcaption>
+              <svg viewBox="0 0 510 110" role="img" aria-label={`${shift.displayName}: target ${target.targetQuantity}, declared good ${actual.goodQuantity}, declared rejected ${actual.rejectedQuantity} ${target.quantityUnit}`} style={{ width: "100%", maxWidth: 650, height: "auto" }}>
+                <text x="0" y="29" fontSize="14" fill="currentColor">Target</text>
+                <rect x="140" y="13" width={scale(target.targetQuantity)} height="24" fill="#3974b9" />
+                <text x="145" y="30" fontSize="13" fill="#fff">{target.targetQuantity}</text>
+                <text x="0" y="75" fontSize="14" fill="currentColor">Declared</text>
+                <rect x="140" y="59" width={scale(actual.goodQuantity)} height="24" fill="#278558" />
+                <rect x={140 + scale(actual.goodQuantity)} y="59" width={scale(actual.rejectedQuantity)} height="24" fill="#c27620" />
+                <text x="145" y="76" fontSize="13" fill={scale(actual.goodQuantity) > 40 ? "#fff" : "currentColor"}>{total}</text>
+              </svg>
+              <p>Declared total {total} / target {target.targetQuantity} = {(100 * total / target.targetQuantity).toFixed(1)}% of plan. Good {actual.goodQuantity}; rejected {actual.rejectedQuantity}.</p>
+            </figure>;
+          })}
+        </section>
         <p>Achievement = (declared good + rejected) / recorded target, only when units and production context match and the target is positive. This is plan achievement, not OEE Performance, Quality or OEE.</p>
         <button type="button" onClick={() => setRetry(v => v + 1)}>Refresh report after edits</button>
       </>}
