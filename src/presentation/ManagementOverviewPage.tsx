@@ -18,6 +18,7 @@ export function ManagementOverviewPage({ runtime, search, navigate }: { runtime:
 }
 function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicationRuntime; selection: OverviewSelection; navigate: (href: string) => void }) {
     const machines = useMemo(() => selectedMachines(selection, runtime.configuration.sources), [selection, runtime.configuration.sources]);
+    const productionMachines = useMemo(() => machines.map(m => ({ machineId: m.machineId, displayName: m.sources[0]!.displayName })), [machines]);
     const { attempts, reports, refresh } = useManagementOverview(runtime, machines, selection.day);
     const counts = overviewCounts(machines, attempts);
     const context = overviewSearch(selection);
@@ -36,7 +37,7 @@ function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicat
         <div className="overview-counts">{Object.entries(counts).map(([group, buckets]) => <section key={group} aria-label={group}><h2>{group === 'operational' ? 'Usable current states' : group === 'request' ? 'Live requests' : 'Evidence freshness'}</h2><dl>{Object.entries(buckets).map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count}</dd></div>)}</dl></section>)}</div>
         <p>Fleet Availability/OEE and coverage percentages withheld pending qualified aggregation and coverage contracts.</p>
         {!selection.day && <p>Select a production day to load per-machine Availability, Utilization, Performance, Quality and OEE. No ongoing-day calendar is assumed.</p>}
-        <ManagementProductionSummary machines={machines.map(m => ({ machineId: m.machineId, displayName: m.sources[0]!.displayName }))} businessDate={selection.day} />
+        <ManagementProductionSummary machines={productionMachines} businessDate={selection.day} />
         <div className="overview-machines">{machines.map(machine => {
             const source = machine.sources[0]!;
             const attempt = attempts[machine.machineId];
