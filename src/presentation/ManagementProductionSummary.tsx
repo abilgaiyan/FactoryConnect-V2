@@ -32,7 +32,7 @@ export default function ManagementProductionSummary({ machines, businessDate }: 
       return data[key] as T[];
     }
     void (async () => {
-      const shifts = await read<{ shiftId: string }[]>("/api/planning/v2/shifts", "shifts");
+      const shifts = await read<{ shiftId: string }>("/api/planning/v2/shifts", "shifts");
       const results: Summary[] = [];
       // Sequential per-machine requests keep reporting bounded and preserve partial failures.
       for (const machine of machines) {
