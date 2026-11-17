@@ -110,6 +110,27 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
       }).catch(e => { if (!controller.signal.aborted) setError(String(e)); });
     return () => controller.abort();
   }, [open, machineId, businessDate, retry]);
+  function exportTargetsCsv() {
+    if (!targets?.length) return;
+    const cell = (value: string | number | null) => {
+      const raw = String(value ?? "");
+      const safe = /^\s*[=+@-]/.test(raw) ? "'" + raw : raw;
+      return '"' + safe.replace(/"/g, '""') + '"';
+    };
+    const header = ["Machine ID", "Business date", "Shift", "Target quantity", "Unit", "Production order", "Part number", "Operation", "Revision", "Revision reason", "Recorded at UTC", "Evidence classification"];
+    const rows = targets.map(t => [machineId, businessDate, shiftName(t.shiftId), t.targetQuantity,
+      t.quantityUnit, t.productionOrder, t.partNumber, t.operation, t.revision,
+      t.revisionReason, t.recordedAtUtc, "Planning target only; actual production not established"]);
+    const csv = [header, ...rows].map(row => row.map(value => cell(value)).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], {type:"text/csv;charset=utf-8"}));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "factoryconnect-shift-targets-" + businessDate + ".csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
   return <section aria-label="Live machine shift targets">
     <h3>Machine shift targets · SQL planning</h3>
     <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}>
@@ -144,7 +165,7 @@ export default function LiveMachineShiftTargets({ machineId, businessDate }: {
       <button type="button" onClick={() => setRetry(value => value + 1)}>Retry targets</button></>
       : targets === null ? <p role="status">Loading recorded targets…</p>
       : targets.length === 0 ? <p>No targets recorded for this machine and business date. This is not a zero target.</p>
-      : <><section aria-label="Recorded shift production targets">
+      : <><button type="button" onClick={exportTargetsCsv}>Export recorded shift targets (CSV)</button><section aria-label="Recorded shift production targets">
         <h4>Production targets by configured shift</h4>
         <p>Recorded SQL target quantities for {businessDate}. These are planned quantities, not actual production or achievement. Bars are comparable only for the same unit.</p>
         {targets.map(target => {
