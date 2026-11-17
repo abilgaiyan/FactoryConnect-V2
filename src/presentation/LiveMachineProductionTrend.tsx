@@ -94,7 +94,7 @@ export default function LiveMachineProductionTrend({ machineId, businessDate }: 
           <svg viewBox="0 0 450 58" role="img" aria-label={`${d.date}: target ${d.target}, good ${d.good}, rejected ${d.rejected} ${d.unit}`} style={{ width: "100%", maxWidth: 550, height: "auto" }}>
             <rect x="0" y="4" width={400 * d.target / Math.max(1, d.target, d.good + d.rejected)} height="20" fill="#3974b9"/>
             <rect x="0" y="31" width={400 * d.good / Math.max(1, d.target, d.good + d.rejected)} height="20" fill="#278558"/>
-            <rect x={400 * d.good / max} y="31" width={400 * d.rejected / Math.max(1, d.target, d.good + d.rejected)} height="20" fill="#c27620"/>
+            <rect x={400 * d.good / Math.max(1, d.target, d.good + d.rejected)} y="31" width={400 * d.rejected / Math.max(1, d.target, d.good + d.rejected)} height="20" fill="#c27620"/>
           </svg>
           <p>Target {d.target}; declared good {d.good}; rejected {d.rejected}</p>
         </figure>)}
