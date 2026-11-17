@@ -38,6 +38,6 @@ export default function SupervisorTargetEntry() {
  {section==="comparison"&&<LiveMachineTargetActual key={"comparison:"+machineId+":"+businessDate} machineId={machineId} businessDate={businessDate}/>}
  {section==="trend"&&<LiveMachineProductionTrend key={"trend:"+machineId+":"+businessDate} machineId={machineId} businessDate={businessDate}/>}
  {section==="activity"&&<LiveMachineActivityCoverage key={"activity:"+machineId+":"+businessDate} machineId={machineId} date={businessDate}/>}
- </></>}</>}
+ </>}</>}
  </>}</section>;
 }
