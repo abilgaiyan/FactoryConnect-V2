@@ -257,6 +257,7 @@ app.MapHumanAccessAdministration();
 app.MapMtConnectDiscovery();
 app.MapPlanning();
 app.MapPlanningWrites();
+app.MapShiftProduction();
 app.MapPlanningMachines();
 
 app.MapMethods("/api/{**path}", ["GET", "POST"], NotReady);
