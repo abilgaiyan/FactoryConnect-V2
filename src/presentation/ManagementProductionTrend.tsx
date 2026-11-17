@@ -105,7 +105,10 @@ export default function ManagementProductionTrend({ machines, businessDate }: {
   const complete = (d: Day) => d.comparable > 0 && d.missing === 0 && d.incompatible === 0 && d.errors === 0;
   const completeDays = days?.filter(complete) ?? [];
   const units = [...new Set(completeDays.map(d => d.unit?.toLowerCase()))];
-  const maximum = Math.max(1, ...completeDays.map(d => Math.max(d.target, d.good + d.rejected)));
+  // Each unit has its own consistent seven-day scale; different units are never visually normalized together.
+  const maximumForUnit = (unit: string | null) => Math.max(1, ...completeDays
+    .filter(d => d.unit?.trim().toLowerCase() === unit?.trim().toLowerCase())
+    .map(d => Math.max(d.target, d.good + d.rejected)));
   return <section aria-label="Management seven-day production trend">
     <h2>Seven-day management production trend</h2>
     <p>SQL targets versus supervisor-declared good and rejected quantities. All seven dates end on the selected production day. Not qualified OEE.</p>
@@ -128,9 +131,9 @@ export default function ManagementProductionTrend({ machines, businessDate }: {
         </table>
         <button type="button" onClick={() => exportTrendCsv(days, businessDate, machines.length)}>Export seven-day production CSV</button>
         <p>CSV exports all seven dates with coverage; incomplete dates have blank quantities, not zeros. This is supervisor-declared production, not qualified OEE.</p>
-        {units.length > 1 && <p role="alert">Different quantity units occur across dates; graph bars must not be compared as a common quantity.</p>}
+        {units.length > 1 && <p role="alert">Different quantity units occur across dates. Charts share a scale only within the same unit; do not compare bar lengths across units.</p>}
         {completeDays.length === 0 && <p>No complete dates available to chart.</p>}
-        {completeDays.map(d => <figure key={d.date}>
+        {completeDays.map(d => { const maximum = maximumForUnit(d.unit); return <figure key={d.date}>
           <figcaption>{d.date} · {d.unit} · {machines.length} machines</figcaption>
           <svg viewBox="0 0 450 56" role="img" aria-label={`${d.date}: target ${d.target}, good ${d.good}, rejected ${d.rejected} ${d.unit}`} style={{ width: "100%", maxWidth: 550, height: "auto" }}>
             <rect x="0" y="3" width={400 * d.target / maximum} height="19" fill="#3974b9"/>
@@ -138,8 +141,8 @@ export default function ManagementProductionTrend({ machines, businessDate }: {
             <rect x={400 * d.good / maximum} y="30" width={400 * d.rejected / maximum} height="19" fill="#c27620"/>
           </svg>
           <p>Target {d.target}; declared good {d.good}; rejected {d.rejected}</p>
-        </figure>)}
-        <p>Blue = target, green = good, orange = rejected. Missing evidence is never counted as zero. No fleet OEE or Quality inferred.</p>
+        </figure>; })}
+        <p>Blue = target, green = good, orange = rejected. A consistent scale is used across dates with the same unit. Missing evidence is never counted as zero. No fleet OEE or Quality inferred.</p>
         <button type="button" onClick={() => setRetry(v => v + 1)}>Refresh seven-day management trend</button>
       </>}
     </>}
