@@ -32,13 +32,13 @@ ORDER BY r.MachineId,r.ProductionBusinessDate,r.Revision,o.ShiftStartsAtUtc;
 '@
 # Parameterized query protects dates and prevents SQL injection.
 $parameters = @(
-  [Microsoft.Data.SqlClient.SqlParameter]::new('@FromDate',[System.Data.SqlDbType]::Date),
-  [Microsoft.Data.SqlClient.SqlParameter]::new('@ThroughDate',[System.Data.SqlDbType]::Date)
+  [System.Data.SqlClient.SqlParameter]::new('@FromDate',[System.Data.SqlDbType]::Date),
+  [System.Data.SqlClient.SqlParameter]::new('@ThroughDate',[System.Data.SqlDbType]::Date)
 )
 $parameters[0].Value = $FromDate.Date
 $parameters[1].Value = $ThroughDate.Date
 # Invoke-Sqlcmd's variable substitution is not SQL parameter binding. Use SqlClient.
-$connection = [Microsoft.Data.SqlClient.SqlConnection]::new(
+$connection = [System.Data.SqlClient.SqlConnection]::new(
   "Server=$ServerInstance;Database=$SourceDatabase;Integrated Security=True;TrustServerCertificate=True;Application Name=FC2-159 ReadOnlyRosterExport")
 $connection.Open()
 try {
