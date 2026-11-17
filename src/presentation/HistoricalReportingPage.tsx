@@ -194,10 +194,31 @@ function HistoricalScheduleReconciliation({ shifts }: { shifts: readonly ShiftAg
   const rows = [...windows.values()].sort((a,b) => a.start.localeCompare(b.start));
   if (!rows.length) return null;
   const differing = rows.filter(row => !row.matches);
+  const exportDiscrepancies = () => {
+    const safe = (value: string) => {
+      const protectedValue = /^\s*[=+@-]/.test(value) ? "'" + value : value;
+      return '"' + protectedValue.replace(/"/g, '""') + '"';
+    };
+    const header = ["Original start UTC", "Original end UTC", "Original start IST", "Source shift ID", "Recorded IST clock", "Reconciliation", "Break assessment", "OEE qualification"];
+    const data = differing.map(row => [
+      row.start, row.end, historicalTime(row.start), row.shift, row.actual,
+      "Differs from approved V2 shift timing", "Not assessed", "Not established",
+    ]);
+    const csv = [header, ...data].map(row => row.map(safe).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], {type:"text/csv;charset=utf-8"}));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "factoryconnect-historical-shift-discrepancies.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
   return <section aria-label="Historical V1 shift schedule reconciliation">
     <h3>Historical shift timing reconciliation</h3>
     <p>Approved V2 factory shifts (IST): 07:30–16:00, 16:00–00:00, 00:00–07:30. This compares recorded V1 shift windows with approved clock times; it does not change source evidence or recalculate OEE. Break exclusions are not assessed.</p>
     <p role="status">{rows.length} recorded shift windows checked · {differing.length} differ from approved timing.</p>
+    {differing.length > 0 && <button type="button" onClick={exportDiscrepancies}>Export timing discrepancies (CSV)</button>}
     {differing.length > 0 && <details><summary>Review {differing.length} historical timing discrepancies</summary>
       <div style={{overflowX:"auto"}}><table><thead><tr><th>Original start (IST)</th><th>Source shift ID</th><th>Recorded clock (IST)</th><th>Review</th></tr></thead>
       <tbody>{differing.map(row => <tr key={row.start + row.shift}><td>{historicalTime(row.start)}</td><td>{row.shift}</td><td>{row.actual}</td><td>Differs from approved V2 shift timing; retain original V1 evidence</td></tr>)}</tbody></table></div>
