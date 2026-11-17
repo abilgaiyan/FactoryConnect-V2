@@ -71,7 +71,6 @@ export default function LiveMachineProductionTrend({ machineId, businessDate }: 
     return () => controller.abort();
   }, [open, machineId, businessDate, retry]);
   const units = [...new Set((days ?? []).filter(d => d.comparable > 0).map(d => d.unit?.trim().toLowerCase()))];
-  const max = Math.max(1, ...(days ?? []).map(d => Math.max(d.target, d.good + d.rejected)));
   return <section aria-label="Seven-day declared production trend">
     <h3>Seven-day production trend · SQL declarations</h3>
     <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}>{open ? "Hide seven-day trend" : "Load seven-day trend"}</button>
@@ -80,7 +79,7 @@ export default function LiveMachineProductionTrend({ machineId, businessDate }: 
       {error && <p role="alert">{error}. No sample fallback. <button type="button" onClick={() => setRetry(v => v + 1)}>Retry trend</button></p>}
       {!error && !days && <p role="status">Reading seven days of SQL planning and declared production…</p>}
       {days && <>
-        {units.length > 1 && <p role="alert">Different quantity units occur across days. Do not compare bar lengths between different units.</p>}
+        {units.length > 1 && <p role="alert">Different quantity units occur across days. Each date uses its own chart scale; do not compare bar lengths between dates.</p>}
         <table><thead><tr><th>Business date</th><th>Target</th><th>Good</th><th>Rejected</th><th>Plan achievement</th><th>Coverage</th></tr></thead>
           <tbody>{days.map(d => <tr key={d.date}><th scope="row">{d.date}</th>
             <td>{d.comparable ? `${d.target} ${d.unit}` : "—"}</td>
@@ -93,13 +92,13 @@ export default function LiveMachineProductionTrend({ machineId, businessDate }: 
         {days.filter(d => d.comparable > 0).map(d => <figure key={d.date}>
           <figcaption>{d.date} · {d.unit} · {d.comparable} comparable shifts</figcaption>
           <svg viewBox="0 0 450 58" role="img" aria-label={`${d.date}: target ${d.target}, good ${d.good}, rejected ${d.rejected} ${d.unit}`} style={{ width: "100%", maxWidth: 550, height: "auto" }}>
-            <rect x="0" y="4" width={400 * d.target / max} height="20" fill="#3974b9"/>
-            <rect x="0" y="31" width={400 * d.good / max} height="20" fill="#278558"/>
-            <rect x={400 * d.good / max} y="31" width={400 * d.rejected / max} height="20" fill="#c27620"/>
+            <rect x="0" y="4" width={400 * d.target / Math.max(1, d.target, d.good + d.rejected)} height="20" fill="#3974b9"/>
+            <rect x="0" y="31" width={400 * d.good / Math.max(1, d.target, d.good + d.rejected)} height="20" fill="#278558"/>
+            <rect x={400 * d.good / max} y="31" width={400 * d.rejected / Math.max(1, d.target, d.good + d.rejected)} height="20" fill="#c27620"/>
           </svg>
           <p>Target {d.target}; declared good {d.good}; rejected {d.rejected}</p>
         </figure>)}
-        <p>Blue = target, green = good, orange = rejected. Daily totals include only matching unit and job context; missing is not zero. Trends are supervisor-declared production, not OEE.</p>
+        <p>Blue = target, green = good, orange = rejected. Each date uses its own scale. Daily totals include only matching unit and job context; missing is not zero. Trends are supervisor-declared production, not OEE.</p>
         <button type="button" onClick={() => setRetry(v => v + 1)}>Refresh seven-day trend</button>
       </>}
     </>}
