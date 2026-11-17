@@ -36,7 +36,7 @@ export default function LiveMachineProductionTrend({ machineId, businessDate }: 
     const options = { credentials: "include" as const, signal: controller.signal };
     async function read<T>(url: string, key: string, date?: string): Promise<T[]> {
       const response = await fetch(url, options);
-      if (!response.ok) throw Error(`SQL reporting source unavailable (HTTP ${response.status})`);
+      if (!response.ok) throw Error(`Production reporting unavailable (HTTP ${response.status})`);
       const data = await response.json();
       if (data.isSample !== false || !Array.isArray(data[key]) ||
           (date && (!same(data.machineId, machineId) || data.businessDate !== date)))
@@ -72,12 +72,12 @@ export default function LiveMachineProductionTrend({ machineId, businessDate }: 
   }, [open, machineId, businessDate, retry]);
   const units = [...new Set((days ?? []).filter(d => d.comparable > 0).map(d => d.unit?.trim().toLowerCase()))];
   return <section aria-label="Seven-day declared production trend">
-    <h3>Seven-day production trend · SQL declarations</h3>
+    <h3>Seven-day production trend</h3>
     <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}>{open ? "Hide seven-day trend" : "Load seven-day trend"}</button>
     {open && <>
       <p>Seven business dates ending {businessDate}, for the selected machine. Latest recorded revisions only. Not qualified OEE.</p>
       {error && <p role="alert">{error}. No sample fallback. <button type="button" onClick={() => setRetry(v => v + 1)}>Retry trend</button></p>}
-      {!error && !days && <p role="status">Reading seven days of SQL planning and declared production…</p>}
+      {!error && !days && <p role="status">Loading seven days of production targets and entries…</p>}
       {days && <>
         {units.length > 1 && <p role="alert">Different quantity units occur across days. Each date uses its own chart scale; do not compare bar lengths between dates.</p>}
         <table><thead><tr><th>Business date</th><th>Target</th><th>Good</th><th>Rejected</th><th>Plan achievement</th><th>Coverage</th></tr></thead>
