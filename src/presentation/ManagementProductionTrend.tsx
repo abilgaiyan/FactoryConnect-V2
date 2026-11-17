@@ -111,7 +111,7 @@ export default function ManagementProductionTrend({ machines, businessDate }: {
     .map(d => Math.max(d.target, d.good + d.rejected)));
   return <section aria-label="Management seven-day production trend">
     <h2>Seven-day management production trend</h2>
-    <p>SQL targets versus supervisor-declared good and rejected quantities. All seven dates end on the selected production day. Not qualified OEE.</p>
+    <p>Recorded targets versus supervisor-entered good and rejected quantities. All seven dates end on the selected production day. Not qualified OEE.</p>
     {machines.length === 0 ? <p>No selected machines. Choose a configured reporting source.</p> :
       machines.length > 10 ? <p>Select a line or up to ten machines to load a bounded trend report.</p> :
       !businessDate ? <p>Select a production day to load trends.</p> :
