@@ -10,6 +10,32 @@ function compatible(a: Quantity, b: Quantity) {
   return same(a.quantityUnit, b.quantityUnit) &&
     (["productionOrder", "partNumber", "operation"] as const).every(k => same(a[k] ?? "", b[k] ?? ""));
 }
+// Protect exported spreadsheet cells from formula execution and preserve CSV quoting.
+function csvCell(value: string | number | null) {
+  const raw = String(value ?? "");
+  const safe = /^[\\s]*[=+@-]/.test(raw) ? "'" + raw : raw;
+  return '"' + safe.replace(/"/g, '""') + '"';
+}
+function exportCsv(rows: readonly Summary[], date: string) {
+  const header = ["Business date", "Machine ID", "Machine", "Target", "Good", "Rejected", "Unit", "Achievement percent", "Comparable shifts", "Missing shifts", "Incompatible shifts", "Evidence status"];
+  const records = rows.map(r => {
+    const present = r.comparable > 0 && !r.error;
+    const status = r.error ? "Reporting unavailable" : r.missing || r.incompatible ? "Partial evidence" : present ? "Comparable declarations" : "No comparable evidence";
+    return [date, r.machine.machineId, r.machine.displayName, present ? r.target : null,
+      present ? r.good : null, present ? r.rejected : null, present ? r.unit : null,
+      present && r.target > 0 ? (100 * (r.good + r.rejected) / r.target).toFixed(1) : null,
+      r.comparable, r.missing, r.incompatible, status];
+  });
+  const csv = [header, ...records].map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `factoryconnect-production-${date}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 export default function ManagementProductionSummary({ machines, businessDate }: {
   readonly machines: readonly Machine[]; readonly businessDate: string;
 }) {
@@ -86,6 +112,8 @@ export default function ManagementProductionSummary({ machines, businessDate }: 
         </table>
         {aggregate ? <p><strong>Complete selected-machine total:</strong> Target {valid.reduce((n, r) => n + r.target, 0)} {units[0]}; good {valid.reduce((n, r) => n + r.good, 0)}; rejected {valid.reduce((n, r) => n + r.rejected, 0)}.</p> :
           <p>Factory-wide totals withheld: missing, incompatible or mixed-unit evidence must not be silently combined.</p>}
+        <button type="button" onClick={() => exportCsv(rows, businessDate)}>Export selected-machine production CSV</button>
+        <p>CSV includes reporting coverage and explicitly leaves unavailable quantities blank. Exported values are supervisor declarations, not qualified OEE.</p>
         <h3>Machine production comparisons</h3>
         {valid.map(r => {
           const maximum = Math.max(1, r.target, r.good + r.rejected);
