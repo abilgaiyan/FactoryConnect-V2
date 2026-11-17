@@ -83,14 +83,14 @@ export default function LiveMachineShiftProduction({ machineId, businessDate }: 
         throw Error(payload.error ?? `Production save failed (HTTP ${response.status}). Check permissions and migration 028.`);
       }
       const saved: { revision: number } = await response.json();
-      setNotice(`Production revision ${saved.revision} saved to SQL. Reloading latest values.`);
+      setNotice(`Production revision ${saved.revision} saved. Reloading latest values.`);
       setReason(""); setRetry(value => value + 1);
     } catch (e) { setError(String(e)); } finally { setSaving(false); }
   }
   const selected = records?.find(r => r.shiftId.toLowerCase() === shiftId.toLowerCase());
   const shiftName = (id: string) => shifts?.find(s => s.shiftId.toLowerCase() === id.toLowerCase())?.displayName ?? "Unknown shift";
   return <section aria-label="Supervisor production quantities">
-    <h3>Actual production · supervisor-declared SQL</h3>
+    <h3>Actual production</h3>
     <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}>{open ? "Hide production entry" : "Open production entry"}</button>
     {open && <>
       <p>Record good and rejected quantities for {businessDate}. Corrections create a new revision; they never overwrite previous declarations.</p>
@@ -128,7 +128,7 @@ export default function LiveMachineShiftProduction({ machineId, businessDate }: 
         {shifts.filter(s => !records.some(r => r.shiftId.toLowerCase() === s.shiftId.toLowerCase())).length > 0 &&
           <p>Missing production: {shifts.filter(s => !records.some(r => r.shiftId.toLowerCase() === s.shiftId.toLowerCase())).map(s => s.displayName).join(", ")}.</p>}
       </section>}
-      <p>Human-declared production only. Not machine-verified and not qualified OEE.</p>
+      <p>Production quantities entered by a supervisor. Machine-based OEE is shown separately when available.</p>
     </>}
   </section>;
 }
