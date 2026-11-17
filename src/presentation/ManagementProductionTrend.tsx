@@ -19,6 +19,34 @@ function sevenDates(date: string) {
     return d.toISOString().slice(0, 10);
   });
 }
+// Quote every field and prevent spreadsheet applications interpreting untrusted labels as formulas.
+function csvCell(value: string | number | null) {
+  const raw = String(value ?? "");
+  const safe = /^\s*[=+@-]/.test(raw) ? "'" + raw : raw;
+  return '"' + safe.replace(/"/g, '""') + '"';
+}
+function exportTrendCsv(days: readonly Day[], businessDate: string, selectedMachines: number) {
+  const header = ["Business date", "Selected machines", "Target", "Good", "Rejected", "Unit",
+    "Achievement percent", "Comparable shifts", "Missing shifts", "Incompatible shifts",
+    "Failed machine reads", "Evidence status"];
+  const rows = days.map(d => {
+    const complete = d.comparable > 0 && d.missing === 0 && d.incompatible === 0 && d.errors === 0;
+    return [d.date, selectedMachines, complete ? d.target : null, complete ? d.good : null,
+      complete ? d.rejected : null, complete ? d.unit : null,
+      complete && d.target > 0 ? (100 * (d.good + d.rejected) / d.target).toFixed(1) : null,
+      d.comparable, d.missing, d.incompatible, d.errors,
+      complete ? "Complete declared production" : "Incomplete evidence - quantities withheld"];
+  });
+  const csv = [header, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `factoryconnect-management-trend-${businessDate}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 export default function ManagementProductionTrend({ machines, businessDate }: {
   readonly machines: readonly Machine[]; readonly businessDate: string;
 }) {
@@ -98,6 +126,8 @@ export default function ManagementProductionTrend({ machines, businessDate }: {
             <td>{d.comparable} comparable · {d.missing} missing · {d.incompatible} incompatible · {d.errors} failed machines</td>
           </tr>)}</tbody>
         </table>
+        <button type="button" onClick={() => exportTrendCsv(days, businessDate, machines.length)}>Export seven-day production CSV</button>
+        <p>CSV exports all seven dates with coverage; incomplete dates have blank quantities, not zeros. This is supervisor-declared production, not qualified OEE.</p>
         {units.length > 1 && <p role="alert">Different quantity units occur across dates; graph bars must not be compared as a common quantity.</p>}
         {completeDays.length === 0 && <p>No complete dates available to chart.</p>}
         {completeDays.map(d => <figure key={d.date}>
