@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 interface Shift { shiftId: string; displayName: string }
 interface Target { shiftId: string; targetQuantity: number; quantityUnit: string; revision: number; productionOrder: string | null; partNumber: string | null; operation: string | null }
 interface Actual { shiftId: string; goodQuantity: number; rejectedQuantity: number; quantityUnit: string; revision: number; productionOrder: string | null; partNumber: string | null; operation: string | null }
-type Row = { shift: Shift; target?: Target; actual?: Actual };
+type Row = { shift: Shift; target: Target | undefined; actual: Actual | undefined };
 function same(a: string, b: string) { return a.toLowerCase() === b.toLowerCase(); }
 function compatible(target: Target, actual: Actual) {
   return same(target.quantityUnit.trim(), actual.quantityUnit.trim()) &&
