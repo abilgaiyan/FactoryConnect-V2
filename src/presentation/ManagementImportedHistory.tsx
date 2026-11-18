@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 type LegacyMachine = { sourceMachineId: string; deviceKey: string; sourceDatabase: string; v2MachineId: string | null };
 type LegacyMetric = { metricKey: string; status: number; metricValue: string | null; unit: string | null; productionBusinessDate: string | null };
 const source = 'imported-v1-legacy';
+// Mirror History's strict numeric parsing: empty strings and whitespace are not zero.
+const numericalSourceValue = (value: string | null): boolean =>
+  value !== null && /^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value.trim()) && Number.isFinite(Number(value));
 function verified(data: any): boolean {
   return data && data.source === source && data.evidenceKind === 'historical-reporting-only' &&
     data.liveStatus === 'not-established' && data.isSample === false;
@@ -48,14 +51,18 @@ export default function ManagementImportedHistory({ businessDate }: { readonly b
       if (!response.ok) throw Error('Historical metric read unavailable (HTTP ' + response.status + ')');
       const data: unknown = await response.json();
       if (!verified(data) || (data as any).machineId?.toLowerCase() !== machineId.toLowerCase() ||
-        !Array.isArray((data as any).metrics)) throw Error('Historical metric evidence contract mismatch');
+        !Array.isArray((data as any).metrics) || !(data as any).metrics.every((m: any) =>
+          m && typeof m.metricKey === 'string' && typeof m.status === 'number' &&
+          (m.metricValue === null || typeof m.metricValue === 'string') &&
+          (m.unit === null || typeof m.unit === 'string') &&
+          (m.productionBusinessDate === null || typeof m.productionBusinessDate === 'string')))
+        throw Error('Historical metric evidence contract mismatch');
       if (!controller.signal.aborted) setMetrics((data as any).metrics);
     } catch (e) { if (!controller.signal.aborted) setError(String(e)); }
     finally { if (!controller.signal.aborted) { setLoading(false); metricRequest.current = null; } }
   }
   const machine = machines?.find(m => m.sourceMachineId === machineId);
-  const calculated = metrics?.filter(m => m.status === 0 && m.metricValue !== null &&
-    Number.isFinite(Number(m.metricValue))) ?? [];
+  const calculated = metrics?.filter(m => m.status === 0 && numericalSourceValue(m.metricValue)) ?? [];
   const unavailable = metrics?.length !== undefined ? metrics.length - calculated.length : 0;
   return <section aria-label="Imported V1 historical management summary">
     <h2>Imported V1 historical reporting</h2>
