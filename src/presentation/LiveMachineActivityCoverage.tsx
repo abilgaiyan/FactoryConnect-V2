@@ -27,7 +27,7 @@ export default function LiveMachineActivityCoverage({ machineId, date }: { reado
     <p>Historical closed activity periods for the selected IST calendar date. This is not a shift OEE calculation; unrepresented time is not assumed to be stopped or running.</p>
     <button type="button" onClick={() => setOpen(value => !value)}>{open ? "Hide recorded activity" : "Load recorded activity"}</button>
     {open && <>
-      {error && <p role="alert">{error}. No sample fallback. <button type="button" onClick={() => setAttempt(value => value + 1)}>Retry activity</button></p>}
+      {error && <p role="alert">{error.includes("503") ? "Verified V2 machine activity is currently unavailable. Imported V1 activity can be viewed under History; it is not live V2 evidence." : error} No sample fallback. <button type="button" onClick={() => setAttempt(value => value + 1)}>Retry activity</button></p>}
       {!error && !report && <p role="status">Loading recorded activity…</p>}
       {report && <>
         <p>Evidence read as of <time dateTime={report.readAsOf}>{report.readAsOf}</time> · Stream {report.streamKey} · Through position {report.throughPosition ?? "unavailable"}</p>
