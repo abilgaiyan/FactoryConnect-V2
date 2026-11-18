@@ -112,8 +112,8 @@ export default function ManagementProductionTrend({ machines, businessDate }: {
   return <section aria-label="Management seven-day production trend">
     <h2>Seven-day management production trend</h2>
     <p>Recorded targets versus supervisor-entered good and rejected quantities. All seven dates end on the selected production day. Not qualified OEE.</p>
-    {machines.length === 0 ? <p>No selected machines. Choose a configured reporting source.</p> :
-      machines.length > 10 ? <p>Select a line or up to ten machines to load a bounded trend report.</p> :
+    {machines.length === 0 ? <p>No selected registered machines. Choose a site or machine in the production filters.</p> :
+      machines.length > 10 ? <p>The seven-day trend is limited to ten machines per request. Select an individual registered machine or narrow the site selection to ten or fewer machines.</p> :
       !businessDate ? <p>Select a production day to load trends.</p> :
       <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}>{open ? "Hide seven-day management trend" : "Load seven-day management trend"}</button>}
     {open && businessDate && machines.length > 0 && machines.length <= 10 && <>
