@@ -6,6 +6,8 @@ type Machine = { machineId: string; displayName: string; siteId: string; isRetir
 export default function ManagementRegisteredProduction({ bearer, businessDate }: { readonly bearer: string | null; readonly businessDate: string }) {
   const [machines, setMachines] = useState<readonly Machine[] | null>(null);
   const [error, setError] = useState('');
+  const [selectedSite, setSelectedSite] = useState('');
+  const [selectedMachine, setSelectedMachine] = useState('');
   useEffect(() => {
     setMachines(null);
     setError('');
@@ -28,6 +30,9 @@ export default function ManagementRegisteredProduction({ bearer, businessDate }:
     return () => controller.abort();
   }, [bearer]);
   const active = machines?.filter(machine => !machine.isRetired) ?? [];
+  const sites = [...new Set(active.map(machine => machine.siteId))].sort();
+  const siteMachines = active.filter(machine => !selectedSite || machine.siteId === selectedSite);
+  const selected = siteMachines.filter(machine => !selectedMachine || machine.machineId === selectedMachine);
   return <section aria-label="Registered machine production">
     <h2>Registered machine production</h2>
     <p>SQL-registered machines, independent of live reporting processors. Production quantities are supervisor declarations, not machine-verified OEE.</p>
@@ -35,9 +40,14 @@ export default function ManagementRegisteredProduction({ bearer, businessDate }:
     {bearer && !machines && !error && <p role="status">Loading registered machine inventory…</p>}
     {error && <p role="alert">{error}. No sample fallback.</p>}
     {machines && <p>{active.length} active registered machines available for production comparison.</p>}
-    {active.length > 0 && <>
-      <ManagementProductionSummary machines={active} businessDate={businessDate} />
-      <ManagementProductionTrend machines={active} businessDate={businessDate} />
+    {active.length > 0 && <div className="overview-controls">
+      <label>Production site <select value={selectedSite} onChange={event => { setSelectedSite(event.target.value); setSelectedMachine(''); }}><option value="">All registered sites</option>{sites.map(site => <option key={site} value={site}>{site}</option>)}</select></label>
+      <label>Production machine <select value={selectedMachine} onChange={event => setSelectedMachine(event.target.value)}><option value="">All registered machines</option>{siteMachines.map(machine => <option key={machine.machineId} value={machine.machineId}>{machine.displayName}</option>)}</select></label>
+      <p>{selected.length} selected registered machines for declared production.</p>
+    </div>}
+    {selected.length > 0 && <>
+      <ManagementProductionSummary machines={selected} businessDate={businessDate} />
+      <ManagementProductionTrend machines={selected} businessDate={businessDate} />
     </>}
     {machines && active.length === 0 && <p>No active registered machines.</p>}
   </section>;
