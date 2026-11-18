@@ -37,6 +37,7 @@ function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicat
         <p><strong>{machines.length} selected machines</strong> / {new Set(runtime.configuration.sources.map(s => s.machineId.toLowerCase())).size} registered machines. Each count group independently reconciles to the selection.</p>
         <div className="overview-counts">{Object.entries(counts).map(([group, buckets]) => <section key={group} aria-label={group}><h2>{group === 'operational' ? 'Usable current states' : group === 'request' ? 'Live requests' : 'Evidence freshness'}</h2><dl>{Object.entries(buckets).map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count}</dd></div>)}</dl></section>)}</div>
         <p>Fleet Availability/OEE and coverage percentages withheld pending qualified aggregation and coverage contracts.</p>
+        {runtime.configuration.sources.length === 0 && <p role="status">No operational reporting processors are connected to this dashboard. Machines registered in Administration can still be used for supervisor production entry, but registration alone does not establish live machine evidence or OEE. Imported V1 records are available separately under History.</p>}
         {!selection.day && <p>Select a production day to load per-machine Availability, Utilization, Performance, Quality and OEE. No ongoing-day calendar is assumed.</p>}
         <ManagementProductionSummary machines={productionMachines} businessDate={selection.day} />
         <ManagementProductionTrend machines={productionMachines} businessDate={selection.day} />
