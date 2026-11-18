@@ -7,8 +7,7 @@ import { formatRatioAsPercentage } from '../application/production-day-metric-fo
 import { formatReportTimestamp } from './date-formatting.ts';
 import type { RangeItem } from '../application/date-range-reporting.ts';
 import './management-overview.css';
-import ManagementProductionSummary from './ManagementProductionSummary.tsx';
-import ManagementProductionTrend from './ManagementProductionTrend.tsx';
+import ManagementRegisteredProduction from './ManagementRegisteredProduction.tsx';
 export function ManagementOverviewPage({ runtime, search, navigate }: { runtime: DashboardApplicationRuntime; search: string; navigate: (href: string) => void }) {
     const selection = useMemo(() => {
         try { return { kind: 'valid' as const, value: overviewSelection(search, runtime.configuration.sources) }; }
@@ -19,7 +18,6 @@ export function ManagementOverviewPage({ runtime, search, navigate }: { runtime:
 }
 function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicationRuntime; selection: OverviewSelection; navigate: (href: string) => void }) {
     const machines = useMemo(() => selectedMachines(selection, runtime.configuration.sources), [selection, runtime.configuration.sources]);
-    const productionMachines = useMemo(() => machines.map(m => ({ machineId: m.machineId, displayName: m.sources[0]!.displayName })), [machines]);
     const { attempts, reports, refresh } = useManagementOverview(runtime, machines, selection.day);
     const counts = overviewCounts(machines, attempts);
     const context = overviewSearch(selection);
@@ -39,7 +37,7 @@ function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicat
         <p>Fleet Availability/OEE and coverage percentages withheld pending qualified aggregation and coverage contracts.</p>
         {runtime.configuration.sources.length === 0 && <p role="status">No operational reporting processors are connected to this dashboard. Machines registered in Administration can still be used for supervisor production entry, but registration alone does not establish live machine evidence or OEE. Imported V1 records are available separately under History.</p>}
         {!selection.day && <p>Select a production day to load per-machine Availability, Utilization, Performance, Quality and OEE. No ongoing-day calendar is assumed.</p>}
-        {productionMachines.length > 0 && <><ManagementProductionSummary machines={productionMachines} businessDate={selection.day} /><ManagementProductionTrend machines={productionMachines} businessDate={selection.day} /></>}
+        <ManagementRegisteredProduction bearer={runtime.evidenceSession?.bearer ?? null} businessDate={selection.day} />
         <div className="overview-machines">{machines.map(machine => {
             const source = machine.sources[0]!;
             const attempt = attempts[machine.machineId];
