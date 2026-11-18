@@ -18,6 +18,8 @@ export default function ManagementRegisteredProduction({ bearer, businessDate }:
       headers: { Authorization: 'Bearer ' + bearer, Accept: 'application/json' },
       signal: controller.signal,
     }).then(async response => {
+      if (response.status === 401) throw new Error('Your session is not authorized for registered-machine inventory. Sign in again');
+      if (response.status === 403) throw new Error('Your account does not have machine-inventory read permission. Ask an administrator to review access; production data is not shown');
       if (!response.ok) throw new Error('Registered machine inventory unavailable (HTTP ' + response.status + ')');
       const data: unknown = await response.json();
       if (typeof data !== 'object' || data === null || !('machines' in data) || !Array.isArray(data.machines) ||
