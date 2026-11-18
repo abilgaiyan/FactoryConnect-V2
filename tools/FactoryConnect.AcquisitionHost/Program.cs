@@ -52,4 +52,5 @@ try
     async Task StopOnInput(){try{while(!stopping.IsCancellationRequested){var line=await Console.In.ReadLineAsync(stopping.Token);if(line is null)return;if(line=="stop"){stopping.Cancel();return;}}}catch(OperationCanceledException){}}
 }
 catch(OperationCanceledException)when(stopping.IsCancellationRequested){Report(new{status="stopped"});return 0;}
+catch(JsonException error){Report(new{status="held",reason="invalid-acquisition-config-json",errorType=nameof(JsonException),jsonPath=error.Path,lineNumber=error.LineNumber,bytePositionInLine=error.BytePositionInLine});return 20;}
 catch(Exception error){Report(new{status="held",reason="configuration-or-startup-failure",errorType=error.GetType().Name});return 20;}
