@@ -1,6 +1,9 @@
 # FactoryConnect V2 local developer runtime helper. No security bootstrap or machine activation.
 [CmdletBinding()]
-param([ValidateSet('Check','StartAll','Identity','Api','Simulator','Dashboard')][string]$Action='Check')
+param(
+  [ValidateSet('Check','StartAll','Identity','Api','Simulator','Dashboard','AcquisitionCheck')][string]$Action='Check',
+  [string]$AcquisitionConfigPath
+)
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $settings=Join-Path $PSScriptRoot 'local.settings.json'
@@ -85,6 +88,22 @@ try {
         }
       }
       Write-Host 'Development PostgreSQL and Keycloak containers started. Use -Action Check to verify realm readiness.'
+    }
+    'AcquisitionCheck' {
+      if ([string]::IsNullOrWhiteSpace($AcquisitionConfigPath)) {
+        throw 'Supply -AcquisitionConfigPath with an existing local development acquisition host JSON file.'
+      }
+      $resolved=(Resolve-Path -LiteralPath $AcquisitionConfigPath -ErrorAction Stop).Path
+      $devRoot=[IO.Path]::GetFullPath($root).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+      if (-not $resolved.StartsWith($devRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Acquisition preflight accepts only a configuration file inside the V2 development checkout.'
+      }
+      if (-not (IsReady 'http://127.0.0.1:5055/health')) {
+        throw 'Local MTConnect simulator is not responding at 127.0.0.1:5055. Start it first.'
+      }
+      Write-Host 'Checking acquisition host configuration only; no polling, activation or database writes.'
+      dotnet run --project .\tools\FactoryConnect.AcquisitionHost -- --config $resolved --check
+      if ($LASTEXITCODE -ne 0) { throw "Acquisition preflight failed (exit $LASTEXITCODE)." }
     }
     'Simulator' { python .\scripts\dev\mtconnect_simulator.py --port 5055 --observations 120 }
     'Dashboard' { & (Join-Path $PSScriptRoot 'Start-Dashboard.ps1') -Mode Real }
