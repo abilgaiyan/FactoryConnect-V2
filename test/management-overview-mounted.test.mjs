@@ -16,7 +16,7 @@ const button = (h,text)=>[...h.document.querySelectorAll('button')].find(b=>b.te
 test('both machine types show statuses, calculated zero and contextual links', async t=>{
     const h=await mountInDom(React.createElement(App,{runtime:runtime()}),'http://factory-dashboard/overview?day=2026-10-16&site=site');t.after(()=>h.dispose());
     const body=h.document.body.textContent;
-    assert.match(body,/2 selected machines/);assert.match(body,/Machine OFF/);assert.match(body,/Not assessed/);assert.match(body,/calculated: 0%/);assert.match(body,/unavailable: — · MissingReferenceTime/);assert.match(body,/percentages withheld/);
+    assert.match(body,/2 selected reporting machines/);assert.match(body,/Machine OFF/);assert.match(body,/Not assessed/);assert.match(body,/calculated: 0%/);assert.match(body,/unavailable: — · MissingReferenceTime/);assert.match(body,/percentages withheld/);
     assert.equal(h.document.querySelectorAll('.overview-machines article').length,2);
     const url=new URL([...h.document.querySelectorAll('a')].find(a=>a.textContent==='Supporting historical report').href);
     assert.equal(url.searchParams.get('from'),'2026-10-16');assert.equal(url.searchParams.get('machine'),cnc.machineId);assert.equal(url.searchParams.get('overview'),'?day=2026-10-16&site=site');
@@ -42,7 +42,7 @@ test('search navigation and Back restore selection; old responses cannot replace
     await act(async()=>{for(const p of pending.slice(2,4)){const s=[cnc,digital].find(s=>s.machineId===p.req.sources[0].machineId);p.resolve({items:[metric(s,'2026-10-17','availability','calculated','0.25')],continuationToken:null});}});
     assert.match(h.document.body.textContent,/25%/);
     await h.popstate('/overview?day=2026-10-16&machine='+cnc.machineId);
-    assert.match(h.document.body.textContent,/1 selected machines/);assert.equal(h.document.querySelector('input[type=date]').value,'2026-10-16');
+    assert.match(h.document.body.textContent,/1 selected reporting machines/);assert.equal(h.document.querySelector('input[type=date]').value,'2026-10-16');
 });
 test('supporting report initializes machine/day and return context',async t=>{
     const query=new URLSearchParams({from:'2026-10-16',through:'2026-10-16',machine:digital.machineId,overview:'?day=2026-10-16&line=line2'});
@@ -64,7 +64,7 @@ test('machine detail views preserve overview context across nested navigation', 
     for(const link of h.document.querySelectorAll('[aria-label="Machine views"] a')) assert.equal(new URL(link.href).searchParams.get('overview'),context);
     await h.click([...h.document.querySelectorAll('a')].find(a=>a.textContent==='Back to selected overview'));
     assert.equal(h.window.location.pathname,'/overview');assert.equal(h.window.location.search,context);
-    assert.match(h.document.body.textContent,/1 selected machines/);
+    assert.match(h.document.body.textContent,/1 selected reporting machines/);
 });
 test('report failures are isolated from live state and other machines',async t=>{
     const r=runtime();const read=r.reportingClient.queryProductionDayMetrics;
