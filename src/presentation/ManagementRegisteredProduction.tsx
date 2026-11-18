@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import ManagementProductionSummary from './ManagementProductionSummary.tsx';
 import ManagementProductionTrend from './ManagementProductionTrend.tsx';
 
@@ -32,14 +32,16 @@ export default function ManagementRegisteredProduction({ bearer, businessDate }:
     }).catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Inventory unavailable'); });
     return () => controller.abort();
   }, [bearer, inventoryRevision]);
-  const active = machines?.filter(machine => !machine.isRetired) ?? [];
-  const sites = [...new Set(active.map(machine => machine.siteId))].sort();
+  // Keep the selected-machine array stable while SQL reports load. Both child reports
+  // depend on its identity to cancel stale requests and avoid repeated fetches.
+  const active = useMemo(() => machines?.filter(machine => !machine.isRetired) ?? [], [machines]);
+  const sites = useMemo(() => [...new Set(active.map(machine => machine.siteId))].sort(), [active]);
   const staleSite = selectedSite !== '' && !sites.includes(selectedSite);
-  const siteMachines = active.filter(machine => !selectedSite || machine.siteId === selectedSite);
+  const siteMachines = useMemo(() => active.filter(machine => !selectedSite || machine.siteId === selectedSite), [active, selectedSite]);
   const staleMachine = selectedMachine !== '' && !siteMachines.some(machine => machine.machineId === selectedMachine);
   const staleSelection = staleSite || staleMachine;
   // Never silently expand a machine-specific report to all machines.
-  const selected = staleSelection ? [] : siteMachines.filter(machine => !selectedMachine || machine.machineId === selectedMachine);
+  const selected = useMemo(() => staleSelection ? [] : siteMachines.filter(machine => !selectedMachine || machine.machineId === selectedMachine), [staleSelection, siteMachines, selectedMachine]);
   return <section aria-label="Registered machine production">
     <h2>Registered machine production</h2>
     <p>SQL-registered machines, independent of live reporting processors. Production quantities are supervisor declarations, not machine-verified OEE.</p>
