@@ -37,7 +37,7 @@ function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicat
         <p>Fleet Availability/OEE and coverage percentages withheld pending qualified aggregation and coverage contracts.</p>
         {runtime.configuration.sources.length === 0 && <p role="status">No operational reporting processors are connected to this dashboard. Machines registered in Administration can still be used for supervisor production entry, but registration alone does not establish live machine evidence or OEE. Imported V1 records are available separately under History.</p>}
         {!selection.day && <p>Select a production day to load per-machine Availability, Utilization, Performance, Quality and OEE. No ongoing-day calendar is assumed.</p>}
-        <ManagementRegisteredProduction bearer={runtime.evidenceSession?.bearer ?? null} businessDate={selection.day} />
+        <ManagementRegisteredProduction businessDate={selection.day} />
         <div className="overview-machines">{machines.map(machine => {
             const source = machine.sources[0]!;
             const attempt = attempts[machine.machineId];
