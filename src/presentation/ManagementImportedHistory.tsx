@@ -1,11 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 
 type LegacyMachine = { sourceMachineId: string; deviceKey: string; sourceDatabase: string; v2MachineId: string | null };
-type LegacyMetric = { metricKey: string; status: number; metricValue: string | null; unit: string | null; productionBusinessDate: string | null };
+type LegacyMetric = { metricKey: string; status: number; metricValue: string | null; unit: string | null; productionBusinessDate: string | null; shiftStartsAtUtc: string | null; shiftEndsAtUtc: string | null };
 const source = 'imported-v1-legacy';
 // Mirror History's strict numeric parsing: empty strings and whitespace are not zero.
 const numericalSourceValue = (value: string | null): boolean =>
   value !== null && /^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value.trim()) && Number.isFinite(Number(value));
+function historicalValue(metric: LegacyMetric): string {
+  if (metric.metricValue === null) return 'Unavailable';
+  const value = Number(metric.metricValue);
+  if ((metric.metricKey.toLowerCase() === 'availability' || metric.metricKey.toLowerCase() === 'utilization.elr' ||
+       metric.metricKey.toLowerCase() === 'utilization') && metric.unit?.toLowerCase() === 'ratio')
+    return (value * 100).toFixed(2) + '% (source ratio ' + metric.metricValue + ')';
+  return metric.metricValue + (metric.unit ? ' ' + metric.unit : '');
+}
+function historicalPeriod(metric: LegacyMetric): string {
+  if (metric.productionBusinessDate) return 'Production day ' + metric.productionBusinessDate;
+  if (!metric.shiftStartsAtUtc || !metric.shiftEndsAtUtc) return 'Recorded shift time unavailable';
+  const format = (instant: string) => {
+    const date = new Date(instant);
+    return Number.isNaN(date.getTime()) ? 'Invalid source timestamp' : new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    }).format(date);
+  };
+  return format(metric.shiftStartsAtUtc) + ' – ' + format(metric.shiftEndsAtUtc) + ' IST (V1 recorded shift)';
+}
 function verified(data: any): boolean {
   return data && data.source === source && data.evidenceKind === 'historical-reporting-only' &&
     data.liveStatus === 'not-established' && data.isSample === false;
@@ -55,7 +75,9 @@ export default function ManagementImportedHistory({ businessDate }: { readonly b
           m && typeof m.metricKey === 'string' && typeof m.status === 'number' &&
           (m.metricValue === null || typeof m.metricValue === 'string') &&
           (m.unit === null || typeof m.unit === 'string') &&
-          (m.productionBusinessDate === null || typeof m.productionBusinessDate === 'string')))
+          (m.productionBusinessDate === null || typeof m.productionBusinessDate === 'string') &&
+          (m.shiftStartsAtUtc === null || typeof m.shiftStartsAtUtc === 'string') &&
+          (m.shiftEndsAtUtc === null || typeof m.shiftEndsAtUtc === 'string')))
         throw Error('Historical metric evidence contract mismatch');
       if (!controller.signal.aborted) setMetrics((data as any).metrics);
     } catch (e) { if (!controller.signal.aborted) setError(String(e)); }
@@ -84,8 +106,8 @@ export default function ManagementImportedHistory({ businessDate }: { readonly b
     {metrics && <div>
       <p>{metrics.length} imported projections · {calculated.length} numerical source results · {unavailable} unavailable/non-numerical results. These counts do not imply complete shift coverage.</p>
       {calculated.length === 0 ? <p>No numerical historical projections for the selected date.</p> :
-        <table><thead><tr><th>Historical metric</th><th>Source value</th><th>Source date</th></tr></thead>
-          <tbody>{calculated.map((m, i) => <tr key={i}><td>{m.metricKey}</td><td>{m.metricValue} {m.unit}</td><td>{m.productionBusinessDate ?? 'Recorded shift window'}</td></tr>)}</tbody></table>}
+        <table><thead><tr><th>Historical metric</th><th>Source value</th><th>Historical period (IST)</th></tr></thead>
+          <tbody>{calculated.map((m, i) => <tr key={i}><td>{m.metricKey}</td><td>{historicalValue(m)}</td><td>{historicalPeriod(m)}</td></tr>)}</tbody></table>}
       <p>Performance, Quality and OEE must not be inferred from Availability or Utilization.</p>
     </div>}
   </section>;
