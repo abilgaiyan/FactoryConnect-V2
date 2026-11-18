@@ -145,7 +145,7 @@ internal static class ActivityHistoryApi
             return Results.Problem(statusCode:503,title:"Activity history integrity verification failed");
         }
         catch(OperationCanceledException)when(http.RequestAborted.IsCancellationRequested){throw;}
-        catch(Exception){return Results.Problem(statusCode:503,title:"Activity history authority is unavailable");}
+        catch(Exception error){return AuthorityDiagnostics.Unavailable(http,error,"activity-history-read","Activity history authority is unavailable");}
         finally { CryptographicOperations.ZeroMemory(hash); }
     }
 }
