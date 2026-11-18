@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type LegacyMachine = { sourceMachineId: string; deviceKey: string; sourceDatabase: string; v2MachineId: string | null };
 type LegacyMetric = { metricKey: string; status: number; metricValue: string | null; unit: string | null; productionBusinessDate: string | null };
@@ -13,6 +13,7 @@ export default function ManagementImportedHistory({ businessDate }: { readonly b
   const [metrics, setMetrics] = useState<LegacyMetric[] | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const metricRequest = useRef<AbortController | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     void fetch('/api/reporting/v2/legacy/machines', { credentials: 'include', cache: 'no-store', signal: controller.signal })
@@ -27,21 +28,30 @@ export default function ManagementImportedHistory({ businessDate }: { readonly b
       }).catch(e => { if (!controller.signal.aborted) setError(String(e)); });
     return () => controller.abort();
   }, []);
-  useEffect(() => { setMetrics(null); setError(''); }, [machineId, businessDate]);
+  useEffect(() => {
+    // A response for an earlier machine/day must never appear under a new selection.
+    metricRequest.current?.abort();
+    metricRequest.current = null;
+    setMetrics(null); setError(''); setLoading(false);
+    return () => { metricRequest.current?.abort(); metricRequest.current = null; };
+  }, [machineId, businessDate]);
   async function load() {
     if (!machineId || !businessDate || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) return;
+    metricRequest.current?.abort();
+    const controller = new AbortController();
+    metricRequest.current = controller;
     setLoading(true); setError(''); setMetrics(null);
     try {
       const url = '/api/reporting/v2/legacy/machines/' + encodeURIComponent(machineId) +
         '/metrics?from=' + encodeURIComponent(businessDate) + '&through=' + encodeURIComponent(businessDate);
-      const response = await fetch(url, { credentials: 'include', cache: 'no-store' });
+      const response = await fetch(url, { credentials: 'include', cache: 'no-store', signal: controller.signal });
       if (!response.ok) throw Error('Historical metric read unavailable (HTTP ' + response.status + ')');
       const data: unknown = await response.json();
       if (!verified(data) || (data as any).machineId?.toLowerCase() !== machineId.toLowerCase() ||
         !Array.isArray((data as any).metrics)) throw Error('Historical metric evidence contract mismatch');
-      setMetrics((data as any).metrics);
-    } catch (e) { setError(String(e)); }
-    finally { setLoading(false); }
+      if (!controller.signal.aborted) setMetrics((data as any).metrics);
+    } catch (e) { if (!controller.signal.aborted) setError(String(e)); }
+    finally { if (!controller.signal.aborted) { setLoading(false); metricRequest.current = null; } }
   }
   const machine = machines?.find(m => m.sourceMachineId === machineId);
   const calculated = metrics?.filter(m => m.status === 0 && m.metricValue !== null &&
