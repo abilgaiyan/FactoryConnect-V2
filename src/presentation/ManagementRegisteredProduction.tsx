@@ -29,7 +29,14 @@ export default function ManagementRegisteredProduction({ businessDate }: { reado
           'machineId' in m && typeof m.machineId === 'string' && 'displayName' in m &&
           typeof m.displayName === 'string'))
         throw new Error('Registered machine inventory response is invalid');
-      if (!controller.signal.aborted) setMachines((data.machines as { machineId: string; displayName: string }[]).map(machine => ({ ...machine, siteId: data.siteId as string, isRetired: false })));
+      const inventory = data.machines as { machineId: string; displayName: string }[];
+      // Duplicate identities would double-count declared quantities in management totals.
+      // Reject the entire inventory rather than silently deduplicating or reporting twice.
+      const ids = inventory.map(machine => machine.machineId.toLowerCase());
+      if (ids.some(id => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) ||
+          new Set(ids).size !== ids.length)
+        throw new Error('Registered machine inventory contains invalid or duplicate machine identities');
+      if (!controller.signal.aborted) setMachines(inventory.map(machine => ({ ...machine, siteId: data.siteId as string, isRetired: false })));
     }).catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Inventory unavailable'); });
     return () => controller.abort();
   }, [inventoryRevision]);
