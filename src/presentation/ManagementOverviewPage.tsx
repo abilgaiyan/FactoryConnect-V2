@@ -8,6 +8,7 @@ import { formatReportTimestamp } from './date-formatting.ts';
 import type { RangeItem } from '../application/date-range-reporting.ts';
 import './management-overview.css';
 import ManagementRegisteredProduction from './ManagementRegisteredProduction.tsx';
+import ManagementImportedHistory from './ManagementImportedHistory.tsx';
 export function ManagementOverviewPage({ runtime, search, navigate }: { runtime: DashboardApplicationRuntime; search: string; navigate: (href: string) => void }) {
     const selection = useMemo(() => {
         try { return { kind: 'valid' as const, value: overviewSelection(search, runtime.configuration.sources) }; }
@@ -38,6 +39,7 @@ function Overview({ runtime, selection, navigate }: { runtime: DashboardApplicat
         {runtime.configuration.sources.length === 0 && <p role="status">No operational reporting processors are connected to this dashboard. Machines registered in Administration can still be used for supervisor production entry, but registration alone does not establish live machine evidence or OEE. Imported V1 records are available separately under History.</p>}
         {!selection.day && <p>Select a production day to load per-machine Availability, Utilization, Performance, Quality and OEE. No ongoing-day calendar is assumed.</p>}
         <ManagementRegisteredProduction businessDate={selection.day} />
+        <ManagementImportedHistory businessDate={selection.day} />
         <div className="overview-machines">{machines.map(machine => {
             const source = machine.sources[0]!;
             const attempt = attempts[machine.machineId];
