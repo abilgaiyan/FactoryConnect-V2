@@ -135,8 +135,53 @@ try
         trust.Verify(p,request.Signatures,DateTimeOffset.UtcNow);
         await WriteNew(signedPath,Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request,options)));Console.WriteLine("Assembled verified public bootstrap artifacts.");return 0;
     }
+
+    // Offline runtime enrollment: custodians and runtime key holder sign the same canonical bytes.
+    if(args is ["runtime-prepare",var trustPath,var actorId,var actorSubject,var runtimeId,var runtimeIssuer,
+        var runtimeSubject,var runtimePublicPem,var firstKeyId,var secondKeyId,var epochText,var reasonText,
+        var payloadOutput,var canonicalOutput])
+    {
+        if(Path.GetFullPath(payloadOutput)==Path.GetFullPath(canonicalOutput))throw new InvalidOperationException("Output paths must differ.");
+        var trustFile=await Read<BootstrapTrustFile>(trustPath);
+        var trust=new BootstrapTrustManifest(trustFile);
+        var now=DateTimeOffset.UtcNow;
+        var first=trustFile.Keys.Single(k=>k.KeyId==Guid.Parse(firstKeyId));
+        var second=trustFile.Keys.Single(k=>k.KeyId==Guid.Parse(secondKeyId));
+        if(first.CustodianId==second.CustodianId||first.ValidFrom>now||second.ValidFrom>now||
+            first.ExpiresAt<=now.AddMinutes(10)||second.ExpiresAt<=now.AddMinutes(10))
+            throw new InvalidOperationException("Two currently valid, distinct custodians are required.");
+        using var runtimeKey=RSA.Create();
+        runtimeKey.ImportFromPem(await File.ReadAllTextAsync(runtimePublicPem));
+        var spki=runtimeKey.ExportSubjectPublicKeyInfo();
+        var payload=new RuntimeCredentialPayload(trust.InstallationId,Guid.NewGuid(),Guid.Parse(actorId),
+            trust.AllowedAdministratorIssuer,actorSubject,Guid.Parse(runtimeId),runtimeIssuer,runtimeSubject,
+            "enroll",0,spki,now.AddMinutes(-1),now.AddDays(30),first.KeyId,second.KeyId,
+            now,now.AddMinutes(10),long.Parse(epochText,System.Globalization.CultureInfo.InvariantCulture),
+            RandomNumberGenerator.GetBytes(32),trust.Hash,reasonText);
+        var canonical=RuntimeCredentialProof.Canonicalize(payload);
+        await WriteNew(payloadOutput,Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload,options)));
+        await WriteNew(canonicalOutput,canonical);
+        Console.WriteLine($"Runtime enrollment prepared. Canonical SHA-256: {Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant()}");
+        return 0;
+    }
+    if(args is ["runtime-assemble",var trustPath2,var payloadPathRuntime,var firstSig,var secondSig,
+        var possessionSig,var envelopeOutput])
+    {
+        var trust=new BootstrapTrustManifest(await Read<BootstrapTrustFile>(trustPath2));
+        var payload=await Read<RuntimeCredentialPayload>(payloadPathRuntime);
+        var runtimeEnvelope=new SignedRuntimeCredential(payload,
+            [new(payload.ApproverKeyId,await File.ReadAllBytesAsync(firstSig)),
+             new(payload.ExecutorKeyId,await File.ReadAllBytesAsync(secondSig))],
+            await File.ReadAllBytesAsync(possessionSig));
+        RuntimeCredentialProof.Verify(trust,runtimeEnvelope,DateTimeOffset.UtcNow);
+        await WriteNew(envelopeOutput,Encoding.UTF8.GetBytes(JsonSerializer.Serialize(runtimeEnvelope,options)));
+        Console.WriteLine("Runtime enrollment signatures and possession proof verified; envelope assembled.");
+        return 0;
+    }
     if(args.Length!=6)
     {
+        Console.Error.WriteLine("Usage: runtime-prepare <manifest> <actor-id> <actor-subject> <runtime-id> <runtime-issuer> <runtime-subject> <runtime-public-pem> <approver-key-id> <executor-key-id> <epoch> <reason> <payload.json> <canonical.bin>");
+        Console.Error.WriteLine("Usage: runtime-assemble <manifest> <payload.json> <approver.sig> <executor.sig> <possession.sig> <envelope.json>");
         Console.Error.WriteLine("Usage: verify-signatures <manifest.json> <payload.json> <canonical.bin> <approver.sig> <executor.sig>");
         Console.Error.WriteLine("Usage: keygen <private.pem> <public.pem> or sign <private.pem> <canonical.bin> <signature.bin>");
         Console.Error.WriteLine("Usage: prepare <public-manifest> <principal-guid> <subject> <approver-key-guid> <executor-key-guid> <reason> <payload.json> <canonical.bin>");

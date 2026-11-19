@@ -54,6 +54,34 @@ try {
   run(['canonicalize', changed, invalid], 1); assert.equal(existsSync(invalid), false); checks++;
   writeFileSync(changed, Buffer.from([0xff]));
   run(['canonicalize', changed, invalid], 1); assert.equal(existsSync(invalid), false); checks++;
+  // Runtime credential enrollment: canonical payload is signed by both custodians
+  // and independently by the runtime key holder. No database is contacted.
+  const runtime = generateKeyPairSync('rsa', { modulusLength: 3072 });
+  const runtimePublic = join(directory, 'runtime-public.pem');
+  writeFileSync(runtimePublic, runtime.publicKey.export({ type: 'spki', format: 'pem' }));
+  const runtimePayload = join(directory, 'runtime-payload.json');
+  const runtimeCanonical = join(directory, 'runtime-canonical.bin');
+  const runtimeEnvelope = join(directory, 'runtime-envelope.json');
+  const runtimeSignatures = [join(directory, 'runtime-approver.sig'), join(directory, 'runtime-executor.sig'), join(directory, 'runtime-possession.sig')];
+  run(['runtime-prepare', manifest, randomUUID(), 'administrator', randomUUID(), 'urn:fc2:dev',
+    'simulator-runtime', runtimePublic, keys[0].keyId, keys[1].keyId, '1',
+    'Local simulated acquisition runtime', runtimePayload, runtimeCanonical]);
+  const runtimeBytes = readFileSync(runtimeCanonical);
+  for (const [index, pair] of [first, second, runtime].entries()) {
+    writeFileSync(runtimeSignatures[index], sign('sha256', runtimeBytes, {
+      key: pair.privateKey, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32
+    }));
+  }
+  run(['runtime-assemble', manifest, runtimePayload, ...runtimeSignatures, runtimeEnvelope]);
+  const runtimeRequest = JSON.parse(readFileSync(runtimeEnvelope, 'utf8'));
+  assert.equal(runtimeRequest.payload.action, 'enroll');
+  assert.equal(runtimeRequest.signatures.length, 2);
+  assert.ok(runtimeRequest.possessionSignature); checks++;
+  const tamperedSignature = join(directory, 'tampered-possession.sig');
+  writeFileSync(tamperedSignature, Buffer.alloc(384));
+  run(['runtime-assemble', manifest, runtimePayload, runtimeSignatures[0], runtimeSignatures[1],
+    tamperedSignature, join(directory, 'invalid-runtime-envelope.json')], 1);
+  checks++;
   console.log(`PASS: ${checks} bootstrap CLI checks; no SQL access or private-key files.`);
 } finally {
   rmSync(directory, { recursive: true, force: true });
