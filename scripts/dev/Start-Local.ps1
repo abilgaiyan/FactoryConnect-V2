@@ -1,7 +1,7 @@
 # FactoryConnect V2 local developer runtime helper. No security bootstrap or machine activation.
 [CmdletBinding()]
 param(
-  [ValidateSet('Check','StartAll','Identity','Api','Simulator','Dashboard','AcquisitionCheck')][string]$Action='Check',
+  [ValidateSet('Check','StartAll','Identity','Api','Simulator','Dashboard','AcquisitionCheck','AcquisitionSourceCheck')][string]$Action='Check',
   [string]$AcquisitionConfigPath
 )
 $ErrorActionPreference='Stop'
@@ -88,6 +88,42 @@ try {
         }
       }
       Write-Host 'Development PostgreSQL and Keycloak containers started. Use -Action Check to verify realm readiness.'
+    }
+    'AcquisitionSourceCheck' {
+      # Simulator source verification only: no certificates, SQL writes or machine activation.
+      $base='http://127.0.0.1:5055/device'
+      if (-not (IsReady 'http://127.0.0.1:5055/health')) {
+        throw 'Local MTConnect simulator is not responding.'
+      }
+      [xml]$probe=(Invoke-WebRequest -Uri "$base/probe" -UseBasicParsing -TimeoutSec 5).Content
+      [xml]$sample=(Invoke-WebRequest -Uri "$base/sample?from=1&count=10" -UseBasicParsing -TimeoutSec 5).Content
+      $device=$probe.SelectSingleNode('//*[local-name()="Device"]')
+      $stream=$sample.SelectSingleNode('//*[local-name()="DeviceStream"]')
+      $header=$sample.SelectSingleNode('//*[local-name()="Header"]')
+      $events=@($sample.SelectNodes('//*[local-name()="Execution"]'))
+      if ($null -eq $device -or $null -eq $stream -or $null -eq $header -or
+          $device.GetAttribute('uuid') -ne 'fc2-local-sim-0001' -or
+          $stream.GetAttribute('uuid') -ne $device.GetAttribute('uuid') -or
+          $events.Count -eq 0) {
+        throw 'Simulator probe/sample identity or execution observations are invalid.'
+      }
+      $sequences=@($events | ForEach-Object { [long]$_.GetAttribute('sequence') })
+      if ($sequences[0] -ne 1) { throw 'Unexpected first simulator sequence.' }
+      for ($i=1; $i -lt $sequences.Count; $i++) {
+        if ($sequences[$i] -ne ($sequences[$i-1]+1)) {
+          throw 'Simulator sequence is not contiguous.'
+        }
+      }
+      [pscustomobject]@{
+        Status='source-verified'
+        DeviceUuid=$device.GetAttribute('uuid')
+        InstanceId=$header.GetAttribute('instanceId')
+        FirstSequence=$sequences[0]
+        LastObservedSequence=$sequences[-1]
+        ObservationCount=$events.Count
+        SqlWrites=$false
+        MachineActivated=$false
+      } | Format-List
     }
     'AcquisitionCheck' {
       if ([string]::IsNullOrWhiteSpace($AcquisitionConfigPath)) {
