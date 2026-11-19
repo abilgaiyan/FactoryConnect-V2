@@ -1,17 +1,14 @@
-# Local administrator repair (development only)
+# Local administrator grants — immutable authority
 
-This is an exceptional, reversible **local-only** repair for `FactoryConnect_V2_Dev`, not a supported production bootstrap or delegation mechanism.
+**The direct SQL repair has been retired.** `TR_Grant_Immutable` correctly rejects updates to `security.PermissionGrant` (SQL Msg 51030). Do not disable triggers, modify bootstrap roots, or bypass authority checks.
 
-**Before execution**, confirm that principal `AB2D17FC-2630-4991-8533-2D83316CC82A` belongs to the signed-in `fc2-admin` account. The preflight shows it owns the bootstrap roots, but does not prove the Keycloak username binding. The repair does **not** infer this binding.
+The existing bootstrap administrator has installation-scope `CanDelegate=1` roots for the permissions but `UseAllowed=0` for most of them. The supported path is `POST /api/admin/v2/security/permission-grants`, which appends a child grant, issuance, operation, audit record and advances the epoch atomically. **Self-grants are prohibited** by `SqlSecurityAuthority.GrantPermissionAsync`.
 
-The SQL changes only `UseAllowed` on 11 existing bootstrap grants (all 14 remain delegable). It does not insert grants, forge issuance records, modify issuer/subject identity bindings, or disable authorization. It increments `security.InstallationState.AuthorityEpoch` under the same authority application lock used by the SQL kernel.
+For a local development workflow:
 
-This is an out-of-band local repair, not a normal audited security operation. Take a local DB backup first. Keep the SQL output and Git commit as the maintenance record. Do not deploy this script to a customer environment.
+1. Confirm which Keycloak account maps to each `security.Principal.PrincipalId` (do not infer identity from the two GUIDs).
+2. Sign in as the bootstrap administrator that holds `security.access.manage` and `CanDelegate` root grants.
+3. Use the audited API to grant the **other** enrolled human principal the required site/installation permissions. Provide a fresh `ExpectedEpoch`, a unique `OperationId` and `GrantId` per request, and `ParentGrantId` matching the exact live delegable permission. Grant times must fall within the parent's interval. Refresh epoch after each successful grant.
+4. Sign in as the grantee and verify `activation-readiness`. If the user needs full privileges on the original account, use the second principal as the authorized grantor after its own delegated management and permission grants have been established, respecting self-grant restrictions.
 
-After verifying the principal binding, run:
-
-```powershell
-sqlcmd -S ".\FCINVENTORY" -d "FactoryConnect_V2_Dev" -E -b -i ".\scripts\dev\Admin-Enable-Local-Use.sql"
-```
-
-Expected output: `EnabledPermissions = 11` on first run, `0` if already applied. Any other prior state aborts. Sign out/restart the browser session, sign in as `fc2-admin`, and verify activation readiness. Restore from the pre-change backup to reverse this out-of-band repair; do not hand-edit authority records in production.
+No direct SQL changes are required or supported. Keep `FactoryConnect_V2_Dev` backed up and do not use production identities or deployments.
