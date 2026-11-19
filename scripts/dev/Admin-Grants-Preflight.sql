@@ -62,6 +62,8 @@ ORDER BY g.Permission, g.ScopeKind, g.GrantId;
 SELECT OBJECT_NAME(cc.parent_object_id) AS TableName, cc.name AS ConstraintName,
        cc.definition AS ConstraintDefinition
 FROM sys.check_constraints AS cc
-WHERE SCHEMA_NAME(OBJECTPROPERTYEX(cc.parent_object_id, 'SchemaId')) = N'security'
-  AND OBJECT_NAME(cc.parent_object_id) IN (N'PermissionGrant',N'Principal',N'GrantIssuance')
+JOIN sys.tables AS t ON t.object_id = cc.parent_object_id
+JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE s.name = N'security'
+  AND t.name IN (N'PermissionGrant',N'Principal',N'GrantIssuance')
 ORDER BY TableName, ConstraintName;
