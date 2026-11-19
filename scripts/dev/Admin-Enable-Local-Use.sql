@@ -10,7 +10,8 @@ IF DB_NAME() <> N'FactoryConnect_V2_Dev'
 DECLARE @PrincipalId uniqueidentifier = 'AB2D17FC-2630-4991-8533-2D83316CC82A';
 DECLARE @InstallationId uniqueidentifier = 'AAE0C57A-BEA6-427F-8046-4E22DDFD63E9';
 DECLARE @LockResult int, @Changed int;
-DECLARE @Expected TABLE(Permission varchar(100) PRIMARY KEY);
+-- Match security.PermissionGrant.Permission (binary collation), not the database default.
+DECLARE @Expected TABLE(Permission varchar(100) COLLATE Latin1_General_100_BIN2 PRIMARY KEY);
 INSERT @Expected(Permission) VALUES
  ('security.access.manage'),('configuration.read'),('configuration.edit'),
  ('configuration.submit'),('configuration.review'),('configuration.activate'),
