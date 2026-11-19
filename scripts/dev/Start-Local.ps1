@@ -114,13 +114,25 @@ try {
           throw 'Simulator sequence is not contiguous.'
         }
       }
+      $states=@($events | ForEach-Object { $_.InnerText.Trim().ToUpperInvariant() })
+      $allowedStates=@('READY','ACTIVE','STOPPED')
+      foreach ($state in $states) {
+        if ($allowedStates -notcontains $state) {
+          throw 'Unexpected simulator execution state.'
+        }
+      }
       [pscustomobject]@{
         Status='source-verified'
+        EvidenceType='simulated-source-only'
         DeviceUuid=$device.GetAttribute('uuid')
         InstanceId=$header.GetAttribute('instanceId')
         FirstSequence=$sequences[0]
         LastObservedSequence=$sequences[-1]
         ObservationCount=$events.Count
+        LatestExecutionState=$states[-1]
+        ActiveObservations=@($states | Where-Object { $_ -eq 'ACTIVE' }).Count
+        ReadyObservations=@($states | Where-Object { $_ -eq 'READY' }).Count
+        StoppedObservations=@($states | Where-Object { $_ -eq 'STOPPED' }).Count
         SqlWrites=$false
         MachineActivated=$false
       } | Format-List
