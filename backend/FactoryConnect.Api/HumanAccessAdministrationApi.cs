@@ -19,6 +19,14 @@ public static class HumanAccessAdministrationApi
             IConfiguration config, CancellationToken ct) =>
             await Execute(http, config, (authority, hash) => authority.ReadAccessAdministrationAsync(hash, ct), ct))
             .RequireRateLimiting("security-boundary");
+        // The signed envelope is validated by the SQL security authority; this endpoint
+        // does not generate keys, bypass custodian approvals, or authenticate a runtime.
+        app.MapPost("/api/admin/v2/security/runtime-credentials", async (SignedRuntimeCredential input,
+            HttpContext http, IConfiguration config, CancellationToken ct) =>
+            await Execute(http, config, (authority, hash) =>
+                authority.ChangeRuntimeCredentialAsync(hash, input, ct), ct))
+            .RequireRateLimiting("security-boundary");
+
         app.MapPost("/api/admin/v2/security/humans", async (EnrollInput input, HttpContext http,
             IConfiguration config, CancellationToken ct) =>
             await Execute(http, config, (authority, hash) => authority.EnrollHumanAsync(hash,
