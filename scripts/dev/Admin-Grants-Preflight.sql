@@ -37,7 +37,7 @@ JOIN sys.schemas AS s ON s.schema_id=t.schema_id
 WHERE s.name=N'security' AND t.name IN (N'Principal',N'PermissionGrant',N'GrantIssuance',N'SecurityOperation')
 ORDER BY t.name,fk.name,fkc.constraint_column_id;
 
-SELECT s.name AS SchemaName,t.name AS TableName,COUNT_BIG(*) AS RowCount
+SELECT s.name AS SchemaName,t.name AS TableName,COUNT_BIG(*) AS [RowCount]
 FROM sys.tables AS t JOIN sys.schemas AS s ON s.schema_id=t.schema_id
 JOIN sys.partitions AS p ON p.object_id=t.object_id AND p.index_id IN (0,1)
 WHERE s.name=N'security' AND t.name IN (N'Principal',N'PermissionGrant',N'GrantIssuance',N'GrantRevocation',N'SecurityOperation')
