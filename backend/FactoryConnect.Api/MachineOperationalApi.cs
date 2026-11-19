@@ -109,7 +109,7 @@ public static class MachineOperationalApi
                 return Results.Content(System.Text.Encoding.UTF8.GetString(json), "application/json");
             return Results.Ok(result);
         }
-        catch (SecurityDeniedException) { return Results.Unauthorized(); }
+        catch (SecurityDeniedException) { return Results.Problem(statusCode: 403, title: "Machine operational access denied"); }
         catch (SecurityConflictException) { return Results.Conflict(new { error = "Operational authority changed; refresh before retrying." }); }
         catch (ArgumentException) { return Results.BadRequest(new { error = "Invalid operational request." }); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
