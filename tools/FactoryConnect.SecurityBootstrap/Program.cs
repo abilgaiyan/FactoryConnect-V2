@@ -142,10 +142,11 @@ try
         var payloadOutput,var canonicalOutput])
     {
         if(Path.GetFullPath(payloadOutput)==Path.GetFullPath(canonicalOutput))throw new InvalidOperationException("Output paths must differ.");
-        var trust=new BootstrapTrustManifest(await Read<BootstrapTrustFile>(trustPath));
+        var trustFile=await Read<BootstrapTrustFile>(trustPath);
+        var trust=new BootstrapTrustManifest(trustFile);
         var now=DateTimeOffset.UtcNow;
-        var first=trust.Keys.Single(k=>k.KeyId==Guid.Parse(firstKeyId));
-        var second=trust.Keys.Single(k=>k.KeyId==Guid.Parse(secondKeyId));
+        var first=trustFile.Keys.Single(k=>k.KeyId==Guid.Parse(firstKeyId));
+        var second=trustFile.Keys.Single(k=>k.KeyId==Guid.Parse(secondKeyId));
         if(first.CustodianId==second.CustodianId||first.ValidFrom>now||second.ValidFrom>now||
             first.ExpiresAt<=now.AddMinutes(10)||second.ExpiresAt<=now.AddMinutes(10))
             throw new InvalidOperationException("Two currently valid, distinct custodians are required.");
@@ -168,12 +169,12 @@ try
     {
         var trust=new BootstrapTrustManifest(await Read<BootstrapTrustFile>(trustPath2));
         var payload=await Read<RuntimeCredentialPayload>(payloadPathRuntime);
-        var signed=new SignedRuntimeCredential(payload,
+        var runtimeEnvelope=new SignedRuntimeCredential(payload,
             [new(payload.ApproverKeyId,await File.ReadAllBytesAsync(firstSig)),
              new(payload.ExecutorKeyId,await File.ReadAllBytesAsync(secondSig))],
             await File.ReadAllBytesAsync(possessionSig));
-        RuntimeCredentialProof.Verify(trust,signed,DateTimeOffset.UtcNow);
-        await WriteNew(envelopeOutput,Encoding.UTF8.GetBytes(JsonSerializer.Serialize(signed,options)));
+        RuntimeCredentialProof.Verify(trust,runtimeEnvelope,DateTimeOffset.UtcNow);
+        await WriteNew(envelopeOutput,Encoding.UTF8.GetBytes(JsonSerializer.Serialize(runtimeEnvelope,options)));
         Console.WriteLine("Runtime enrollment signatures and possession proof verified; envelope assembled.");
         return 0;
     }
