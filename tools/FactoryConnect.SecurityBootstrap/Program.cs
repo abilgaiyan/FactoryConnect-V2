@@ -229,10 +229,7 @@ try
             [new(payload.ApproverKeyId,await File.ReadAllBytesAsync(approverCertSig)),
              new(payload.ExecutorKeyId,await File.ReadAllBytesAsync(executorCertSig))],
             await File.ReadAllBytesAsync(possessionCertSig));
-        RuntimeCertificateProfile.ValidateRegistration(payload,registration,DateTimeOffset.UtcNow);
-        RuntimeCredentialProof.VerifyAuthorizedBytes(trust,
-            new SignedRuntimeCredential(payload,envelope.Signatures,envelope.PossessionSignature),
-            RuntimeCertificateProfile.Canonicalize(payload,registration),DateTimeOffset.UtcNow);
+        RuntimeCertificateProfile.VerifySignedRegistration(trust,envelope,DateTimeOffset.UtcNow);
         await WriteNew(envelopeCertOutput,Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope,options)));
         Console.WriteLine("Signed certificate rotation verified; envelope assembled.");
         return 0;
