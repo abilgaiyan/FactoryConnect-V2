@@ -8,6 +8,11 @@ using FactoryConnect.Sql.Security;
 var options=new JsonSerializerOptions(JsonSerializerDefaults.Web){PropertyNameCaseInsensitive=false,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,WriteIndented=true};
 try
 {
+    if (args is ["runtime-certificate-generate", var certificateDirectory])
+    {
+        await DeveloperRuntimeCertificateGenerator.GenerateAsync(certificateDirectory);
+        return 0;
+    }
     // Offline custodian operations. Private keys are never read during SQL bootstrap apply.
     if(args is ["keygen", var keyPath, var publicPath])
     {
@@ -236,6 +241,7 @@ try
     }
     if(args.Length!=6)
     {
+        Console.Error.WriteLine("Usage: runtime-certificate-generate <rotation-directory>");
         Console.Error.WriteLine("Usage: runtime-certificate-prepare <manifest> <actor-id> <actor-subject> <runtime-id> <runtime-issuer> <runtime-subject> <new-runtime-public.pem> <leaf.der> <anchor.der> <approver-key-id> <executor-key-id> <expected-generation> <epoch> <reason> <payload.json> <canonical.bin>");
         Console.Error.WriteLine("Usage: runtime-certificate-assemble <manifest> <payload.json> <leaf.der> <anchor.der> <approver.sig> <executor.sig> <possession.sig> <envelope.json>");
         Console.Error.WriteLine("Usage: runtime-prepare <manifest> <actor-id> <actor-subject> <runtime-id> <runtime-issuer> <runtime-subject> <runtime-public-pem> <approver-key-id> <executor-key-id> <epoch> <reason> <payload.json> <canonical.bin>");
