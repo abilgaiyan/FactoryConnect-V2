@@ -27,6 +27,13 @@ public static class HumanAccessAdministrationApi
                 authority.ChangeRuntimeCredentialAsync(hash, input, ct), ct))
             .RequireRateLimiting("security-boundary");
 
+        // Developer-operated registration; existing SQL authority validates the signed certificate envelope.
+        app.MapPost("/api/admin/v2/security/runtime-certificates", async (SignedRuntimeCertificate input,
+            HttpContext http, IConfiguration config, CancellationToken ct) =>
+            await Execute(http, config, (authority, hash) =>
+                authority.EnrollRuntimeCertificateAsync(hash, input, ct), ct))
+            .RequireRateLimiting("security-boundary");
+
         app.MapPost("/api/admin/v2/security/humans", async (EnrollInput input, HttpContext http,
             IConfiguration config, CancellationToken ct) =>
             await Execute(http, config, (authority, hash) => authority.EnrollHumanAsync(hash,
