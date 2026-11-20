@@ -53,7 +53,7 @@ public static class RuntimeCertificateProfile
         if(!chain.Build(certificate)||chain.ChainElements.Count!=2||
             !chain.ChainElements[1].Certificate.RawData.AsSpan().SequenceEqual(registration.TrustAnchorDer))throw new SecurityDeniedException();
     }
-    internal static void ValidateShape(X509Certificate2 certificate,X509Certificate2 anchor,DateTimeOffset now)
+    public static void ValidateShape(X509Certificate2 certificate,X509Certificate2 anchor,DateTimeOffset now)
     {
         using var publicKey=certificate.GetRSAPublicKey()??throw new SecurityDeniedException();
         using var anchorKey=anchor.GetRSAPublicKey()??throw new SecurityDeniedException();
