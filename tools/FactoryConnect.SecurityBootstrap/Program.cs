@@ -8,7 +8,7 @@ using FactoryConnect.Sql.Security;
 var options=new JsonSerializerOptions(JsonSerializerDefaults.Web){PropertyNameCaseInsensitive=false,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,WriteIndented=true};
 try
 {
-    // Offline custodian operations. Private keys are never read during SQL bootstrap apply.
+    if (args is ["runtime-certificate-generate", var certificateDirectory])\n    {\n        await DeveloperRuntimeCertificateGenerator.GenerateAsync(certificateDirectory);\n        return 0;\n    }\n    // Offline custodian operations. Private keys are never read during SQL bootstrap apply.
     if(args is ["keygen", var keyPath, var publicPath])
     {
         if(Path.GetFullPath(keyPath)==Path.GetFullPath(publicPath))throw new InvalidOperationException();
@@ -236,7 +236,7 @@ try
     }
     if(args.Length!=6)
     {
-        Console.Error.WriteLine("Usage: runtime-certificate-prepare <manifest> <actor-id> <actor-subject> <runtime-id> <runtime-issuer> <runtime-subject> <new-runtime-public.pem> <leaf.der> <anchor.der> <approver-key-id> <executor-key-id> <expected-generation> <epoch> <reason> <payload.json> <canonical.bin>");
+        Console.Error.WriteLine("Usage: runtime-certificate-generate <rotation-directory>");\n        Console.Error.WriteLine("Usage: runtime-certificate-prepare <manifest> <actor-id> <actor-subject> <runtime-id> <runtime-issuer> <runtime-subject> <new-runtime-public.pem> <leaf.der> <anchor.der> <approver-key-id> <executor-key-id> <expected-generation> <epoch> <reason> <payload.json> <canonical.bin>");
         Console.Error.WriteLine("Usage: runtime-certificate-assemble <manifest> <payload.json> <leaf.der> <anchor.der> <approver.sig> <executor.sig> <possession.sig> <envelope.json>");
         Console.Error.WriteLine("Usage: runtime-prepare <manifest> <actor-id> <actor-subject> <runtime-id> <runtime-issuer> <runtime-subject> <runtime-public-pem> <approver-key-id> <executor-key-id> <epoch> <reason> <payload.json> <canonical.bin>");
         Console.Error.WriteLine("Usage: runtime-assemble <manifest> <payload.json> <approver.sig> <executor.sig> <possession.sig> <envelope.json>");
