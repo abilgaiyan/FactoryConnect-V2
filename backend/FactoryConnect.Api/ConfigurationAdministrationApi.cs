@@ -26,13 +26,14 @@ public static class ConfigurationAdministrationApi
         app.MapPost("/api/admin/v2/sites/{siteId:guid}/configuration/reviews",
             async (Guid siteId, ReviewInput request, HttpContext http, IConfiguration config, CancellationToken ct) =>
             {
-                if (request.ContentHash is null || request.ContentHash.Length != 64 ||
-                    !Convert.TryFromHexString(request.ContentHash, new byte[32], out var written) || written != 32)
+                if (request.ContentHash is not { Length: 64 } contentHash ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(contentHash, "^[0-9a-fA-F]{64}$"))
                     return Results.BadRequest(new { error = "Expected SHA-256 hexadecimal content hash." });
+                var contentHashBytes = Convert.FromHexString(contentHash);
                 return await Execute(http, config, (authority, hash) =>
                     authority.ReviewConfigurationAsync(hash, new PackageReviewRequest(
                         request.OperationId, request.ReviewId, siteId, request.PackageRevisionId,
-                        Convert.FromHexString(request.ContentHash), request.Approve,
+                        contentHashBytes, request.Approve,
                         request.ExpectedSecurityEpoch, request.Reason), ct), ct);
             }).RequireRateLimiting("security-boundary");
 
