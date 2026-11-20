@@ -253,6 +253,7 @@ app.MapActivityHistory();
 app.MapMasterRegistration();
 app.MapMachineActivationReadiness();
 app.MapMachineOperational();
+app.MapConfigurationAdministration();
 app.MapHumanAccessAdministration();
 app.MapMtConnectDiscovery();
 app.MapPlanning();
