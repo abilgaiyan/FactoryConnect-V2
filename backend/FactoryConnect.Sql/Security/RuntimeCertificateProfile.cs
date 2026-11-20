@@ -26,6 +26,15 @@ public static class RuntimeCertificateProfile
         var bytes=stream.ToArray();if(bytes.Length>16384)throw new ArgumentException("Certificate ceremony exceeds operation storage limit.");return bytes;
     }
 
+    public static void VerifySignedRegistration(BootstrapTrustManifest trust,SignedRuntimeCertificate request,DateTimeOffset now)
+    {
+        var registration=new RuntimeCertificateRegistration(request.CertificateDer,request.TrustAnchorDer);
+        ValidateRegistration(request.Payload,registration,now);
+        RuntimeCredentialProof.VerifyAuthorizedBytes(trust,
+            new SignedRuntimeCredential(request.Payload,request.Signatures,request.PossessionSignature),
+            Canonicalize(request.Payload,registration),now);
+    }
+
     public static void ValidateRegistration(RuntimeCredentialPayload payload,RuntimeCertificateRegistration registration,DateTimeOffset now)
     {
         _=Canonicalize(payload,registration);
