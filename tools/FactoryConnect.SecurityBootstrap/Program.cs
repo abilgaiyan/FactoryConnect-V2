@@ -178,8 +178,66 @@ try
         Console.WriteLine("Runtime enrollment signatures and possession proof verified; envelope assembled.");
         return 0;
     }
+    // Developer-only offline certificate rotation. Both custodian signatures and the new runtime
+    // key possession proof cover the certificate and trust anchor, not just the credential payload.
+    if(args is ["runtime-certificate-prepare",var manifestCert,var actorCert,var actorSubjectCert,
+        var runtimeCert,var issuerCert,var subjectCert,var publicPemCert,var certificatePath,var anchorPath,
+        var approverCert,var executorCert,var generationCert,var epochCert,var reasonCert,
+        var payloadCertPath,var canonicalCertPath])
+    {
+        if(Path.GetFullPath(payloadCertPath)==Path.GetFullPath(canonicalCertPath))
+            throw new InvalidOperationException("Output paths must differ.");
+        var trustFile=await Read<BootstrapTrustFile>(manifestCert);
+        var trust=new BootstrapTrustManifest(trustFile);
+        var now=DateTimeOffset.UtcNow;
+        var first=trustFile.Keys.Single(k=>k.KeyId==Guid.Parse(approverCert));
+        var second=trustFile.Keys.Single(k=>k.KeyId==Guid.Parse(executorCert));
+        if(first.CustodianId==second.CustodianId||first.ValidFrom>now||second.ValidFrom>now||
+            first.ExpiresAt<=now.AddMinutes(10)||second.ExpiresAt<=now.AddMinutes(10))
+            throw new InvalidOperationException("Two currently valid, distinct custodians are required.");
+        var registration=new RuntimeCertificateRegistration(await File.ReadAllBytesAsync(certificatePath),
+            await File.ReadAllBytesAsync(anchorPath));
+        using var certificate=System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadCertificate(registration.CertificateDer);
+        using var runtimeKey=RSA.Create();
+        runtimeKey.ImportFromPem(await File.ReadAllTextAsync(publicPemCert));
+        var from=new DateTimeOffset(certificate.NotBefore.ToUniversalTime());
+        var until=new DateTimeOffset(certificate.NotAfter.ToUniversalTime());
+        if(from>now||until<=now.AddMinutes(10)||until>now.AddDays(90))
+            throw new InvalidOperationException("Certificate must be currently valid and expire within 90 days.");
+        var payload=new RuntimeCredentialPayload(trust.InstallationId,Guid.NewGuid(),Guid.Parse(actorCert),
+            trust.AllowedAdministratorIssuer,actorSubjectCert,Guid.Parse(runtimeCert),issuerCert,subjectCert,
+            "rotate",long.Parse(generationCert,System.Globalization.CultureInfo.InvariantCulture),
+            runtimeKey.ExportSubjectPublicKeyInfo(),from,until,first.KeyId,second.KeyId,
+            now,now.AddMinutes(10),long.Parse(epochCert,System.Globalization.CultureInfo.InvariantCulture),
+            RandomNumberGenerator.GetBytes(32),trust.Hash,reasonCert);
+        RuntimeCertificateProfile.ValidateRegistration(payload,registration,now);
+        var canonical=RuntimeCertificateProfile.Canonicalize(payload,registration);
+        await WriteNew(payloadCertPath,Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload,options)));
+        await WriteNew(canonicalCertPath,canonical);
+        Console.WriteLine($"Certificate rotation prepared. Canonical SHA-256: {Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant()}");
+        return 0;
+    }
+    if(args is ["runtime-certificate-assemble",var trustCertPath,var payloadCertInput,
+        var leafCertInput,var anchorCertInput,var approverCertSig,var executorCertSig,
+        var possessionCertSig,var envelopeCertOutput])
+    {
+        var trust=new BootstrapTrustManifest(await Read<BootstrapTrustFile>(trustCertPath));
+        var payload=await Read<RuntimeCredentialPayload>(payloadCertInput);
+        var registration=new RuntimeCertificateRegistration(await File.ReadAllBytesAsync(leafCertInput),
+            await File.ReadAllBytesAsync(anchorCertInput));
+        var envelope=new SignedRuntimeCertificate(payload,registration.CertificateDer,registration.TrustAnchorDer,
+            [new(payload.ApproverKeyId,await File.ReadAllBytesAsync(approverCertSig)),
+             new(payload.ExecutorKeyId,await File.ReadAllBytesAsync(executorCertSig))],
+            await File.ReadAllBytesAsync(possessionCertSig));
+        RuntimeCertificateProfile.VerifySignedRegistration(trust,envelope,DateTimeOffset.UtcNow);
+        await WriteNew(envelopeCertOutput,Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope,options)));
+        Console.WriteLine("Signed certificate rotation verified; envelope assembled.");
+        return 0;
+    }
     if(args.Length!=6)
     {
+        Console.Error.WriteLine("Usage: runtime-certificate-prepare <manifest> <actor-id> <actor-subject> <runtime-id> <runtime-issuer> <runtime-subject> <new-runtime-public.pem> <leaf.der> <anchor.der> <approver-key-id> <executor-key-id> <expected-generation> <epoch> <reason> <payload.json> <canonical.bin>");
+        Console.Error.WriteLine("Usage: runtime-certificate-assemble <manifest> <payload.json> <leaf.der> <anchor.der> <approver.sig> <executor.sig> <possession.sig> <envelope.json>");
         Console.Error.WriteLine("Usage: runtime-prepare <manifest> <actor-id> <actor-subject> <runtime-id> <runtime-issuer> <runtime-subject> <runtime-public-pem> <approver-key-id> <executor-key-id> <epoch> <reason> <payload.json> <canonical.bin>");
         Console.Error.WriteLine("Usage: runtime-assemble <manifest> <payload.json> <approver.sig> <executor.sig> <possession.sig> <envelope.json>");
         Console.Error.WriteLine("Usage: verify-signatures <manifest.json> <payload.json> <canonical.bin> <approver.sig> <executor.sig>");
