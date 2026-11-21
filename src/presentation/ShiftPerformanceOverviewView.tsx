@@ -78,10 +78,13 @@ export function ShiftPerformanceOverviewView({ overview, showFilters = true }: S
         {selected.map(({ machine, shift }) => {
           const metric = shift.oee;
           const raw = metric.state === "calculated" && metric.unit.toLowerCase() === "ratio" ? Number(metric.value) : NaN;
-          const valid = Number.isFinite(raw) && raw >= 0 && raw <= 1;
+          const availabilityConflict = shift.availability.state === "calculated"
+            && shift.availability.unit.toLowerCase() === "ratio"
+            && ratioAboveOne(String(shift.availability.value));
+          const valid = Number.isFinite(raw) && raw >= 0 && raw <= 1 && !availabilityConflict;
           const label = machine.displayName + " · " + shift.shift.shiftId + " · " + shift.shift.startsAtUtc;
           return <div key={JSON.stringify([machine.machineId, machine.processorId, shift.shift.shiftScheduleAssignmentId, shift.shift.startsAtUtc])}>
-            <p><strong>{label}</strong> · {valid ? (raw * 100).toFixed(1) + "%" : metric.state === "calculated" ? "Reported metric cannot be plotted as a 0–100% ratio" : formatPresentedMetric(metric).primary}</p>
+            <p><strong>{label}</strong> · {availabilityConflict && metric.state === "calculated" ? "Evidence conflict: Availability exceeds 100%; reported OEE is not plotted" : valid ? (raw * 100).toFixed(1) + "%" : metric.state === "calculated" ? "Reported metric cannot be plotted as a 0–100% ratio" : formatPresentedMetric(metric).primary}</p>
             {valid && <div role="img" aria-label={label + " OEE " + (raw * 100).toFixed(1) + " percent"}
               style={{ width: "100%", maxWidth: "30rem", height: "0.9rem", borderRadius: "0.25rem", background: "#e5e7eb", overflow: "hidden" }}>
               <div style={{ height: "100%", width: (raw * 100) + "%", background: "#16855c" }} />
