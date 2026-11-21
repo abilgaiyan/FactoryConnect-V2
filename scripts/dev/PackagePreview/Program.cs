@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using FactoryConnect.Sql.Configuration;
-using FactoryConnect.Sql.Activity;
+using FactoryConnect.Sql.ActivityProcessing;
 using Microsoft.Data.SqlClient;
 
 // Explicit source mapping is required; do not guess protocol address encoding or normalization.
