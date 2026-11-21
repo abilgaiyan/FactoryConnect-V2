@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace FactoryConnect.Sql.Configuration;
 
@@ -66,9 +67,24 @@ public sealed class PinnedTzifResolver
         if (blockEnd < rules.Length)
         {
             var tail = rules[(int)blockEnd..];
-            if (tail.Length < 2 || tail[0] != (byte)'\n' || tail[^1] != (byte)'\n' ||
-                tail.Length > 2)
-                throw new NotSupportedException("TZif POSIX future rules require explicit support.");
+            if (tail.Length < 2 || tail[0] != (byte)'\n' || tail[^1] != (byte)'\n')
+                throw new ArgumentException("Malformed TZif POSIX trailer.", nameof(rules));
+            var posix = Encoding.ASCII.GetString(tail[1..^1]);
+            if (posix.Length > 0)
+            {
+                // Only fixed standard-time tails are supported. POSIX offset signs are reversed.
+                var match = Regex.Match(posix, @"^[A-Za-z]{3,}([+-]?)(\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?$",
+                    RegexOptions.CultureInvariant);
+                if (!match.Success)
+                    throw new NotSupportedException("Recurring DST rules in TZif POSIX trailer are unsupported.");
+                int magnitude = int.Parse(match.Groups[2].Value) * 3600 +
+                    (match.Groups[3].Success ? int.Parse(match.Groups[3].Value) * 60 : 0) +
+                    (match.Groups[4].Success ? int.Parse(match.Groups[4].Value) : 0);
+                int fixedOffset = match.Groups[1].Value == "-" ? magnitude : -magnitude;
+                int finalType = transitions.Length == 0 ? initialType : transitionTypes[^1];
+                if (fixedOffset != offsets[finalType])
+                    throw new NotSupportedException("TZif trailer offset differs from last transition.");
+            }
         }
     }
 
@@ -98,7 +114,7 @@ public sealed class PinnedTzifResolver
             counts[i] = BinaryPrimitives.ReadInt32BigEndian(bytes.Slice(start + 20 + i * 4, 4));
             if (counts[i] < 0) throw new ArgumentException("Negative TZif count.");
         }
-        if (counts[4] == 0 || counts[3] == 0)
+        if (counts[4] == 0 || counts[5] == 0)
             throw new ArgumentException("TZif requires at least one type and abbreviation.");
         return new Header(counts[0], counts[1], counts[2], counts[3], counts[4], counts[5]);
     }
