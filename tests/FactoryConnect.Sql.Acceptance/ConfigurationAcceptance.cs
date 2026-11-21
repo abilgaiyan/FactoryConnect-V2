@@ -85,8 +85,8 @@ internal static class ConfigurationAcceptance
         tzif[p64 + 14] = 0;
         BinaryPrimitives.WriteInt32BigEndian(tzif.AsSpan(p64 + 15, 4), 19800);
         tzif[p64 + 20] = 4;
-        Encoding.ASCII.GetBytes("OLD\\0IST\\0").CopyTo(tzif, p64 + 21);
-        tzif[^2] = (byte)'\\n'; tzif[^1] = (byte)'\\n';
+        Encoding.ASCII.GetBytes("OLD\0IST\0").CopyTo(tzif, p64 + 21);
+        tzif[^2] = (byte)'\n'; tzif[^1] = (byte)'\n';
         var resolver = new PinnedTzifResolver(tzif);
         Check(resolver.OffsetAt(DateTimeOffset.FromUnixTimeSeconds(999)) == TimeSpan.FromHours(4),
             "pinned TZif pre-transition offset");
