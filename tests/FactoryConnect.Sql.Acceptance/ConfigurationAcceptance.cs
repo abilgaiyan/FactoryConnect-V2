@@ -41,6 +41,30 @@ internal static class ConfigurationAcceptance
         Reject(package with {Machines=[machine with {EffectiveTo=machine.EffectiveFrom}]},"empty interval rejected");
         Reject(package with {Machines=[machine with {Signals=[signal with {StreamKey="\ud800"}]}]},"unpaired surrogate rejected");
         Reject(package with {Timezone=new(Timezone,new byte[31])},"invalid pin hash rejected");
+        var shifts = new[] {
+            new PolicyCanonicalizer.Shift(Guid.Parse("7e33a633-e8dc-4256-85a2-4ec459313e03"),450,960),
+            new PolicyCanonicalizer.Shift(Guid.Parse("8c276aa3-fc30-43ef-8305-64c113a82209"),960,0),
+            new PolicyCanonicalizer.Shift(Guid.Parse("eebda7c4-7b76-4a2b-9484-f881780628da"),0,450)
+        };
+        var breaks = new[] {
+            new PolicyCanonicalizer.Break(Guid.Parse("b131e92d-7825-40dd-8dc7-4b02c6a95e85"),shifts[0].ShiftId,240,30,true),
+            new PolicyCanonicalizer.Break(Guid.Parse("b0d50192-dc0b-4996-898b-d5eb353b7cbd"),shifts[1].ShiftId,240,30,true),
+            new PolicyCanonicalizer.Break(Guid.Parse("a8c8784e-07f7-499c-a173-bd617c199ff0"),shifts[2].ShiftId,210,30,true)
+        };
+        Check(PolicyCanonicalizer.Schedule(shifts).SequenceEqual(PolicyCanonicalizer.Schedule(shifts.Reverse().ToArray())),
+            "schedule canonical bytes are independent of source ordering");
+        Check(PolicyCanonicalizer.BreakPolicy(breaks).SequenceEqual(PolicyCanonicalizer.BreakPolicy(breaks.Reverse().ToArray())),
+            "break policy canonical bytes are independent of source ordering");
+        Check(!PolicyCanonicalizer.Hash(PolicyCanonicalizer.BreakPolicy(breaks)).SequenceEqual(
+            PolicyCanonicalizer.Hash(PolicyCanonicalizer.BreakPolicy(
+                breaks.Select((b,i) => i==0 ? b with { ExcludeFromPlannedProduction=false } : b).ToArray()))),
+            "break exclusion changes immutable policy digest");
+        Check(!PolicyCanonicalizer.Hash(PolicyCanonicalizer.Schedule(shifts)).SequenceEqual(
+            PolicyCanonicalizer.Hash(PolicyCanonicalizer.Schedule(
+                shifts.Select((s,i) => i==0 ? s with { EndMinute=959 } : s).ToArray()))),
+            "shift boundary changes immutable policy digest");
+        try { PolicyCanonicalizer.TimezonePolicy(new("Asia/Kolkata","", "resolver","reject","reject",[1])); }
+        catch (ArgumentException) { Check(true,"timezone provenance required"); }
         return count;
         void Check(bool pass,string label) {if(!pass)throw new InvalidOperationException(label);count++;Console.WriteLine("PASS: "+label);}
         void Reject(PackageDefinition value,string label)
