@@ -1,4 +1,5 @@
 using System.Data;
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using FactoryConnect.Sql.Configuration;
@@ -65,6 +66,38 @@ internal static class ConfigurationAcceptance
             "shift boundary changes immutable policy digest");
         try { PolicyCanonicalizer.TimezonePolicy(new("Asia/Kolkata","", "resolver","reject","reject",[1])); }
         catch (ArgumentException) { Check(true,"timezone provenance required"); }
+        // Synthetic TZif2 fixture with one UTC transition from +04:00 to +05:30.
+        var tzif = new byte[44 + 4 + 1 + 12 + 8 + 44 + 8 + 1 + 12 + 8 + 2];
+        void Header(int offset)
+        {
+            Encoding.ASCII.GetBytes("TZif2").CopyTo(tzif, offset);
+            BinaryPrimitives.WriteInt32BigEndian(tzif.AsSpan(offset + 32, 4), 1);
+            BinaryPrimitives.WriteInt32BigEndian(tzif.AsSpan(offset + 36, 4), 2);
+            BinaryPrimitives.WriteInt32BigEndian(tzif.AsSpan(offset + 40, 4), 8);
+        }
+        Header(0);
+        int start64 = 44 + 4 + 1 + 12 + 8;
+        Header(start64);
+        int p64 = start64 + 44;
+        BinaryPrimitives.WriteInt64BigEndian(tzif.AsSpan(p64, 8), 1000);
+        tzif[p64 + 8] = 1;
+        BinaryPrimitives.WriteInt32BigEndian(tzif.AsSpan(p64 + 9, 4), 14400);
+        tzif[p64 + 14] = 0;
+        BinaryPrimitives.WriteInt32BigEndian(tzif.AsSpan(p64 + 15, 4), 19800);
+        tzif[p64 + 20] = 4;
+        Encoding.ASCII.GetBytes("OLD\\0IST\\0").CopyTo(tzif, p64 + 21);
+        tzif[^2] = (byte)'\\n'; tzif[^1] = (byte)'\\n';
+        var resolver = new PinnedTzifResolver(tzif);
+        Check(resolver.OffsetAt(DateTimeOffset.FromUnixTimeSeconds(999)) == TimeSpan.FromHours(4),
+            "pinned TZif pre-transition offset");
+        Check(resolver.OffsetAt(DateTimeOffset.FromUnixTimeSeconds(1000)) == TimeSpan.FromMinutes(330),
+            "pinned TZif transition boundary");
+        Check(resolver.ToLocal(new DateTimeOffset(2026,11,21,0,0,0,TimeSpan.Zero)).Hour == 5 &&
+            resolver.ToLocal(new DateTimeOffset(2026,11,21,0,0,0,TimeSpan.Zero)).Minute == 30,
+            "pinned TZif UTC-to-local conversion");
+        var corrupt = tzif.ToArray(); corrupt[p64 + 8] = 3;
+        try { _ = new PinnedTzifResolver(corrupt); throw new InvalidOperationException("Invalid transition type accepted"); }
+        catch (ArgumentException) { Check(true, "invalid TZif transition type rejected"); }
         return count;
         void Check(bool pass,string label) {if(!pass)throw new InvalidOperationException(label);count++;Console.WriteLine("PASS: "+label);}
         void Reject(PackageDefinition value,string label)
