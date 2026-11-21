@@ -21,9 +21,11 @@ The timezone writer accepts a **trusted, independently sourced IANA TZif v2/v3/v
 $tzif = 'C:\path\to\verified\zoneinfo\Asia\Kolkata'
 $expectedHash = (Get-FileHash -Algorithm SHA256 $tzif).Hash.ToLowerInvariant()
 # Prefer comparing this hash with a separately published trusted distribution manifest.
-dotnet run --project scripts/dev/PolicyBootstrap -- timezone-preview $tzif $expectedHash '<verified-tzdb-release>' '<verified-resolver-version>'
+dotnet run --project scripts/dev/PolicyBootstrap -- timezone-preview $tzif $expectedHash '<verified-tzdb-release>' 'fc2-pinned-tzif-v1'
 # Only after confirming provenance, review, and preview:
 dotnet run --project scripts/dev/PolicyBootstrap -- timezone-write $tzif $expectedHash '<verified-tzdb-release>' '<verified-resolver-version>'
 ```
 
 The example computes a local digest for convenience, **not** an independent authenticity check. Gap/fold policies are explicitly `reject/reject`. A pinned TZif snapshot alone does not establish that the runtime resolver consumes these bytes; verify that separately before activation. The write remains restricted to the local development SQL instance/database.
+
+The `fc2-pinned-tzif-v1` implementation parses pinned TZif 64-bit transition tables and fixed-offset POSIX trailers, rejecting recurring DST trailers. This establishes a concrete resolver for UTC instants; wiring all production shift and reporting paths to this resolver remains a separate integration step. A successful bootstrap does not imply those paths already use it.
