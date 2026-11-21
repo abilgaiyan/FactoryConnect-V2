@@ -40,3 +40,19 @@ SELECT TOP (10) InstanceId,Sequence,RawValue,SourceTimestamp,ObservedAt,Quality
 FROM acquisition.MtConnectObservation
 WHERE SiteId=@SiteId AND MachineId=@MachineId
 ORDER BY ObservedAt DESC,Sequence DESC;
+
+-- Inspect actual state and assignment records; counts alone do not prove activation.
+-- SELECT * is intentionally restricted to the known local simulator and development DB.
+SELECT 'machine-operational-state-detail' AS Diagnostic, state.*
+FROM configuration.MachineOperationalState AS state
+WHERE state.SiteId=@SiteId AND state.MachineId=@MachineId;
+
+SELECT 'runtime-assignment-detail' AS Diagnostic, assignment.*
+FROM configuration.RuntimeAssignment AS assignment
+WHERE assignment.SiteId=@SiteId AND assignment.MachineId=@MachineId;
+
+SELECT 'activation-acknowledgement-detail' AS Diagnostic, acknowledgement.*
+FROM configuration.RuntimeActivationAcknowledgement AS acknowledgement
+WHERE acknowledgement.SiteId=@SiteId AND acknowledgement.MachineId=@MachineId;
+
+PRINT 'DIAGNOSTIC ONLY: rows indicate recorded state, not proof of an active acquisition host or authorized activation.';
