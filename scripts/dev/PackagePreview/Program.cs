@@ -1,15 +1,21 @@
 using System.Security.Cryptography;
 using System.Text;
 using FactoryConnect.Sql.Configuration;
+using FactoryConnect.Sql.ActivityProcessing;
 using Microsoft.Data.SqlClient;
 
 // Explicit source mapping is required; do not guess protocol address encoding or normalization.
 if (args.Length != 7 || args[0] != "preview")
     throw new ArgumentException("Usage: preview <stream-key> <address-encoding> <address-utf8> <normalization> <effective-from-UTC> <capability-intent> (set FC2_MAPPING_ID, FC2_PACKAGE_ID and FC2_PACKAGE_REVISION_ID environment variables)");
 var streamKey = args[1];
+if (streamKey != "mtconnect:uuid:fc2-local-sim-0001")
+    throw new ArgumentException("Expected the verified local simulator device UUID stream key.");
 var addressEncoding = args[2];
 var address = args[3];
 var normalization = args[4];
+if (addressEncoding != "utf-8" || string.IsNullOrWhiteSpace(address) || Encoding.UTF8.GetByteCount(address) > 512)
+    throw new ArgumentException("Exact nonempty UTF-8 MTConnect address (up to 512 bytes) required.");
+_ = ApprovedActivityValueMap.Parse(normalization);
 var effectiveFrom = DateTimeOffset.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture);
 if (effectiveFrom.Offset != TimeSpan.Zero)
     throw new ArgumentException("Effective-from must be explicitly UTC (+00:00 or Z).");
@@ -71,7 +77,7 @@ var definition = new PackageDefinition(packageId, revisionId, 1, site,
     new PolicyReference(timezone, timezoneHash),
     new[] { new MachineConfiguration(machine, line, effectiveFrom, null,
         new PolicyReference(schedule, scheduleHash), new PolicyReference(breaks, breakHash),
-        new[] { new SignalDefinition(mapping, "execution", "MTConnect", streamKey,
+        new[] { new SignalDefinition(mapping, "machine-activity", "mtconnect", streamKey,
             addressEncoding, Encoding.UTF8.GetBytes(address), normalization) }, capability) });
 var bytes = PackageCanonicalizer.Serialize(definition);
 Console.WriteLine(Encoding.UTF8.GetString(bytes));
