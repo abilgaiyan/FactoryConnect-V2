@@ -36,6 +36,12 @@ if (mode is "timezone-preview" or "timezone-write")
     if (string.IsNullOrWhiteSpace(args[3]) || string.IsNullOrWhiteSpace(args[4]) ||
         args[3].Length > 32 || args[4].Length > 200)
         throw new InvalidOperationException("Explicit TZDB release and resolver version are required.");
+    if (args[4] != "fc2-pinned-tzif-v1")
+        throw new InvalidOperationException("Timezone bootstrap requires pinned TZif resolver version fc2-pinned-tzif-v1.");
+    var resolver = new PinnedTzifResolver(rules);
+    var local = resolver.ToLocal(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
+    if (local.Offset != TimeSpan.FromMinutes(330) || local.Hour != 5 || local.Minute != 30)
+        throw new InvalidOperationException("Pinned TZif does not resolve Asia/Kolkata UTC+05:30 at the reference instant.");
     var zone = new PolicyCanonicalizer.Timezone("Asia/Kolkata", args[3], args[4],
         "reject", "reject", rules);
     var canonical = PolicyCanonicalizer.TimezonePolicy(zone);
