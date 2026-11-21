@@ -5,7 +5,7 @@ using Microsoft.Data.SqlClient;
 
 // Explicit source mapping is required; do not guess protocol address encoding or normalization.
 if (args.Length != 7 || args[0] != "preview")
-    throw new ArgumentException("Usage: preview <stream-key> <address-encoding> <address-utf8> <normalization> <effective-from-UTC> <capability-intent> <mapping-id-GUID>");
+    throw new ArgumentException("Usage: preview <stream-key> <address-encoding> <address-utf8> <normalization> <effective-from-UTC> <capability-intent> (set FC2_MAPPING_ID, FC2_PACKAGE_ID and FC2_PACKAGE_REVISION_ID environment variables)");
 var streamKey = args[1];
 var addressEncoding = args[2];
 var address = args[3];
