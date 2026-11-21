@@ -107,7 +107,26 @@ try {
           $events.Count -eq 0) {
         throw 'Simulator probe/sample identity or execution observations are invalid.'
       }
+      # The sample must match the commissioned simulator stream, not merely contain any Execution elements.
+      $probeItem=$probe.SelectSingleNode('//*[local-name()="DataItem" and @type="EXECUTION"]')
+      $sampleHeaderInstance=$header.GetAttribute('instanceId')
+      $probeHeader=$probe.SelectSingleNode('//*[local-name()="Header"]')
+      if ($null -eq $probeItem -or $probeItem.GetAttribute('id') -ne 'execution' -or
+          $null -eq $probeHeader -or $probeHeader.GetAttribute('instanceId') -ne '2026111101' -or
+          $sampleHeaderInstance -ne $probeHeader.GetAttribute('instanceId')) {
+        throw 'Simulator probe/sample instance or execution data item identity mismatch.'
+      }
+      foreach ($event in $events) {
+        if ($event.GetAttribute('dataItemId') -ne $probeItem.GetAttribute('id')) {
+          throw 'Simulator execution event data item identity mismatch.'
+        }
+      }
       $sequences=@($events | ForEach-Object { [long]$_.GetAttribute('sequence') })
+      if ([long]$header.GetAttribute('firstSequence') -ne 1 -or
+          [long]$header.GetAttribute('nextSequence') -ne ($sequences[-1]+1) -or
+          [long]$header.GetAttribute('lastSequence') -lt $sequences[-1]) {
+        throw 'Simulator sample header sequence bounds are inconsistent.'
+      }
       if ($sequences[0] -ne 1) { throw 'Unexpected first simulator sequence.' }
       for ($i=1; $i -lt $sequences.Count; $i++) {
         if ($sequences[$i] -ne ($sequences[$i-1]+1)) {
