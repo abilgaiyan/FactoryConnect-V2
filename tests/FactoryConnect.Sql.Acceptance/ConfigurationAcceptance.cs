@@ -85,6 +85,34 @@ internal static class ConfigurationAcceptance
             """,("@id",Timezone),("@site",Site),("@bytes",PolicyBytes),("@hash",PolicyHash));
         await Exec("INSERT configuration.SharedScheduleRevision VALUES(@id,@site,@bytes,@hash)",("@id",Schedule),("@site",Site),("@bytes",PolicyBytes),("@hash",PolicyHash));
         await Exec("INSERT configuration.SharedBreakPolicyRevision VALUES(@id,@site,@bytes,@hash)",("@id",Breaks),("@site",Site),("@bytes",PolicyBytes),("@hash",PolicyHash));
+        var policyWriter = new SqlPolicyRevisionWriter();
+        var savedSchedule = await SqlPolicyRevisionWriter.SaveScheduleAsync(c, Site,
+            [new PolicyCanonicalizer.Shift(Guid.NewGuid(),450,960)]);
+        var savedScheduleRetry = await SqlPolicyRevisionWriter.SaveScheduleAsync(c, Site,
+            [new PolicyCanonicalizer.Shift(Guid.NewGuid(),450,960)]);
+        Check(savedSchedule.RevisionId != Guid.Empty && savedScheduleRetry.RevisionId != Guid.Empty,
+            "schedule policy writer persists valid immutable revisions");
+        var fixedShiftId = Guid.NewGuid();
+        var stableSchedule = await SqlPolicyRevisionWriter.SaveScheduleAsync(c, Site,
+            [new PolicyCanonicalizer.Shift(fixedShiftId,450,960)]);
+        var stableScheduleRetry = await SqlPolicyRevisionWriter.SaveScheduleAsync(c, Site,
+            [new PolicyCanonicalizer.Shift(fixedShiftId,450,960)]);
+        Check(stableSchedule.RevisionId == stableScheduleRetry.RevisionId &&
+            stableSchedule.ContentHash.SequenceEqual(stableScheduleRetry.ContentHash),
+            "schedule revision retries return identical revision and digest");
+        var fixedBreakId = Guid.NewGuid();
+        var stableBreak = await SqlPolicyRevisionWriter.SaveBreakPolicyAsync(c, Site,
+            [new PolicyCanonicalizer.Break(fixedBreakId,fixedShiftId,240,30,true)]);
+        var stableBreakRetry = await SqlPolicyRevisionWriter.SaveBreakPolicyAsync(c, Site,
+            [new PolicyCanonicalizer.Break(fixedBreakId,fixedShiftId,240,30,true)]);
+        Check(stableBreak.RevisionId == stableBreakRetry.RevisionId,
+            "break policy revision retries are idempotent");
+        var timezoneSnapshot = new PolicyCanonicalizer.Timezone("Etc/UTC","fixture","fixture-resolver",
+            "reject","reject",Encoding.UTF8.GetBytes("fixture-rules"));
+        var stableTimezone = await SqlPolicyRevisionWriter.SaveTimezoneAsync(c, Site, timezoneSnapshot);
+        var stableTimezoneRetry = await SqlPolicyRevisionWriter.SaveTimezoneAsync(c, Site, timezoneSnapshot);
+        Check(stableTimezone.RevisionId == stableTimezoneRetry.RevisionId,
+            "timezone policy revision retries are idempotent");
         await Submit(package);Check(true,"submitted package stored atomically");
         await using(var q=new SqlCommand("SELECT CanonicalBytes,ContentHash FROM configuration.ConfigurationPackageRevision WHERE PackageRevisionId=@id",c))
         {
